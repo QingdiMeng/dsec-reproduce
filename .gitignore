@@ -1,0 +1,32 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# Generated experiment output and downloaded upstream task sources.
+/results/
+/training_outputs_inventory.json
+/experiments/openenv_api/tb2-suite-2-1/
+/experiments/openenv_api/terminal-bench-2-1/
+/experiments/openenv_api/upstream/
+
+# Runtime state, images, archives, and secrets.
+/.runtime/
+*.qcow2
+*.raw
+*.img
+*.erofs
+*.ext4
+*.tar
+*.tar.gz
+*.zst
+.env
+.env.*
+*.pem
+*.key

@@ -1,0 +1,54 @@
+name: Package and regression checks
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  packages:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install build tools
+        run: python -m pip install 'setuptools>=77' wheel build
+      - name: Build and check packages
+        run: |
+          python -m build --wheel --no-isolation --outdir dist/core .
+          python tools/check_wheel.py dist/core/*.whl
+          python -m build --wheel --no-isolation --outdir dist/tb21 apps/tb21
+          python -m pip install dist/core/*.whl dist/tb21/*.whl
+      - name: Core and source export regressions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import unittest
+          from tools.package_release_source import TESTS
+          names = [Path(name).stem for name in TESTS] + ['tools.test_release_source']
+          suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromName(name) for name in names)
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          raise SystemExit(not result.wasSuccessful())
+          PY
+      - name: Optional application regressions
+        run: python -m unittest discover -s apps/tb21/tests -v
+      - name: Installed entry points outside the source tree
+        working-directory: /tmp
+        run: |
+          dsec-sandboxd --help
+          dsec-rollout-worker --help
+          dsec-host --help
+          dsec-tb21 --help

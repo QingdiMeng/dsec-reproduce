@@ -1,0 +1,197 @@
+# 单机 v0.1 安装与部署验收
+
+后续 r5 安装候选通过 49 项核心回归、工具盘真实完整性检查及 15 次
+固定轨迹评分；最终 43 条记录 STOPPED，无租约/pending/netns/活动设备
+或进程引用，宿主无干扰。冷解析与成本结果见
+[r5 报告](DSEC_VERITY_PILOT_REPORT.md)。下面先前功能与 GRPO 证据的
+版本归属不变；r5 随后已完成独立短 GRPO、跨 episode 分叉隔离及重启
+回归，最终 50 条记录停止、无资源残留，见
+[最新训练验收](DSEC_V01_GRPO_ACCEPTANCE.md)。
+
+日期：2026-10-06。发行入口阶段完成；完整开源交付仍按
+[两天计划](DSEC_V01_RELEASE_PLAN.md)继续。此处是功能验收，不是吞吐或
+Docker 成本优势报告。
+
+冻结开发 wheel：`dsec_reproduce-0.1.0.dev0-py3-none-any.whl`，183697 字节，
+SHA-256 `53b0891380d0c57b4bca87adcdaa69eb5325773fdc6fe907abc8f1e864f2ce09`。
+打包边界检查通过：51 个 Python 模块、3 个插件数据文件及发行元数据；
+第三方 Miles 许可文本随包保留。核心没有第三方 Python 运行依赖，模型与
+训练框架需要各自的依赖。
+
+## 验收与证据
+
+| 项目 | 实机结果 | 原始记录 |
+| --- | --- | --- |
+| 独立 venv、离开源码目录、禁用源码路径 | 安装与插件导入通过，54 个运行文件逐字节匹配 wheel | `.runtime/release-v01-pilot/pilot-final-audit.json` |
+| 非 TB 任务 | 创建、动作去重、暂停恢复、评分 1、停止与租约释放通过 | `.runtime/release-v01-pilot/acceptance-supervisor-r8.json` |
+| 自动监督 | 杀死隔离实例 launcher 后自动恢复；同一 worker 与原 VMM 保留 | 同上，`automatic_supervision` / `live_restart` |
+| 暂停后双服务重启 | 原私有文件、PAUSED 状态与租约恢复，通过评分与最终释放 | 同上，`paused_restart` |
+| TB2.1 安装版 | openssl-selfsigned-cert，官方 tests/test.sh 评分 1 | `.runtime/release-v01-pilot/tb21-acceptance-r8.json` |
+| TB2.1 双服务重启 | 同一 VMM、已提交动作不重放；暂停恢复后官方评分 1 | `.runtime/release-v01-pilot/tb21-acceptance-restart-r7.json` |
+| 官方证据 | reward.txt、verifier.log、ctrf.json、manifest.json 已归档 | `.runtime/release-v01-pilot/evidence/` |
+| 冻结版本短 GRPO | 两组 × 两样本，官方评分 `[0,1]` / `[0,0]`；两次训练切换、4 次真实快照恢复、TITO 和回收通过 | `.runtime/release-v01-pilot/grpo-evidence-r8/installed-grpo-audit.json` |
+| 安装版准备态复用 | 同一基线生成两个新 episode；官方评分 1、重启、源删除后恢复与 CAS 回收通过 | `.runtime/release-v01-pilot/installed-fork-r8.json` |
+| 最终回收审计 | 两个当前临时实例的 15 条沙箱记录全部 STOPPED，无待执行动作、租约或 netns；临时服务关闭 | `.runtime/release-v01-pilot/post-grpo-fork-audit-r8.json` |
+
+本地 57 项相关回归通过，包括任务插件、对话、worker、封存/分叉、网络、
+发行边界与新部署入口。随后在 Linux 实验机用 Python isolated mode 加载
+测试、只导入已安装的 wheel，另有 31 项资源预算、准入拒绝、队列恢复、
+SDK 和共享分叉边界回归全部通过，无跳过；记录为
+`.runtime/release-v01-pilot/resource-tests-r8.json`。TB2.1 保持任务修订
+`7131e4375048a0e408a8fb404b5f499d726b695b`。评分轨迹是固定解题命令，
+不代表模型的解题成功率，也不代表全部 89 个任务通过。
+
+TB2.1 实例使用真实 EROFS 分层、OverlayBD＋ublk 私有根盘、独立 netns
+和已配置 Mac 临时代理；普通 Firecracker 由新安装的受限助手按固定哈希
+启动。两槽地址段为 4096–4097，与既有实例分离。常驻 ublk 服务仍沿用
+先前系统部署，临时实例存储位于其已授权根下的独立子目录。
+
+## 本轮关闭的部署缺口
+
+任务实现迁入可安装的 `dsec_adapters`，旧 import 仅作别名；worker 官方
+verifier 直接使用安装包。主机配置集中描述制品、调度和网络，不依赖实验
+源码目录。服务启动使用 Python isolated mode。
+
+ublk 服务需要存储目录的组搜索权限及其 systemd 写目录授权。控制目录为
+仅组搜索的 2710，worker 记录保持私有；不能只靠 chmod 绕过服务的挂载
+命名空间。已有 TB2.1 guest 制品启动时要求虚拟网卡，因此无网配置不能
+作为这些制品的有效部署。两项首次失败均保存记录并释放租约。
+
+旧部署还通过独立环境变量固定 verifier manifest；新部署遗漏它会错误地
+比较旧工具盘哈希。现已从同一个主机配置派生 daemon 与 worker 的默认/
+按任务 verifier pins，新增回归检查。失败记录保留在 r4/r5/r6 文件中。
+
+服务启停检查支持安装后的模块入口，保持相同组身份的 pidfd 检查；
+ExecStop 明确停止 daemon。`Restart=always` 处理 sg 子进程返回码语义，
+worker 使用弱依赖保持 daemon 自动恢复期间的任务和租约。
+
+## 交付边界
+
+这验证了实验机上的独立安装实例，复用了已有模型、镜像、内核、ublk 和
+只读制品。全新 Linux 主机从零部署、全部可选存储条件、
+完整后端 Docker 对照仍是后续门槛；源码交付审查结果见下文。训练内存补丁只在
+显式 training-experiment 包中，不计作 DSec 发行功能。
+
+## 冻结运行时短 GRPO
+
+Qwen3.5-4B thinking、32768 回复上限、两组 × 两样本、并发 2，474.759 秒
+退出码 0。运行时 54 个文件逐字节匹配上述冻结 wheel；训练侧使用显式实验
+包，任务实际运行在安装后的独立 daemon/worker。
+
+两组官方评分为 `[0,1]` / `[0,0]`。第一步梯度范数 0.256775，第二步为 0；
+两个 checkpoint 之间 96 个 adapter 张量不同且均有限。第二组奖励相同，
+不能据此宣称第二步具有有效学习信号或模型解题能力提高。
+
+四个 episode 的 response 分别为 4603、4967、4449、4220 token，logprobs、
+loss mask 与 TITO 一致。每条轨迹在第一次工具调用后实际 PAUSED、退出原
+VMM，再由后续工具调用恢复到新 VMM，沙箱身份和步骤连续；四条独立写盘
+使用相同的 6 个 EROFS 源层。此项证明组内独立 episode 与每条 episode 内
+恢复，不替代跨 episode 准备态分叉验收。
+
+三个 0 分轨迹的官方 CTRF 均定位到 `test_python_verification_script` 断言
+失败，其中一条 agent 提前因 `invalid_format` 结束；不是缺失 verifier 评分。
+正负分的官方日志、原始回复、TITO、worker 记录、checkpoint 和资源采样已
+保存。GPU 采样峰值 14406 MiB，训练容器 memory peak 20.525 GiB，两者只
+描述本次训练实验，不能作完整 DSec 后端成本。四条记录最终 STOPPED、
+无 pending、无租约；先前安装回收审计仍只对应 GRPO 启动前的时点。
+
+## 安装版跨 episode 准备态复用
+
+`tools/verify_installed_fork.py` 通过同一个安装 venv、统一主机配置、正式 SDK
+和任务插件验证。两槽实例采用一个封存基线加一个分支，两条 episode 顺序
+创建；它不替代此前四分支的并发性能结果。
+
+基线中准备的 HTTP 服务保留真实内存计数，新分支均从计数 8 和新的 policy
+history 开始；第一分支的私有文件和答案没有进入第二分支。第一分支官方
+评分 1。封存后双服务重启仍可分叉；运行分支重启保持原 VMM，重复已提交
+动作返回相同观察。第二分支存活时停止源基线，共享 lower inode 保留；
+该分支随后暂停恢复，私有文件和应用计数继续。最后三个 rollout 全部
+STOPPED、无 pending、无租约，最后一个持有者释放后共享对象删除。
+
+最终审计再次核对 54 个安装文件与冻结 wheel 匹配，两个当前临时实例共
+15 条沙箱记录均停止，实例 netns 为空，四个临时服务关闭；原两个正式服务
+正常且队列为空。GPU 空闲采样 35 MiB / 0%，根盘剩余约 97.6 GiB。
+
+## MIT 候选包
+
+用户选择项目自身代码与文档为 MIT。Miles 派生模块保留 Apache-2.0，wheel
+组合许可表达式为 `MIT AND Apache-2.0`，随包包含两份许可与第三方来源说明。
+新的开发候选包 184823 字节，SHA-256
+`38fd9bb7602aad10b0bcbc816bf71e8d422624de41cb6d9659a8d0566f6f4a7e`。
+
+许可和 README 元数据调整没有改变 54 个运行文件；与上述功能冻结 wheel
+逐字节相同。在实验机另一个全新 venv 安装候选包，通过 isolated import、
+许可元数据和全部运行文件核对。记录为
+`.runtime/release-v01-mit/acceptance.json`。新版 wheel 边界检查为 51 个模块、
+62 个条目，许可文件内容也逐字节检查；两种运行包的许可包含检查通过。
+历史功能证据继续保留原 wheel 哈希，不将元数据变化冒充重新运行的训练。
+
+## 从源码重建与可选应用安装验收
+
+白名单源码候选 r2 含 96 个文件（包括清单），251944 字节，SHA-256
+`eba9161c2e4abfbbac7117795df66dec9dbb0ee44a1b1f3e949f4c6c57f06528`。
+每个文件在 `SOURCE_MANIFEST.json` 固定摘要；归档可重复生成相同字节。
+源码不含任务数据、实验结果、镜像、模型、密钥或 GPU 训练补丁。
+实验机使用固定 setuptools 80.9.0 / wheel 0.45.1 从该归档离线构建：
+
+| 包 | 字节 | SHA-256 |
+| --- | ---: | --- |
+| 核心 | 185063 | `dc86af4068679aca8ea5aa2abd591ee6cb21857d15e776f751e77257ad41e54a` |
+| 可选 TB2.1 应用 | 13460 | `f486c6c92e415f5033d9263eab28dd64cf90d39f5a592d3340bf87cb8dceefc4` |
+
+新的 venv 先只安装核心；确认应用包不存在，并核对全部 54 个运行文件
+与源码清单相同。Linux 上 33 项核心回归通过，无跳过。用归档中的 C agent
+和本地固定镜像新建 64 MiB 非 TB guest，运行评分 1、自动监督、动作去重、
+运行态及暂停态恢复、租约释放全部通过；未复用旧 guest 模板。
+
+随后显式安装应用包，安装版 5 项应用回归通过。应用校验全部 89 个任务
+文件的修订与哈希；这项不是 89 题运行或评分通过。代表任务
+`openssl-selfsigned-cert` 的现有 OverlayBD 注册路径和新转换六层 EROFS
+加 file-ext4 路径均完成相同轨迹及官方评分 1，原始 CTRF/reward/log 已保存。
+新制品路径创建 1.463 s、verifier 25.742 s，仅为功能验收的单次计时。
+同一安装版的 OverlayBD 准备态分叉验证两条 episode 的 history/私有文件/
+内存隔离、源删除后恢复以及最后共享对象释放通过；此轮没有额外重启
+TB 服务，前述重启证据仍对应原冻结版本。
+
+新制品启动暴露父目录 setgid 继承问题。先保留配置不匹配的拒绝记录，
+随后发现 file-ext4 沙箱目录继承为 2700，被限定 700/2770 的启动器拒绝。
+创建时将私有目录明确设为 700，OverlayBD 仍按需设为 2770；没有放宽
+root helper 或目录共享范围。该修复是本轮相对原冻结版本唯一运行代码
+变化（`sandbox_sdk.py`），新增两项 Linux 权限回归。此前 GRPO 结果未重跑。
+
+最终审计包含两个源码实例各 1 条、共享 TB 验收实例 19 条沙箱记录，均为
+STOPPED；worker 的历史 FAILED 记录保留，但没有 pending 或 lease。
+实例 netns 为空，6 个相关临时服务 inactive，两个正式服务 active 且队列为空，
+根盘剩余约 97.26 GiB。原始验收、官方日志和失败部署记录保留在实验机
+`v01-pilot/source-release{,-r2}` 与本地 `.runtime/release-source-acceptance/`。
+最后交付归档允许纳入本次文档更新，另以交付清单固定最终摘要；它的核心
+与应用代码必须与上述已测源码逐字节一致，不将文档变化视为新增运行测试。
+
+## 宿主隔离与权限修复候选 r3
+
+2026-10-06，新源码归档含 98 个文件，255752 字节，SHA-256
+`d4070cfd4cbe726f9e957b251169761dcc23a6556d393933a217cd809df21cf3`。
+实验机离线重建的核心 wheel SHA-256 为
+`ee370cb1ae15b736479eac53dc8e510f08b2e2d8ffdfc5237f0618283f1e9b6a`。
+新 venv 的 40 项核心回归通过，全部 54 个运行文件匹配归档；之后显式安装
+原可选 TB2.1 应用包。guest 模板与既有任务制品复用，没有冒充重新构建。
+
+两个核心改动：创建 OverlayBD 根盘前检查 root daemon 的真实 umask，拒绝
+不能保留组权限的配置；网络 helper 在状态目录、锁和网络操作之前核对
+宿主 mount/net 上下文。上游 Rust 创建不存在运行目录的协议没有改变。
+实验启动器另将私有 Docker 的 mount/net 均隔离；DSec 服务仍在宿主管理
+可持久化的 guest netns 句柄。r1/r2/r3 失败实验入口退役，证据保留。
+
+管理员安装精确 helper 修复并移除一个已确认失效的空句柄后，正常 SDK
+恢复并停止原失败 rollout。r4 使用新包实测两种错误 helper 上下文的拒绝，
+真实 root ublk daemon 的 0027 umask 被非 root 客户端在 RPC/设备/运行目录
+分配前拒绝。随后 Docker 6 次、DSec 新建 6 次、准备态分叉 3 次均评分 1。
+宿主服务与原容器 PID、docker0 和 Grafana 健康状态保持不变。最终私有
+实例 33 条记录全部 STOPPED，无租约、pending、所属 netns、服务 socket
+或遗留设备引用。26 项安装版实验/协议/权限回归也全部通过，无跳过。
+
+证据位于 `.runtime/release-pair-r4/`；完整成本报告见
+`.runtime/release-pair-r4/report/REPORT.md`。这次不是短 GRPO 重跑，也不代表
+全部 89 个任务评分通过或所有生产崩溃模式已经覆盖。成本结果未显示整体
+优于 Docker：启动全文校验 verifier 工具盘造成大量宿主文件驻留；此问题
+与 guest/VMM 匿名内存区别记录，不通过改变统计口径隐藏。

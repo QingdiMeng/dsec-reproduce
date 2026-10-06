@@ -1,0 +1,558 @@
+{
+  "schema": 1,
+  "mode": "layered-uv",
+  "scope": "replace pinned uv GitHub installer; apt and missing Python wheels can still use network",
+  "shared_runtime_sha256": "65e468c982e11ce4c958906033ddc3a923519b74dbdb9e603a725cced34604e9",
+  "tasks": {
+    "adaptive-rejection-sampler": {
+      "test_sh_sha256": "38b43560d173cc2b952c3a3e17b8a480216d84e33450515e047bcb0d806b1e0a",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w numpy==2.3.3 \\\n  -w scipy==1.16.2 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "numpy==2.3.3",
+        "scipy==1.16.2",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "bn-fit-modify": {
+      "test_sh_sha256": "ea2adeb779621e9625d1f80a17f9d19b6ecec017b8ad8974b668a4a0fbdeb4c3",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w pandas==2.3.2 \\\n  -w scipy==1.16.1 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "pandas==2.3.2",
+        "scipy==1.16.1",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "break-filter-js-from-html": {
+      "test_sh_sha256": "09386b7e4929216fe490deb7d32c99841c03be2471897181dda2bd11f8922c00",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w selenium==4.35.0 \\\n  -w beautifulsoup4==4.13.5 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "selenium==4.35.0",
+        "beautifulsoup4==4.13.5",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "build-pov-ray": {
+      "test_sh_sha256": "928d1497ad21aef0c456294e3784f1fddf8493410f23584da89f9e02ec6bd134",
+      "system_packages": [
+        "imagemagick"
+      ],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w pillow==11.1.0 \\\n  -w numpy==2.3.1 \\\n  -w scikit-image==0.25.0 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "pillow==11.1.0",
+        "numpy==2.3.1",
+        "scikit-image==0.25.0",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "cancel-async-tasks": {
+      "test_sh_sha256": "79600a6b863def31b4daa008297423010cd2d6243e689d67503e118e4dc53397",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "compile-compcert": {
+      "test_sh_sha256": "dfb119d322a96c724d96a77633dfbcbf99867b934aa4e1b4406089f33d23d41a",
+      "system_packages": [
+        "binutils"
+      ],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "configure-git-webserver": {
+      "test_sh_sha256": "afafc3ffdaf911f7a93003c0746f217188099c174e5d3eb7dada17133df15895",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "distribution-search": {
+      "test_sh_sha256": "3eb007081bf3cfef18cf9ef7ebb44b0a93f133e3d1f0fd44a0417e5a263b0ca5",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w numpy==2.3.0 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "numpy==2.3.0",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "dna-assembly": {
+      "test_sh_sha256": "271c8317c98539e3b49233d017fe51fb0e5fba8114e76830fe698565499b2b1d",
+      "system_packages": [
+        "primer3"
+      ],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "dna-insert": {
+      "test_sh_sha256": "355c3f627ad14243da1ec683ebdb120aca7921bb52656c5cb65b281b347ba68b",
+      "system_packages": [
+        "primer3"
+      ],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "extract-elf": {
+      "test_sh_sha256": "84ee50194effb4c72b9cbd0306cccaf0f855f3634227cd8359928722a53bbdaf",
+      "system_packages": [
+        "gcc"
+      ],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "feal-differential-cryptanalysis": {
+      "test_sh_sha256": "106c27394c96343c03b4fbac14faac85542bce6628bccc66a5fe036d77f72daf",
+      "system_packages": [
+        "gcc"
+      ],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w setuptools==80.9.0 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "setuptools==80.9.0",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "filter-js-from-html": {
+      "test_sh_sha256": "5d23dd089b388310e6d42317704a674340151c473a567cc44e1aee55bdbc6855",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w selenium==4.38.0 \\\n  -w bs4==0.0.2 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "selenium==4.38.0",
+        "bs4==0.0.2",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "financial-document-processor": {
+      "test_sh_sha256": "48abbda713ace5cee00dd28c7398959f28280062350eb88206a6697a28c72790",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w pandas==2.3.2 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "pandas==2.3.2",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "git-multibranch": {
+      "test_sh_sha256": "ddbde3eea6ffa8fda105cbd86597a53bd409f41e13223900aa27e77a84b6b155",
+      "system_packages": [
+        "expect"
+      ],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "install-windows-3.11": {
+      "test_sh_sha256": "8c7a299c5ed8338d8d4f8a65db62d56c21496e62fe66e90719e417fd99c9423a",
+      "system_packages": [
+        "mtools",
+        "socat",
+        "vncsnapshot",
+        "tesseract-ocr"
+      ],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w opencv-python==4.11.0.86 \\\n  -w numpy==2.3.1 \\\n  -w pytesseract==0.3.13 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "opencv-python==4.11.0.86",
+        "numpy==2.3.1",
+        "pytesseract==0.3.13",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "mailman": {
+      "test_sh_sha256": "82c7dd138ef047c84a63c2c924eef586695dff03bb80a4c6ba0ced96e9bc8cf2",
+      "system_packages": [],
+      "uv_command": "",
+      "uses_nondefault_python": true,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "mailman==3.3.8",
+        "pytest-json-ctrf==0.3.5"
+      ],
+      "dependency_style": "uv-venv-python-3.12"
+    },
+    "make-doom-for-mips": {
+      "test_sh_sha256": "25809a2ebcb714b1c4e55563b0db16add23e2fd9b68d03e51b1734f8dbb392e1",
+      "system_packages": [
+        "python3-pillow"
+      ],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w numpy==2.3.1 \\\n  -w pillow==11.2.1 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "numpy==2.3.1",
+        "pillow==11.2.1",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "make-mips-interpreter": {
+      "test_sh_sha256": "25809a2ebcb714b1c4e55563b0db16add23e2fd9b68d03e51b1734f8dbb392e1",
+      "system_packages": [
+        "python3-pillow"
+      ],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w numpy==2.3.1 \\\n  -w pillow==11.2.1 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "numpy==2.3.1",
+        "pillow==11.2.1",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "mcmc-sampling-stan": {
+      "test_sh_sha256": "349d2c34617a2959783847c9ad072396c0b119122258ca40cedf0be1db2c9a3e",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.3.4 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.3.4",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "merge-diff-arc-agi-task": {
+      "test_sh_sha256": "c9052954cd6ce25c4a375a2fb48e765b1efa5b39f7991b93993cc793af8ab9d2",
+      "system_packages": [
+        "git"
+      ],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "model-extraction-relu-logits": {
+      "test_sh_sha256": "3b2d8f5e0353c2bab3515d6387468a863a4f9f241ee131c73f545f3fdf9e2d52",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w numpy==2.3.1 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "numpy==2.3.1",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "modernize-scientific-stack": {
+      "test_sh_sha256": "e868c85466ebf4815e2e4efbd252bf50ad979bceb14325a9377b1bbf852f0281",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w numpy==2.3.4 \\\n  -w pandas==2.3.3 \\\n  -w matplotlib==3.10.7 \\\n  -w scipy==1.16.3 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "numpy==2.3.4",
+        "pandas==2.3.3",
+        "matplotlib==3.10.7",
+        "scipy==1.16.3",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "mteb-retrieve": {
+      "test_sh_sha256": "404ce42339d0b4df9912282a16f7c875ebc2453d40a9312b671f356208238215",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w mteb==1.36.8 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "mteb==1.36.8",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "multi-source-data-merger": {
+      "test_sh_sha256": "d5a00e64413c0e1ae452f38a1aa1a47c3ed7b4416bbfccae1a4c053025a336d1",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w pandas==2.3.3 \\\n  -w pyarrow==22.0.0 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "pandas==2.3.3",
+        "pyarrow==22.0.0",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "nginx-request-logging": {
+      "test_sh_sha256": "27761195f53cbfe5941fe39b573631f6c926869e64b7c43220377e1e116528e7",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w requests==2.32.4 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "requests==2.32.4",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "path-tracing": {
+      "test_sh_sha256": "a719dbb1ba7ae76df095e9d815941dfa4c55edaf11f173b9c3c3097afa838548",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w pillow==11.2.1 \\\n  -w numpy==2.3.1 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "pillow==11.2.1",
+        "numpy==2.3.1",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "path-tracing-reverse": {
+      "test_sh_sha256": "a719dbb1ba7ae76df095e9d815941dfa4c55edaf11f173b9c3c3097afa838548",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w pillow==11.2.1 \\\n  -w numpy==2.3.1 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "pillow==11.2.1",
+        "numpy==2.3.1",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "portfolio-optimization": {
+      "test_sh_sha256": "25d5d5008edeab93d730b44f723687d2b08978f9f53750f62af8aeb1ecae90c6",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w numpy==2.3.2 \\\n  -w setuptools==78.1.1 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "numpy==2.3.2",
+        "setuptools==78.1.1",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "protein-assembly": {
+      "test_sh_sha256": "9ede46648fc67c9ce61975503de3e0fcff0b0fb110adc0f9e1d240a608c267b5",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w biopython==1.85 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "biopython==1.85",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "pypi-server": {
+      "test_sh_sha256": "d2b1220e42bcfdcce87907ac5bbd69ac210a3c94926545ca2439636786e7784e",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w pip==25.2 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "pip==25.2",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "pytorch-model-cli": {
+      "test_sh_sha256": "43fb67e537c7adc2df11c2367f47c876cb5d16a7c1ae16d0339c3a3364bb2b06",
+      "system_packages": [
+        "ffmpeg",
+        "libsm6",
+        "libxext6"
+      ],
+      "uv_command": "uvx \\\n  --index https://download.pytorch.org/whl/cpu \\\n  --index-strategy unsafe-best-match \\\n  -p 3.13 \\\n  -w torch==2.7.1 \\\n  -w torchvision==0.22.1 \\\n  -w numpy==2.3.1 \\\n  -w opencv-python==4.11.0.86 \\\n  -w pytest==8.4.1 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "torch==2.7.1",
+        "torchvision==0.22.1",
+        "numpy==2.3.1",
+        "opencv-python==4.11.0.86",
+        "pytest==8.4.1",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "pytorch-model-recovery": {
+      "test_sh_sha256": "6005f3a75ccfe00d7bed1005264b4a84a1f8e30cd780f8a97b3a804be7cc7a8e",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w torch==2.7.1 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "torch==2.7.1",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "qemu-alpine-ssh": {
+      "test_sh_sha256": "3b244479776c4ee3639631112799f2cde22cbb80ac10511715e3a8f32909c289",
+      "system_packages": [
+        "sshpass"
+      ],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "qemu-startup": {
+      "test_sh_sha256": "7b4dbbad13e2e71c82f2f6000ac9afbdc0df7916817ebe71272f667a8bf20d04",
+      "system_packages": [
+        "expect"
+      ],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "regex-chess": {
+      "test_sh_sha256": "8f7f00a1c4dde7fcca6c918c768f2aba432b8c4007c15989716c68091950da87",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w chess==1.11.2 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "chess==1.11.2",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "rstan-to-pystan": {
+      "test_sh_sha256": "6c3d54c3e703202edf4ee93b0a67790225e215d2ce1b8d8027759f2152bbaf0d",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "sam-cell-seg": {
+      "test_sh_sha256": "7f2bc4976949fba258f1db6dedacb55377adc300d535ab849131744ce80bf8fd",
+      "system_packages": [
+        "git",
+        "libgl1"
+      ],
+      "uv_command": "uvx \\\n  --index https://download.pytorch.org/whl/cpu \\\n  --index-strategy unsafe-best-match \\\n  -p 3.11 \\\n  -w torch==2.5.1 \\\n  -w torchvision==0.20.1 \\\n  -w pandas==2.3.2 \\\n  -w timm==1.0.19 \\\n  -w opencv-python==4.12.0.88 \\\n  -w shapely==2.1.1 \\\n  -w pytest==8.4.1 \\\n  -w pytest-json-ctrf==0.3.5 \\\n  -w git+https://github.com/ChaoningZhang/MobileSAM.git@${COMMIT_HASH} \\",
+      "uses_nondefault_python": true,
+      "extra_wheels": [
+        "torch==2.5.1",
+        "torchvision==0.20.1",
+        "pandas==2.3.2",
+        "timm==1.0.19",
+        "opencv-python==4.12.0.88",
+        "shapely==2.1.1",
+        "pytest==8.4.1",
+        "pytest-json-ctrf==0.3.5",
+        "git+https://github.com/ChaoningZhang/MobileSAM.git@${COMMIT_HASH}"
+      ]
+    },
+    "sanitize-git-repo": {
+      "test_sh_sha256": "16014722171ae4479112051d2e8af7d0c5bb231bae6aff1b80cfa19e718c814f",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w gitpython==3.1.44 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "gitpython==3.1.44",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "sparql-university": {
+      "test_sh_sha256": "45902b57bd0f1dd6959216bc9943ab27bb349edc7ff557035a1ecc8732e4cc6b",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w rdflib==7.1.4 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "rdflib==7.1.4",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "torch-pipeline-parallelism": {
+      "test_sh_sha256": "cc9fd28b6590993fc37e4a99da771cbf04726c8c62fe308e802612241da69dea",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w torch==2.7.0 \\\n  -w transformers==4.55.0 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "torch==2.7.0",
+        "transformers==4.55.0",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "torch-tensor-parallelism": {
+      "test_sh_sha256": "a7e6c9408b2401e4e7448371f7ddc72f3284caccfb56277d3cd4e98051868cdf",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w torch==2.7.0 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "torch==2.7.0",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "train-fasttext": {
+      "test_sh_sha256": "f7895d4dabe0cf224e5d3b0fb70331467081508b27b499ead031cc9c3db6a398",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.11 \\\n  -w pytest==8.4.1 \\\n  -w scikit-learn==1.7.0 \\\n  -w fasttext-wheel==0.9.2 \\\n  -w numpy==1.24.0 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": true,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "scikit-learn==1.7.0",
+        "fasttext-wheel==0.9.2",
+        "numpy==1.24.0",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "tune-mjcf": {
+      "test_sh_sha256": "343a0604775b960f47cb7ed04bc0c4f9e23f8439c4ba44d6027f0cb245327e97",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w mujoco==3.3.5 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "mujoco==3.3.5",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    },
+    "video-processing": {
+      "test_sh_sha256": "836bc8f77561680c6bf5b3f76905da87e8a2315e2885d36c3f9ee9a29fb99ef9",
+      "system_packages": [],
+      "uv_command": "uvx \\\n  -p 3.13 \\\n  -w pytest==8.4.1 \\\n  -w toml==0.10.2 \\\n  -w opencv-contrib-python==4.11.0.86 \\\n  -w pytest-json-ctrf==0.3.5 \\",
+      "uses_nondefault_python": false,
+      "extra_wheels": [
+        "pytest==8.4.1",
+        "toml==0.10.2",
+        "opencv-contrib-python==4.11.0.86",
+        "pytest-json-ctrf==0.3.5"
+      ]
+    }
+  }
+}

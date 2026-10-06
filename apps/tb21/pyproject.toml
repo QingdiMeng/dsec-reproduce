@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dsec-tb21-case"
+version = "0.1.0.dev0"
+description = "Optional Terminal-Bench-2.1 application preparation for DSec"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = ["dsec-reproduce==0.1.0.dev0"]
+
+[project.scripts]
+dsec-tb21 = "dsec_tb21_case.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

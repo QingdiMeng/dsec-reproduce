@@ -1,0 +1,7 @@
+{
+  "task_id": "openssl-selfsigned-cert",
+  "task_revision": "7131e4375048a0e408a8fb404b5f499d726b695b",
+  "commands": [
+    "mkdir -p /app/ssl\nopenssl req -x509 -newkey rsa:2048 -nodes -keyout /app/ssl/server.key -out /app/ssl/server.crt -days 365 -subj '/O=DevOps Team/CN=dev-internal.company.local'\nchmod 600 /app/ssl/server.key\ncat /app/ssl/server.key /app/ssl/server.crt > /app/ssl/server.pem\nopenssl x509 -in /app/ssl/server.crt -noout -subject -dates -fingerprint -sha256 > /app/ssl/verification.txt\ncat > /app/check_cert.py <<'CHECK'\nimport ssl\nfrom pathlib import Path\ncertificate=ssl._ssl._test_decode_cert('/app/ssl/server.crt')\nfor parts in certificate['subject']:\n    for name,value in parts:\n        if name=='commonName': print(value)\nfrom datetime import datetime\nprint(datetime.strptime(certificate['notAfter'],'%b %d %H:%M:%S %Y %Z').strftime('%Y-%m-%d'))\nprint('Certificate verification successful')\nCHECK\npython3 /app/check_cert.py\n"
+  ]
+}
