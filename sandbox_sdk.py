@@ -13,7 +13,7 @@ import time
 import uuid
 from firecracker_smoke import sha
 from microvm import MicroVM
-from egress_proxy import guest_proxy_command, validate_proxy_url
+from egress_proxy import guest_proxy_command, validate_proxy_url, validate_proxy_bypass_hosts
 
 class SandboxError(RuntimeError):
     pass
@@ -419,7 +419,8 @@ class Sandbox:
         if not isinstance(command, str) or "\0" in command or len(command.encode()) > 65536:
             raise ValueError("Invalid command")
         execution_command = guest_proxy_command(
-            command, getattr(self.manager, "egress_proxy_url", None))
+            command, getattr(self.manager, "egress_proxy_url", None),
+            getattr(self.manager, "egress_proxy_bypass_hosts", ()))
         if len(execution_command.encode()) > 65536:
             raise ValueError("Command exceeds guest limit after proxy environment")
         max_timeout_ms = self.manager.command_timeout_ms(self.environment_id)
@@ -693,7 +694,7 @@ class SandboxManager:
                  warm_pool_specs=None, warm_refill_workers=None, warm_wait_ms=0,
                  warm_idle_quiet_seconds=0, warm_min_memory_mib=0,
                  warm_min_disk_gib=0, microvm_environment_catalog=None,
-                 egress_proxy_url=None):
+                 egress_proxy_url=None, egress_proxy_bypass_hosts=()):
         if not isinstance(capacity, int) or capacity < 1 or not math.isfinite(poll_seconds) or poll_seconds <= 0:
             raise ValueError("Invalid manager limits")
         if snapshot_cache_policy not in ("retain", "evict"):
@@ -711,6 +712,7 @@ class SandboxManager:
             raise ValueError("Snapshot concurrency must be in 1..capacity")
         self.root = Path(root).resolve(); self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.egress_proxy_url = validate_proxy_url(egress_proxy_url)
+        self.egress_proxy_bypass_hosts = validate_proxy_bypass_hosts(egress_proxy_bypass_hosts)
         self.binary, self.kernel, self.template = map(Path, (binary,kernel,template))
         self.e3 = e3
         self.microvm_environment_catalog = microvm_environment_catalog

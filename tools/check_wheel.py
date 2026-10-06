@@ -37,6 +37,9 @@ def main() -> None:
             path = dist_info+'/licenses/'+name
             if path not in names or archive.read(path) != (root/name).read_bytes():
                 raise SystemExit('Missing or changed license file: '+name)
+        for name in sorted(allowed | data):
+            if name in names and archive.read(name) != (root/name).read_bytes():
+                raise SystemExit('Wheel payload differs from project source: '+name)
     sources = {name for name in names if name.endswith(".py")}
     if sources != allowed:
         raise SystemExit(f"Python sources mismatch: missing={sorted(allowed-sources)}, extra={sorted(sources-allowed)}")

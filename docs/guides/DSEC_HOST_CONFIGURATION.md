@@ -89,6 +89,16 @@ the explicit DAX path selects the helper's approved alias. Do not reuse a helper
 scoped to a different runtime root. Helper and storage provisioning are separate
 administrator steps; `doctor` changes no permissions.
 
+An instance can keep its HTTP proxy while allowing selected software sources
+to connect directly. Set `sandbox.egress_proxy_url` and, for example,
+`sandbox.egress_proxy_bypass_host` to
+`["archive.ubuntu.com", "security.ubuntu.com"]`. The daemon adds these hosts
+to both `no_proxy` and `NO_PROXY` for guest commands, including ordinary
+`apt-get` commands. Other destinations continue to use the proxy. This is an
+explicit operator setting with no built-in Ubuntu exception; it changes proxy
+selection, not the network helper's firewall rules. Verify direct connectivity
+from the guest before enabling it. Hostnames are validated and bounded to 32.
+
 `worker.metrics_port` optionally binds the existing Prometheus endpoint to
 localhost. `scheduler.shared_services` uses the existing shared-service monitor
 configuration. API budgets apply to worker `policy_call` accounting; model calls

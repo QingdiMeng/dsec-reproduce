@@ -2,7 +2,7 @@
 
 import unittest
 
-from egress_proxy import guest_proxy_command, validate_proxy_url
+from egress_proxy import guest_proxy_command, validate_proxy_url, validate_proxy_bypass_hosts
 
 
 class EgressProxyTests(unittest.TestCase):
@@ -22,6 +22,24 @@ class EgressProxyTests(unittest.TestCase):
             self.assertIn(key + "=http://192.168.0.106:18888", command)
         self.assertTrue(command.endswith("; curl https://example.com"))
         self.assertEqual(guest_proxy_command("true", None), "true")
+
+    def test_bypass_hosts_keep_proxy_and_original_command(self):
+        command = guest_proxy_command("apt-get update", "http://192.168.0.106:18888",
+                                      ["archive.ubuntu.com", "security.ubuntu.com"])
+        for name in ("no_proxy", "NO_PROXY"):
+            self.assertIn(name + "=localhost,127.0.0.1,::1,169.254.110.1,169.254.110.2,"
+                          "archive.ubuntu.com,security.ubuntu.com", command)
+        self.assertIn("https_proxy=http://192.168.0.106:18888", command)
+        self.assertTrue(command.endswith("; apt-get update"))
+        self.assertEqual(validate_proxy_bypass_hosts(["ARCHIVE.ubuntu.com", "archive.ubuntu.com"]),
+                         ("archive.ubuntu.com",))
+
+    def test_rejects_invalid_bypass_configuration(self):
+        for values in ("archive.ubuntu.com", ["*.ubuntu.com"], ["ubuntu.com; id"],
+                       ["ubuntu.com/path"], [""], [None], ["-ubuntu.com"],
+                       ["a"*64+".com"], ["example.com"]*33):
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                validate_proxy_bypass_hosts(values)
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ import traceback
 from urllib.parse import urlsplit
 
 from request_journal import atomic_json
+from egress_proxy import validate_proxy_bypass_hosts
 from work_scheduler import ResourceBudget
 
 
@@ -36,7 +37,8 @@ SCALAR_OPTIONS = {
     'warm_idle_quiet_seconds', 'warm_min_memory_mib', 'warm_min_disk_gib',
     'egress_proxy_url',
 }
-LIST_OPTIONS = {'warm_pool', 'tb2_task_verifier_artifact', 'tb2_verifier_dax_task'}
+LIST_OPTIONS = {'warm_pool', 'tb2_task_verifier_artifact', 'tb2_verifier_dax_task',
+                'egress_proxy_bypass_host'}
 BOOL_OPTIONS = {'tb2_free_page_reporting'}
 WORKER_PATHS = {'tb2_tasks_dir', 'container_catalog', 'container_root', 'docker_broker_socket'}
 NETWORK_KEYS = {'helper', 'max_slots', 'dns', 'dax_binary'}
@@ -113,6 +115,9 @@ def load_config(path):
     if sandbox.get('snapshot_cache_policy', 'retain') not in ('retain', 'evict'):
         raise ValueError('Invalid snapshot cache policy')
     proxy = sandbox.get('egress_proxy_url')
+    if 'egress_proxy_bypass_host' in sandbox:
+        sandbox['egress_proxy_bypass_host'] = list(validate_proxy_bypass_hosts(
+            sandbox['egress_proxy_bypass_host']))
     if proxy:
         url = urlsplit(proxy)
         if url.scheme not in ('http', 'https') or not url.hostname or url.username or url.password:

@@ -38,6 +38,15 @@ class HostConfigurationTests(unittest.TestCase):
         self.assertEqual(args[args.index('--admission-worker-socket')+1],
                          str(self.root/'state/worker/worker.sock'))
 
+    def test_proxy_bypass_host_reaches_daemon_arguments(self):
+        self.data['sandbox']['egress_proxy_bypass_host'] = ['archive.ubuntu.com', 'security.ubuntu.com']
+        args = dsec_host.sandbox_arguments(self.load())
+        indices = [i for i, arg in enumerate(args) if arg == '--egress-proxy-bypass-host']
+        self.assertEqual([args[i+1] for i in indices], ['archive.ubuntu.com', 'security.ubuntu.com'])
+        self.data['sandbox']['egress_proxy_bypass_host'] = ['archive.ubuntu.com; id']
+        with self.assertRaises(ValueError):
+            self.load()
+
     def test_worker_verifier_pin_follows_configured_storage_artifact(self):
         import os
         self.data['sandbox']['tb2_verifier_artifact_manifest'] = 'default-manifest.json'

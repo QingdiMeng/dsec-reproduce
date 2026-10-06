@@ -169,6 +169,8 @@ def main():
                         help="require a matching worker scheduler lease before microVM create")
     parser.add_argument("--egress-proxy-url",
                         help="HTTP(S) proxy injected into every guest command, e.g. http://192.168.0.106:18888")
+    parser.add_argument("--egress-proxy-bypass-host", action="append", default=[],
+                        help="Hostname accessed directly using no_proxy; repeat for each software source")
     parser.add_argument("--e3-artifacts")
     parser.add_argument("--e3-mixed-artifacts")
     parser.add_argument("--e3-binary")
@@ -587,7 +589,8 @@ def main():
                            warm_idle_quiet_seconds=args.warm_idle_quiet_seconds,
                            warm_min_memory_mib=args.warm_min_memory_mib,
                            warm_min_disk_gib=args.warm_min_disk_gib,
-                           egress_proxy_url=args.egress_proxy_url)
+                           egress_proxy_url=args.egress_proxy_url,
+                           egress_proxy_bypass_hosts=args.egress_proxy_bypass_host)
     journal=RequestJournal(args.root)
     sock=Path(args.root).resolve()/"service.sock"
     # Only the manager that holds the directory lock may replace this socket.
