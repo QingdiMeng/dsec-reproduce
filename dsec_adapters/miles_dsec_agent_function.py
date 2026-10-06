@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -170,6 +171,9 @@ async def run_episode(policy, model_name: str, messages: list[dict],
         raise ValueError("DSEC_AGENT_STEP_TIMEOUT_MS must be at least 1000")
     if kind == "counter" and command_timeout_ms > 30000:
         raise ValueError("Counter task command timeout cannot exceed 30000 ms")
+    budget_seconds = float(os.getenv("OPENENV_MAX_ROLLOUT_TIME_SECONDS", "3600"))
+    if not math.isfinite(budget_seconds) or budget_seconds <= 0:
+        raise ValueError("Episode budget must be finite and positive")
     registry = os.getenv("DSEC_EPISODE_REGISTRY_DIR")
     if registry:
         # Record ownership before creating a sandbox, including runs interrupted
@@ -186,10 +190,16 @@ async def run_episode(policy, model_name: str, messages: list[dict],
         resumed = bool(context["next_step"] or context.get("pending") or
                        context["state"] == "COMPLETED")
         reset_time = time.monotonic() - reset_started
+        # Waiting for a scheduled sandbox does not spend the task's agent budget.
+        agent_started = time.monotonic()
+        deadline = agent_started + budget_seconds
         end_reason = "max_turns"
         keep_alive = False
         try:
             while context["next_step"] < max_turns and context["state"] != "COMPLETED":
+                if time.monotonic() >= deadline:
+                    end_reason = "episode_timeout"
+                    break
                 step_id = context["next_step"]
                 t0 = time.monotonic()
                 if policy_call is None:
@@ -211,6 +221,11 @@ async def run_episode(policy, model_name: str, messages: list[dict],
                     normalized_thinking_steps.append(step_id)
                 _persist_model_reply(rollout_id, step_id, reply,
                                      choice.finish_reason, final_reply, normalized)
+                if time.monotonic() >= deadline:
+                    # Keep the completed response in TITO but execute no action
+                    # after budget expiration. Do not cancel away token evidence.
+                    end_reason = "episode_timeout"
+                    break
                 if choice.finish_reason == "length":
                     end_reason = "length"
                     break
@@ -229,11 +244,18 @@ async def run_episode(policy, model_name: str, messages: list[dict],
                 # Miles does. Rewriting content to the extracted command breaks
                 # session prefix matching and changes the multi-turn context.
                 t0 = time.monotonic()
+                remaining_ms = int((deadline - t0) * 1000)
+                if remaining_ms < 1000:
+                    # Wait only for the final sub-second budget; the shell API
+                    # cannot express a shorter timeout. No command is submitted.
+                    await asyncio.sleep(max(0, deadline - time.monotonic()))
+                    end_reason = "episode_timeout"
+                    break
                 try:
                     observation = await episode.step(
                         EnvironmentAction.shell(
                             step_id=step_id, action_id=f"turn-{step_id}",
-                            command=command, timeout_ms=command_timeout_ms),
+                            command=command, timeout_ms=min(command_timeout_ms, remaining_ms)),
                         policy_message=assistant_message)
                     context = observation.dialogue
                 except ScheduledOutcomeUnknown:
@@ -244,10 +266,13 @@ async def run_episode(policy, model_name: str, messages: list[dict],
                     if context["next_step"] != step_id + 1:
                         raise
                 tool_times.append(time.monotonic() - t0)
+            agent_elapsed = time.monotonic() - agent_started
+            if agent_elapsed >= budget_seconds:
+                end_reason = "episode_timeout"
             eval_started = time.monotonic()
-            verdict = await episode.evaluate()
+            verdict = None if end_reason == "episode_timeout" else await episode.evaluate()
             eval_time = time.monotonic() - eval_started
-            reward = verdict.score
+            reward = 0.0 if verdict is None else verdict.score
             tito_path = await _capture_tito(
                 policy, rollout_id, len(gen_times), fetch=tito_fetch)
         except (ScheduledOutcomeUnknown, asyncio.CancelledError):
@@ -261,13 +286,18 @@ async def run_episode(policy, model_name: str, messages: list[dict],
         "rollout_id": rollout_id, "sandbox_id": episode.sandbox.sandbox_id,
         "resumed_after_trainer_exit": resumed,
         "turns": len(gen_times), "end_reason": end_reason,
+        "budget_seconds": budget_seconds, "agent_elapsed_seconds": agent_elapsed,
+        "budget_overrun_seconds": max(0.0, agent_elapsed - budget_seconds),
+        "trajectory_complete": bool(tito_path and gen_times and not resumed),
+        "reward_source": "episode_budget" if end_reason == "episode_timeout" else "task_verifier",
         "format_valid": end_reason not in ("invalid_format", "invalid_thinking_format"),
         "tool_calls": len(tool_times), "gen_times": gen_times,
         "normalized_thinking_steps": normalized_thinking_steps,
         "tool_times": tool_times, "reset_time": reset_time,
         "eval_time": eval_time,
-        "verifier_diagnostic": {"raw_reward": reward,
-                                "harness": verdict.evaluator, "error": None},
+        "verifier_diagnostic": {"raw_reward": verdict.score if verdict else None,
+                                "harness": verdict.evaluator if verdict else None,
+                                "skipped": end_reason == "episode_timeout", "error": None},
         "total_gen_time": sum(gen_times),
         "total_tool_time": sum(tool_times) + reset_time + eval_time,
         "tito_path": tito_path,
@@ -281,8 +311,18 @@ async def run_episode(policy, model_name: str, messages: list[dict],
     # not a harness failure. Keep the real verifier score (including zero)
     # and the format diagnostic; otherwise sampling silently discards correct
     # solutions and ordinary failed actions. Never execute unparsed text.
-    return (None if resumed or end_reason in ("length", "invalid_thinking_format")
-            else reward), metrics
+    training_reward = (None if resumed or end_reason in ("length", "invalid_thinking_format")
+                       else reward)
+    if registry:
+        _private_json(Path(registry), rollout_id + ".json", {
+            "rollout_id": rollout_id, "task_id": task_id,
+            "dsec_environment": kind, "worker_socket": socket_path,
+            "training_result": {
+                "reward": training_reward,
+                "exit_status": ("incomplete" if training_reward is None else
+                                "timeout" if end_reason == "episode_timeout" else "completed"),
+                "agent_metrics": metrics}})
+    return training_reward, metrics
 
 
 async def run(base_url: str, prompt: Any, request_kwargs: dict | None = None,
@@ -291,13 +331,18 @@ async def run(base_url: str, prompt: Any, request_kwargs: dict | None = None,
     import importlib
     oaf = importlib.import_module(".openenv_agent_function", __package__)
     result = await oaf.run_for_training(
-        base_url, prompt, request_kwargs, metadata, run_episode)
+        base_url, prompt, request_kwargs, metadata, run_episode,
+        manages_episode_budget=True)
     return canonical_training_result(result, metadata)
 
 
 def canonical_training_result(result, metadata):
     """Apply the same complete-verdict gate to ordinary and instrumented runners."""
     kind = environment_kind(metadata)
+    from .miles_dsec_generate import valid_budget_timeout
+    if valid_budget_timeout(result, kind):
+        result["dsec_budget_verdict"] = True
+        return result
     # Current Miles treats None as "no metadata", not "abort sample". A
     # companion generate wrapper checks this explicit marker and aborts every
     # sample lacking a validated, complete DSec episode.

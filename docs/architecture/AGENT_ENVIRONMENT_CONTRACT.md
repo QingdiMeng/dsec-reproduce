@@ -83,6 +83,24 @@ episode 的 `agent_metrics.normalized_thinking_steps` 记录发生兼容处理�
 `tests/test.sh`，核对 CTRF 结果与完整性，再解释成二元奖励。缺失、无效或无法验证
 的结果应报错并拒收样本，不能记作模型零分。
 
+### Episode 预算结束
+
+Miles 的 DSec 适配器在沙箱就绪后开始 agent 预算，调度排队和 verifier 不消耗该预算。
+到期后不再发起模型请求或执行新动作；在途 shell 命令的 timeout 受剩余预算限制。
+已发出的模型请求允许返回完整响应，以保留真实 token/logprob，因此收尾可能超过预算；
+`budget_overrun_seconds` 单独记录这部分时间，不承诺严格的墙钟终止。
+
+到期轨迹以 `exit_status=timeout`、`end_reason=episode_timeout`、reward 0 正常返回，
+`reward_source=episode_budget`、`dsec_budget_verdict=true` 标明评分来源。
+不再运行任务 verifier，其诊断 `raw_reward/harness` 为 `null`，不能把预算零分表示为
+官方测试成绩。接收该样本要求同一 episode 的完整 TITO 已保存、至少一条完整模型响应、
+预算时间确实耗尽、无跨训练进程恢复；仍检查 Miles 原生 token/logprob 对齐。
+零奖励样本保留在原 GRPO 分组中，不替换任务、不因预算到期停止其他 episode。
+训练结果回写 ownership 记录，供进度与收尾审计区分预算结束、官方评分及未决错误。
+
+传输超时、执行结果 UNKNOWN、丢失 TITO 和外部取消不属于预算零分。它们继续报错、
+附着或对账，不能通过伪造 token、退出码或 verifier 结果来满足分组完整性。
+
 ## 恢复与隔离
 
 遇到 `ScheduledOutcomeUnknown` 或 `UnresolvedAction` 时，保持原 rollout/action

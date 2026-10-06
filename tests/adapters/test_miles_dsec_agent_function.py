@@ -79,6 +79,69 @@ class Client:
 
 
 class MilesAdapterTest(unittest.IsolatedAsyncioTestCase):
+    async def test_episode_budget_zero_preserves_tito_and_finishes_without_next_action(self):
+        for phase in ("policy", "command"):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
+                clock = [0.0]
+
+                class TimedSandbox(Sandbox):
+                    async def agent_step(self, command, **kwargs):
+                        clock[0] += kwargs["timeout_ms"] / 1000 + 0.1
+                        return await super().agent_step(command, **kwargs)
+
+                    async def evaluate_counter(self, expected):
+                        raise AssertionError("Budget zero must not pretend to be a verifier score")
+
+                class QueuedClient(Client):
+                    async def create(self, **kwargs):
+                        clock[0] += 100  # Scheduling wait is outside agent budget.
+                        return await super().create(**kwargs)
+
+                sandbox = TimedSandbox(result={"exit_code": 124, "timed_out": True, "output": ""})
+
+                async def policy_call(*_args):
+                    clock[0] += 6 if phase == "policy" else 1
+                    return SimpleNamespace(choices=[SimpleNamespace(
+                        message=Message(), finish_reason="stop")])
+
+                async def fetch(_url):
+                    return {"session_id": "test", "records": [{
+                        "request": {"messages": [], "input_ids": [1]},
+                        "response": {"choices": [{"message": {"role": "assistant", "content": Message.content},
+                            "finish_reason": "stop", "meta_info": {
+                                "completion_tokens": 1, "output_token_logprobs": [[-0.1, 2, None]]}}]}}]}
+
+                with patch.dict(os.environ, {
+                        "DSEC_ROLLOUT_WORKER_SOCKET": "/tmp/unused.sock",
+                        "DSEC_AGENT_STEP_TIMEOUT_MS": "30000", "OPENENV_MAX_TURNS": "2",
+                        "DSEC_QWEN35_THINKING": "0", "OPENENV_MAX_ROLLOUT_TIME_SECONDS": "5",
+                        "DSEC_TITO_AUDIT_DIR": directory}), patch.object(
+                            adapter, "time", SimpleNamespace(monotonic=lambda: clock[0])):
+                    reward, metrics = await adapter.run_episode(
+                        SimpleNamespace(base_url="http://session/sessions/test/v1"), "model", [], {}, {
+                            "task_id": "counter-example", "dsec_environment": "counter"},
+                        client_factory=lambda _: QueuedClient(sandbox), policy_call=policy_call,
+                        tito_fetch=fetch)
+                result = {"reward": reward, "exit_status": "timeout", "agent_metrics": metrics}
+                accepted = adapter.canonical_training_result(result, {"dsec_environment": "counter"})
+                self.assertTrue(accepted["dsec_budget_verdict"])
+                self.assertEqual(reward, 0.0)
+                self.assertEqual(metrics["end_reason"], "episode_timeout")
+                self.assertTrue(metrics["trajectory_complete"])
+                self.assertIsNone(metrics["verifier_diagnostic"]["harness"])
+                self.assertEqual(metrics["reset_time"], 100)
+                self.assertLess(metrics["agent_elapsed_seconds"], 10)
+                self.assertEqual(len(sandbox.calls), int(phase == "command"))
+                if sandbox.calls:
+                    self.assertEqual(sandbox.calls[0][1]["timeout_ms"], 4000)
+                self.assertEqual(sandbox.state, "STOPPED")
+                evidence = json.loads(Path(metrics["tito_path"]).read_text())
+                self.assertEqual(len(evidence["records"]), 1)
+                self.assertEqual(evidence["records"][0]["response"]["output_token_logprobs"],
+                                 [[-0.1, 2, None]])
+                metrics["trajectory_complete"] = False
+                self.assertIsNone(adapter.canonical_training_result(result, {"dsec_environment": "counter"}))
+
     async def test_empty_failure_and_timeout_reach_next_policy_request(self):
         for result, status in [({"exit_code": 7, "output": "", "timed_out": False}, "failed"),
                                ({"exit_code": 124, "output": "", "timed_out": True}, "timed_out")]:
@@ -288,7 +351,8 @@ class MilesAdapterTest(unittest.IsolatedAsyncioTestCase):
                   "agent_metrics": {"resumed_after_trainer_exit": False,
                                     "verifier_diagnostic": {"harness": "tests/test.sh"}}}
 
-        async def run_for_training(*_args):
+        async def run_for_training(*_args, **kwargs):
+            self.assertTrue(kwargs["manages_episode_budget"])
             return dict(answer)
 
         fake.run_for_training = run_for_training
@@ -333,7 +397,7 @@ class MilesAdapterTest(unittest.IsolatedAsyncioTestCase):
     async def test_miles_entry_rejects_cross_plugin_verdict(self):
         fake = ModuleType("openenv_agent_function")
 
-        async def run_for_training(*_args):
+        async def run_for_training(*_args, **_kwargs):
             return {"reward": 1.0, "exit_status": "completed",
                     "agent_metrics": {"dsec_environment": "counter",
                                       "resumed_after_trainer_exit": False,

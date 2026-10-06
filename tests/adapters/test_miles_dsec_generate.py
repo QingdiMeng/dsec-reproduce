@@ -32,6 +32,36 @@ def valid():
 
 
 class GuardTest(unittest.IsolatedAsyncioTestCase):
+    async def test_budget_timeout_is_zero_in_a_complete_four_sample_group(self):
+        timeout = {"dsec_budget_verdict": True, "exit_status": "timeout", "reward": 0.0,
+                   "agent_metrics": {"dsec_environment": "tb2", "end_reason": "episode_timeout",
+                       "reward_source": "episode_budget", "trajectory_complete": True,
+                       "resumed_after_trainer_exit": False, "turns": 2,
+                       "budget_seconds": 1200.0, "agent_elapsed_seconds": 1200.1,
+                       "tito_path": "/evidence/tito.json"}}
+        samples = [Sample(valid()), Sample(timeout), Sample({**valid(), "reward": 0.0}), Sample(valid())]
+        result = SimpleNamespace(samples=samples)
+
+        async def base_generate(_input):
+            return result
+
+        modules = {name: ModuleType(name) for name in (
+            "miles", "miles.rollout", "miles.rollout.generate_hub",
+            "miles.rollout.generate_hub.agentic_tool_call", "miles.utils", "miles.utils.types")}
+        modules["miles.rollout.generate_hub.agentic_tool_call"].generate = base_generate
+        modules["miles.utils.types"].Sample = Sample
+        with patch.dict(sys.modules, modules), patch.dict("os.environ", {}, clear=True):
+            await guard.generate(None)
+            self.assertTrue(all(s.status != Status.ABORTED for s in samples))
+            self.assertEqual(await guard.reward_func(None, samples), [1.0, 0.0, 0.0, 1.0])
+        for key, value in (("trajectory_complete", False), ("tito_path", None),
+                           ("agent_elapsed_seconds", 1000), ("resumed_after_trainer_exit", True),
+                           ("budget_seconds", float("nan"))):
+            with self.subTest(key=key):
+                invalid = {**timeout, "agent_metrics": {**timeout["agent_metrics"], key: value}}
+                self.assertFalse(guard._verified(invalid))
+        self.assertFalse(guard._verified({**timeout, "reward": 1.0}))
+
     async def test_qwen_thinking_coding_profile_reaches_agent_sampling_params(self):
         @dataclass(frozen=True)
         class Input:

@@ -113,14 +113,14 @@ sudo python3 reviewed-privileges/install-privileges.py --apply
 ```sh
 mkdir -p "$HOME/dsec-training/recipe"
 gh release download v0.1.0-dev.0 --repo QingdiMeng/dsec-reproduce \
-  --pattern qwen35-tb21-grpo-recipe-20261006-r5.tar.gz --dir "$HOME/dsec-training"
-sha256sum "$HOME/dsec-training/qwen35-tb21-grpo-recipe-20261006-r5.tar.gz"
-tar -xzf "$HOME/dsec-training/qwen35-tb21-grpo-recipe-20261006-r5.tar.gz" \
+  --pattern qwen35-tb21-grpo-recipe-20261006-r6.tar.gz --dir "$HOME/dsec-training"
+sha256sum "$HOME/dsec-training/qwen35-tb21-grpo-recipe-20261006-r6.tar.gz"
+tar -xzf "$HOME/dsec-training/qwen35-tb21-grpo-recipe-20261006-r6.tar.gz" \
   -C "$HOME/dsec-training/recipe"
 ```
 
 该制品的 SHA-256 为
-`7951985708125ef43e957a2265c0b320aafa7a1b19c68727c17289c80cda1438`。
+`7636f1cfabb358e605bec86d584659eae8b065e5322cdc9b193b3db9238b1108`。
 其 `source-manifest.json` 固定每个源文件；包含 MIT/Apache-2.0 许可与 NOTICE。
 私有项目下载需要有权限的 GitHub 登录。离线传输可以使用校验过的同一制品。
 
@@ -169,6 +169,11 @@ agent 默认限制为 16 轮、单命令 120 秒、episode 1200 秒。可在配�
 `command_timeout_ms=600000`、`episode_timeout=3600`、`max_turns=32`。
 这些是集成配置，任务官方 agent/verifier 时间分别见各自 `task.toml`，
 不能据此宣称获得官方完整 benchmark 成绩。
+
+DSec 的 episode 时间从沙箱就绪开始计算，预算到期记录为零奖励，原 GRPO 分组继续。
+已发出的模型请求会完整收尾以保存 TITO，可能超过配置时间；到期后的回复不会执行。
+预算零分的 `reward_source=episode_budget`，与官方 verifier 成绩分别记录。
+缺失 token/logprob 或执行结果未知仍拒收，不能用零分掩盖基础设施失败。
 
 ### 5. 检查结果与失败
 

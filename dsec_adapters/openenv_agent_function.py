@@ -425,6 +425,7 @@ async def run_for_training(
     request_kwargs: dict[str, Any] | None,
     metadata: dict[str, Any] | None,
     run_episode_fn: Callable[..., Any],
+    *, manages_episode_budget: bool = False,
 ) -> dict[str, Any] | None:
     """miles-side wrapper around one episode: session-server policy wiring plus
     training failure semantics (timeout -> reward 0, no verdict -> drop sample).
@@ -445,11 +446,18 @@ async def run_for_training(
         # wait_for cancels the coroutine, so any in-flight policy call / env.step
         # is interrupted and the env session is closed by the env context manager
         # during cancellation cleanup.
-        reward, agent_metrics = await asyncio.wait_for(
-            run_episode_fn(policy, model_name, messages, request_kwargs, metadata),
-            timeout=_MAX_ROLLOUT_TIME_S,
-        )
+        episode = run_episode_fn(policy, model_name, messages, request_kwargs, metadata)
+        # DSec owns budget termination so the last policy response and its real
+        # token/logprob record survive. Other providers retain the legacy cap.
+        if manages_episode_budget:
+            reward, agent_metrics = await episode
+        else:
+            reward, agent_metrics = await asyncio.wait_for(
+                episode, timeout=_MAX_ROLLOUT_TIME_S)
     except asyncio.TimeoutError:
+        if manages_episode_budget:
+            logger.error("DSec transport/inference timed out before a settled budget verdict; dropping sample")
+            return None
         logger.warning(f"OpenEnv tbench2 episode exceeded {_MAX_ROLLOUT_TIME_S:.0f}s; " "terminating with reward 0")
         # eval_report empty: the episode was cancelled before evaluate ever
         # ran, so there is no pytest report to surface.
@@ -480,7 +488,7 @@ async def run_for_training(
     # `reward`.
     return {
         "reward": reward,
-        "exit_status": "completed",
+        "exit_status": "timeout" if agent_metrics.get("end_reason") == "episode_timeout" else "completed",
         "eval_report": {},
         "agent_metrics": agent_metrics,
     }

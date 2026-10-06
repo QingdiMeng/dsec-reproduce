@@ -9,6 +9,7 @@ without this guard its example reward function defaults missing rewards to 0.
 from __future__ import annotations
 
 from dataclasses import replace
+import math
 import os
 
 from .dsec_task_registry import EVALUATORS
@@ -34,9 +35,33 @@ QWEN35_THINKING_CODING_SAMPLING = {
 }
 
 
+def valid_budget_timeout(result, kind=None) -> bool:
+    """An evidenced policy-budget failure is a trainable zero, not missing reward."""
+    if not isinstance(result, dict):
+        return False
+    metrics = result.get("agent_metrics") or {}
+    if not isinstance(metrics, dict):
+        return False
+    environment = metrics.get("dsec_environment")
+    budget, elapsed = metrics.get("budget_seconds"), metrics.get("agent_elapsed_seconds")
+    return (result.get("exit_status") == "timeout" and
+            type(result.get("reward")) in (int, float) and result["reward"] == 0.0 and
+            environment in EVALUATORS and (kind is None or kind == environment) and
+            metrics.get("end_reason") == "episode_timeout" and
+            metrics.get("reward_source") == "episode_budget" and
+            metrics.get("trajectory_complete") is True and
+            not metrics.get("resumed_after_trainer_exit") and
+            isinstance(metrics.get("tito_path"), str) and bool(metrics["tito_path"]) and
+            type(metrics.get("turns")) is int and metrics["turns"] > 0 and
+            type(budget) in (int, float) and math.isfinite(budget) and budget > 0 and
+            type(elapsed) in (int, float) and math.isfinite(elapsed) and elapsed >= budget)
+
+
 def _verified(metadata: dict) -> bool:
     if not isinstance(metadata, dict):
         return False
+    if metadata.get("dsec_budget_verdict") is True and valid_budget_timeout(metadata):
+        return True
     reward = metadata.get("reward")
     metrics = metadata.get("agent_metrics") or {}
     if not isinstance(metrics, dict):
