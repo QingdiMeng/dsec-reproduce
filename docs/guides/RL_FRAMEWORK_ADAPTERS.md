@@ -113,14 +113,14 @@ sudo python3 reviewed-privileges/install-privileges.py --apply
 ```sh
 mkdir -p "$HOME/dsec-training/recipe"
 gh release download v0.1.0-dev.0 --repo QingdiMeng/dsec-reproduce \
-  --pattern qwen35-tb21-grpo-recipe-20261006-r3.tar.gz --dir "$HOME/dsec-training"
-sha256sum "$HOME/dsec-training/qwen35-tb21-grpo-recipe-20261006-r3.tar.gz"
-tar -xzf "$HOME/dsec-training/qwen35-tb21-grpo-recipe-20261006-r3.tar.gz" \
+  --pattern qwen35-tb21-grpo-recipe-20261006-r4.tar.gz --dir "$HOME/dsec-training"
+sha256sum "$HOME/dsec-training/qwen35-tb21-grpo-recipe-20261006-r4.tar.gz"
+tar -xzf "$HOME/dsec-training/qwen35-tb21-grpo-recipe-20261006-r4.tar.gz" \
   -C "$HOME/dsec-training/recipe"
 ```
 
 该制品的 SHA-256 为
-`27057eb390e4d7f7f08172b13b9eb4b898cd8eab1a1284fbf1faeef1393d184b`。
+`cbbfffe86604463097b448f29c5942d4f3973bba6813dbb48392d3dc727ccb79`。
 其 `source-manifest.json` 固定每个源文件；包含 MIT/Apache-2.0 许可与 NOTICE。
 私有项目下载需要有权限的 GitHub 登录。离线传输可以使用校验过的同一制品。
 
@@ -171,6 +171,28 @@ agent 默认限制为 16 轮、单命令 120 秒、episode 1200 秒。可在配�
 不能据此宣称获得官方完整 benchmark 成绩。
 
 ### 5. 检查结果与失败
+
+训练启动时打印 `run_directory`。每五秒更新 `progress.json`、
+`resource-samples.csv` 和 `resource-summary.json`，不加载模型或 checkpoint。
+用打印出的真实目录替换下面的 `/path/to/run`，可查询一次或连续观察：
+
+```sh
+.venv/bin/python "$HOME/dsec-training/recipe/recipe.py" status --run /path/to/run
+watch -n 5 '.venv/bin/python "$HOME/dsec-training/recipe/recipe.py" status --run /path/to/run'
+```
+
+进度区分有效官方 verdict、正分、零分、中止/不确定 episode、完整题目覆盖和
+已完成 optimizer step，并显示当前任务、命令/验证阶段、调度等待原因和
+checkpoint 数。有效 verdict 不代表轨迹已成功进入训练；梯度是否非零单独报告。
+`status` 标记超过十五秒未刷新的运行快照，失败退出保留最终状态和观测错误。
+
+资源范围分别为整张 GPU、全逻辑 CPU 归一到 100% 的整机 CPU、训练容器 cgroup，
+以及本作业 DSec VMM 的 PSS。容器内存不包含 VMM；VMM PSS 不包含共享存储服务。
+GPU/CPU/PSS 峰值与阶段时间是采样估计；容器 `memory.peak` 来自内核。
+IO 为训练容器 cgroup 的累计字节，网络为宿主默认网卡所有作业的累计字节，
+磁盘记录剩余空间，均不能当作专属 sandbox 的磁盘/网络利用率。
+共享 worker 的调度总量明确标为全实例范围，任务等待原因与已完成等待时间
+按本作业 rollout ID 筛选。资源样本缺失不能作为零占用通过最终验收。
 
 每次训练创建新的输出目录，保存配置、实际命令、原始模型回复、TITO、verifier
 日志、资源采样、worker 记录与 LoRA checkpoint。基础设施错误会终止当前组并保留
