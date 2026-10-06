@@ -113,14 +113,14 @@ sudo python3 reviewed-privileges/install-privileges.py --apply
 ```sh
 mkdir -p "$HOME/dsec-training/recipe"
 gh release download v0.1.0-dev.0 --repo QingdiMeng/dsec-reproduce \
-  --pattern qwen35-tb21-grpo-recipe-20261006-r4.tar.gz --dir "$HOME/dsec-training"
-sha256sum "$HOME/dsec-training/qwen35-tb21-grpo-recipe-20261006-r4.tar.gz"
-tar -xzf "$HOME/dsec-training/qwen35-tb21-grpo-recipe-20261006-r4.tar.gz" \
+  --pattern qwen35-tb21-grpo-recipe-20261006-r5.tar.gz --dir "$HOME/dsec-training"
+sha256sum "$HOME/dsec-training/qwen35-tb21-grpo-recipe-20261006-r5.tar.gz"
+tar -xzf "$HOME/dsec-training/qwen35-tb21-grpo-recipe-20261006-r5.tar.gz" \
   -C "$HOME/dsec-training/recipe"
 ```
 
 该制品的 SHA-256 为
-`cbbfffe86604463097b448f29c5942d4f3973bba6813dbb48392d3dc727ccb79`。
+`7951985708125ef43e957a2265c0b320aafa7a1b19c68727c17289c80cda1438`。
 其 `source-manifest.json` 固定每个源文件；包含 MIT/Apache-2.0 许可与 NOTICE。
 私有项目下载需要有权限的 GitHub 登录。离线传输可以使用校验过的同一制品。
 
@@ -185,6 +185,22 @@ watch -n 5 '.venv/bin/python "$HOME/dsec-training/recipe/recipe.py" status --run
 已完成 optimizer step，并显示当前任务、命令/验证阶段、调度等待原因和
 checkpoint 数。有效 verdict 不代表轨迹已成功进入训练；梯度是否非零单独报告。
 `status` 标记超过十五秒未刷新的运行快照，失败退出保留最终状态和观测错误。
+router 的 `/health_status` 返回每个 worker 的隔离状态、正在转发的请求数、
+连续健康失败数及错误类别。进度会记录这些状态、最近基础设施错误和日志静默
+时长；基础设施错误未退出时不会继续显示正常 rollout。
+
+此固定镜像的 Miles router 原本让健康检查与推理共享 HTTP 连接池；当并发
+设置为 2 且两个长请求占满连接时，健康请求会在申请连接阶段触发
+`PoolTimeout`，三次失败后误将仍能直连访问的 worker 隔离。recipe 为健康检查
+使用独立连接池，保留推理并发限制和真正故障 worker 的隔离；不自动重新接纳
+被隔离 worker，避免忽略模型权重版本同步。
+
+此镜像的 rollout driver 原本捕获自定义 generate 抛出的异常后继续取题。
+严格任务扫题使用 `runner.generate_complete_group` 时，recipe 改为取消并
+等待其他样本、保留异常原因并向作业所有者报错，禁止用后续题目替换失败题。
+其他采样模式保持原有行为。退出清理先等待训练进程/Ray 结束，再按本作业
+归属记录回收运行及排队创建的沙箱，保留 worker 记录与清理结果。
+这些属于可选 trainer recipe 的集成修复，不增加 DSec 核心的 Miles 依赖。
 
 资源范围分别为整张 GPU、全逻辑 CPU 归一到 100% 的整机 CPU、训练容器 cgroup，
 以及本作业 DSec VMM 的 PSS。容器内存不包含 VMM；VMM PSS 不包含共享存储服务。
