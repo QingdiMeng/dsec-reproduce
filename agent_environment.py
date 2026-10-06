@@ -10,12 +10,60 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+import json
 import math
 import time
 from typing import Any, Protocol
 
 from framework_profile import FrameworkProfile
 from scheduled_dsec import ScheduledOutcomeUnknown
+
+
+SHELL_FEEDBACK_VERSION = 2
+SHELL_OUTPUT_CHAR_CAP = 4000
+
+
+def format_shell_observation(entry: dict[str, Any]) -> str:
+    """Render a recorded shell result without inventing missing execution facts.
+
+    Output is the sandbox's captured, combined stdout/stderr. Capture truncation
+    and model-context truncation are separate; neither can hide the status.
+    The worker pins this format per episode for stable replay and TITO prefixes.
+    """
+    result = entry["result"]
+    exit_code = result.get("exit_code")
+    if type(exit_code) is not int:
+        exit_code = None
+    timed_out = result.get("timed_out")
+    if type(timed_out) is not bool:
+        timed_out = None
+    capture_truncated = result.get("truncated")
+    if type(capture_truncated) is not bool:
+        capture_truncated = None
+    status = ("timed_out" if timed_out is True else
+              "unknown" if exit_code is None else
+              "succeeded" if exit_code == 0 else "failed")
+    output = result.get("output", "")
+    omitted = 0
+    if len(output) > SHELL_OUTPUT_CHAR_CAP:
+        marker = "\n[... output omitted; retained head and tail ...]\n"
+        kept = SHELL_OUTPUT_CHAR_CAP - len(marker)
+        head = kept // 2
+        tail = kept - head
+        omitted = len(output) - kept
+        excerpt = output[:head] + marker + output[-tail:]
+    else:
+        excerpt = output
+    observation = {
+        "schema": "dsec.shell_observation.v1",
+        "step_id": entry["step_id"], "action_id": entry["action_id"],
+        "status": status, "exit_code": exit_code, "timed_out": timed_out,
+        "capture_truncated": capture_truncated,
+        "feedback_truncated": bool(omitted),
+        "captured_output_chars": len(output), "feedback_omitted_chars": omitted,
+        "output": excerpt,
+    }
+    return json.dumps(observation, ensure_ascii=False, sort_keys=True)
 
 
 class UnresolvedAction(RuntimeError):
@@ -208,4 +256,5 @@ class DSecAgentEnvironment:
 __all__ = ["EnvironmentSpec", "EnvironmentAction", "EnvironmentObservation",
            "EnvironmentVerdict", "TaskEnvironmentAdapter", "AgentEnvironment",
            "DSecAgentEnvironment",
-           "ScheduledOutcomeUnknown", "UnresolvedAction"]
+           "ScheduledOutcomeUnknown", "UnresolvedAction",
+           "SHELL_FEEDBACK_VERSION", "format_shell_observation"]

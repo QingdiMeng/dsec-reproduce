@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 import dsec_adapters.miles_dsec_agent_function as adapter
 from scheduled_dsec import ScheduledOutcomeUnknown
+from agent_environment import format_shell_observation
 
 
 class Message:
@@ -25,10 +26,11 @@ class Sandbox:
     sandbox_id = "vm-1"
     state = "ACTIVE"
 
-    def __init__(self, prior=False):
+    def __init__(self, prior=False, result=None):
         self.prior = prior
         self.calls = []
         self.seed = None
+        self.result = result if result is not None else {"exit_code": 0, "output": "ok\n"}
 
     async def start_dialogue(self, messages):
         self.seed = messages
@@ -43,10 +45,12 @@ class Sandbox:
 
     async def agent_step(self, command, **kwargs):
         self.calls.append((command, kwargs))
-        return {"entry": {"result": {"exit_code": 0, "output": "ok\n"}},
+        entry = {"step_id": kwargs["step_id"], "action_id": kwargs["action_id"],
+                 "result": self.result}
+        return {"entry": entry,
                 "dialogue": {"state": "ACTIVE", "next_step": int(self.prior) + 1,
                              "messages": self.seed + [kwargs["assistant_message"],
-                                                      {"role": "user", "content": "ok\n"}]}}
+                                {"role": "user", "content": format_shell_observation(entry)}]}}
 
     async def tb2_evaluate(self):
         return {"value": 0.0, "harness": "tests/test.sh", "task_id": "regex-log"}
@@ -75,6 +79,35 @@ class Client:
 
 
 class MilesAdapterTest(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_failure_and_timeout_reach_next_policy_request(self):
+        for result, status in [({"exit_code": 7, "output": "", "timed_out": False}, "failed"),
+                               ({"exit_code": 124, "output": "", "timed_out": True}, "timed_out")]:
+            with self.subTest(status=status):
+                sandbox = Sandbox(result=result)
+                seen = []
+
+                async def policy_call(_policy, _model, messages, _kwargs):
+                    seen.append(messages)
+                    message = Message()
+                    if len(seen) > 1:
+                        feedback = json.loads(messages[-1]["content"])
+                        self.assertEqual(feedback["status"], status)
+                        self.assertEqual(feedback["exit_code"], result["exit_code"])
+                        self.assertEqual(feedback["timed_out"], result["timed_out"])
+                        message.content = "TASK_COMPLETE"
+                    return SimpleNamespace(choices=[SimpleNamespace(
+                        message=message, finish_reason="stop")])
+
+                with patch.dict(os.environ, {
+                        "DSEC_ROLLOUT_WORKER_SOCKET": "/tmp/unused.sock",
+                        "DSEC_AGENT_STEP_TIMEOUT_MS": "30000", "OPENENV_MAX_TURNS": "2",
+                        "DSEC_QWEN35_THINKING": "0"}):
+                    await adapter.run_episode(None, "model", [], {}, {
+                        "task_id": "counter-example", "dsec_environment": "counter"},
+                        client_factory=lambda _: Client(sandbox), policy_call=policy_call)
+                self.assertEqual(len(seen), 2)
+                self.assertEqual(len(sandbox.calls), 1)
+
     async def test_records_job_ownership_before_failed_create(self):
         class FailingClient(Client):
             async def create(self, **kwargs):
@@ -156,7 +189,9 @@ class MilesAdapterTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(sandbox.calls[0][0], "cd /app && echo first")
             self.assertEqual(sandbox.calls[0][1]["assistant_message"]["content"], raw)
             self.assertEqual(seen_messages[1][-2]["content"], raw)
-            self.assertEqual(seen_messages[1][-1]["content"], "ok\n")
+            feedback = json.loads(seen_messages[1][-1]["content"])
+            self.assertEqual((feedback["status"], feedback["exit_code"], feedback["output"]),
+                             ("succeeded", 0, "ok\n"))
 
     async def test_lost_agent_step_reply_recovers_without_replaying_command(self):
         class LostReplySandbox(Sandbox):

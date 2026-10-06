@@ -25,6 +25,7 @@ from request_journal import request_digest
 from work_scheduler import ProcHostSampler, ResourceBudget, ResourceDemand, WorkScheduler
 from elastic_resource_monitor import ElasticResourceMonitor
 from shared_service_monitor import SharedServiceMonitor
+from agent_environment import SHELL_FEEDBACK_VERSION, format_shell_observation
 
 
 def container_environment_id(profile):
@@ -57,6 +58,7 @@ class Rollout:
         self.next_step = 0
         self.history = []
         self.dialogue_seed = None
+        self.dialogue_feedback_version = SHELL_FEEDBACK_VERSION
         self.pending = None
         self.uncertain = []
         self.reward = None
@@ -75,6 +77,7 @@ class Rollout:
                 "ttl_running_stop": self.ttl_running_stop, "state": self.state,
                 "next_step": self.next_step, "history": list(self.history),
                 "dialogue_seed": self.dialogue_seed,
+                "dialogue_feedback_version": self.dialogue_feedback_version,
                 "pending": self.pending, "uncertain": list(self.uncertain),
                 "reward": self.reward, "baseline_sealed": self.baseline_sealed,
                 "baseline_rollout_id": self.baseline_rollout_id,
@@ -198,6 +201,10 @@ class RolloutWorker:
                 self.scheduler.restore(rollout_id, rollout.resource_demand)
             rollout.history = saved["history"]
             rollout.dialogue_seed = saved.get("dialogue_seed")
+            feedback_version = saved.get("dialogue_feedback_version", 1)
+            if type(feedback_version) is not int or feedback_version not in (1, SHELL_FEEDBACK_VERSION):
+                raise ValueError("Unsupported dialogue feedback version")
+            rollout.dialogue_feedback_version = feedback_version
             rollout.next_step = saved["next_step"]
             rollout.reward = saved.get("reward")
             rollout.baseline_sealed = saved.get("baseline_sealed", False)
@@ -384,6 +391,7 @@ class RolloutWorker:
                     raise RuntimeError("Dialogue must start before the first action")
                 else:
                     rollout.dialogue_seed = messages
+                    rollout.dialogue_feedback_version = SHELL_FEEDBACK_VERSION
                     rollout.persist()
                 return self._dialogue(rollout)
             if op == "agent_step":
@@ -535,11 +543,16 @@ class RolloutWorker:
             if message is None:
                 raise RuntimeError("Dialogue history contains a step without an assistant message")
             messages.append(message)
-            output = entry["result"].get("output", "")
-            messages.append({"role": "user", "content": output[:4000] or "(no output)"})
+            if rollout.dialogue_feedback_version == 1:
+                output = entry["result"].get("output", "")
+                content = output[:4000] or "(no output)"
+            else:
+                content = format_shell_observation(entry)
+            messages.append({"role": "user", "content": content})
         return {"rollout_id": rollout.id, "sandbox_id": rollout.sandbox_id,
                 "state": rollout.state, "next_step": rollout.next_step,
-                "messages": messages, "pending": rollout.pending}
+                "messages": messages, "pending": rollout.pending,
+                "dialogue_feedback_version": rollout.dialogue_feedback_version}
 
     async def _scheduled_create(self, task_id, requested_id, profile, ttl, spec, resources,
                                 baseline_rollout_id=None):

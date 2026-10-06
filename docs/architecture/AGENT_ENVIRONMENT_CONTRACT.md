@@ -42,6 +42,36 @@ Trainer agent loop
 插件成为下一轮观察。训练框架从返回的 `dialogue["messages"]` 获取消息，不能用
 文本重建丢失的 token/logprob。
 
+### Shell 反馈
+
+新 shell episode 的 worker 对话使用 `dialogue_feedback_version=2`。每条执行结果
+作为一条 user 消息返回，内容是 `dsec.shell_observation.v1` JSON；训练框架应直接
+使用 worker 返回的消息，不能再次只提取 `output`。非 shell 动作的观察仍由任务插件定义。
+
+| 字段 | 含义 |
+| --- | --- |
+| `step_id`、`action_id` | 对应持久动作的身份 |
+| `status` | `succeeded`、`failed`、`timed_out` 或 `unknown` |
+| `exit_code` | 实际进程退出码；缺失为 `null`，不能补成 0 |
+| `timed_out` | 执行层报告的命令超时；未提供为 `null` |
+| `capture_truncated` | 执行层采集输出时是否截断；未提供为 `null` |
+| `feedback_truncated` | 已采集输出是否因模型上下文预算再次截断 |
+| `captured_output_chars`、`feedback_omitted_chars` | 已采集字符数、向模型省略的字符数 |
+| `output` | 已采集的合并 stdout/stderr，最多保留 4000 字符 |
+
+状态和截断标记始终保留。空输出也有完整结果，不再用 `(no output)` 代替执行状态。
+长输出保留开头和结尾，并插入省略标记；完整已采集输出仍在动作日志中。
+若执行层已经截断，反馈无法恢复没有采集的尾部，必须通过 `capture_truncated` 告知调用方。
+
+只有明确的 `timed_out=true` 才判为命令超时；退出码 124 本身不足以证明超时。
+命令超时与 RPC/连接超时不同：连接中断仍走 UNKNOWN、附着和对账流程，不能合成
+一条“命令失败”反馈后自动重试。当前 shell 执行接口等待命令结束，不提供后台进程
+句柄；不会把返回慢或没有输出解释成后台仍在运行。
+
+反馈版本随 episode 持久保存。升级前已开始、没有版本字段的 episode 按旧版本 1
+重建对话，后续动作也保持旧格式，以保护已有 session/TITO 前缀。新建或尚未开始
+对话的 episode 使用版本 2。重连、动作去重和 worker 重启不会改变既有消息。
+
 任务 instruction 来自任务插件，不由通用框架硬编码。TB2.1 插件调用任务原始
 `tests/test.sh`，核对 CTRF 结果与完整性，再解释成二元奖励。缺失、无效或无法验证
 的结果应报错并拒收样本，不能记作模型零分。
