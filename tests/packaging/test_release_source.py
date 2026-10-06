@@ -12,7 +12,7 @@ from tools.check_docs import check
 
 class SourceReleaseTests(unittest.TestCase):
     def test_reproducible_archive_has_only_pinned_sources_and_license(self):
-        root = Path(__file__).resolve().parents[1]
+        root = Path(__file__).resolve().parents[2]
         with tempfile.TemporaryDirectory() as tmp:
             a, b = Path(tmp)/'a.tar.gz', Path(tmp)/'b.tar.gz'
             package(root, a)

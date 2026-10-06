@@ -64,7 +64,7 @@ ID，附着并对账；不得新建 ID 重放可能已经生效的副作用。�
 - [TB2.1 任务插件](../../dsec_adapters/tb2_dsec_environment.py)
 - [任务注册表](../../dsec_adapters/dsec_task_registry.py)
 - [Miles agent 适配器](../../dsec_adapters/miles_dsec_agent_function.py)
-- [接口回归](../../test_agent_environment.py)
+- [接口回归](../../tests/unit/test_agent_environment.py)
 
 当前实现使用单机 Unix socket。生命周期与论文的 libdsec 思路相近，但本 agent
 协议是工程扩展，不声称与论文多机 apiserver/IAM 线协议兼容。
