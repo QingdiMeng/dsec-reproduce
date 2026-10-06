@@ -112,14 +112,14 @@ sudo python3 reviewed-privileges/install-privileges.py --apply
 ```sh
 mkdir -p "$HOME/dsec-training/recipe"
 gh release download v0.1.0-dev.0 --repo QingdiMeng/dsec-reproduce \
-  --pattern qwen35-tb21-grpo-recipe-20261006.tar.gz --dir "$HOME/dsec-training"
-sha256sum "$HOME/dsec-training/qwen35-tb21-grpo-recipe-20261006.tar.gz"
-tar -xzf "$HOME/dsec-training/qwen35-tb21-grpo-recipe-20261006.tar.gz" \
+  --pattern qwen35-tb21-grpo-recipe-20261006-r2.tar.gz --dir "$HOME/dsec-training"
+sha256sum "$HOME/dsec-training/qwen35-tb21-grpo-recipe-20261006-r2.tar.gz"
+tar -xzf "$HOME/dsec-training/qwen35-tb21-grpo-recipe-20261006-r2.tar.gz" \
   -C "$HOME/dsec-training/recipe"
 ```
 
 该制品的 SHA-256 为
-`77b0194c8ed69bfd2ad9c0e02ff326e532ce3e15d7661c930037218722312450`。
+`29a13331bb712407c2f07763864ead4bdefad093fac40dccd631ea4c8fe0f413`。
 其 `source-manifest.json` 固定每个源文件；包含 MIT/Apache-2.0 许可与 NOTICE。
 私有项目下载需要有权限的 GitHub 登录。离线传输可以使用校验过的同一制品。
 
