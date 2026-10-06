@@ -42,6 +42,13 @@ Trainer agent loop
 插件成为下一轮观察。训练框架从返回的 `dialogue["messages"]` 获取消息，不能用
 文本重建丢失的 token/logprob。
 
+Miles 的 Qwen3.5 Thinking 适配器按[官方模板](https://huggingface.co/Qwen/Qwen3.5-4B/blob/main/chat_template.jinja)
+从最后一个 `</think>` 之后提取正文，兼容代码块前重复的结束标记。若结束标记之间
+存在代码块、工具调用或完成信号，或正文重新打开思考段，则拒绝解析，不能静默丢弃
+候选动作。每轮仍只执行正文中的第一个 bash 动作；原始 assistant 回复和 TITO 不改写。
+`model_outputs` 记录 `thinking_end_tag_count` 和 `thinking_boundary_normalized`，
+episode 的 `agent_metrics.normalized_thinking_steps` 记录发生兼容处理的步骤。
+
 ### Shell 反馈
 
 新 shell episode 的 worker 对话使用 `dialogue_feedback_version=2`。每条执行结果

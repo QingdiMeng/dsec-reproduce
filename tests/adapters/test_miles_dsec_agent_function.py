@@ -143,7 +143,55 @@ class MilesAdapterTest(unittest.IsolatedAsyncioTestCase):
             final = adapter._final_reply(raw)
             self.assertEqual(final, "```bash\ncat /app/regex.txt\n```")
             self.assertEqual(adapter._strip_fence(final), "cat /app/regex.txt")
-            self.assertIsNone(adapter._final_reply("thought</think>more</think>answer"))
+            self.assertEqual(adapter._final_reply("thought</think>more</think>answer"),
+                             "answer")
+
+    def test_repeated_thinking_boundaries_never_discard_candidate_actions(self):
+        with patch.dict(os.environ, {"DSEC_QWEN35_THINKING": "1"}):
+            for raw in (
+                    "thought</think>```bash\necho first\n```</think>```bash\necho second\n```",
+                    "thought</think>```bash\nprintf '</think>'\n```",
+                    "thought</think><tool_call>first</tool_call></think>```bash\necho second\n```",
+                    "thought</think>TASK_COMPLETE</think>```bash\necho second\n```",
+                    "thought</think>more</think><think>unfinished"):
+                with self.subTest(raw=raw):
+                    self.assertIsNone(adapter._final_reply(raw))
+            # A server that already separated reasoning owns that boundary.
+            self.assertEqual(adapter._final_reply("plain answer", "reasoning"),
+                             "plain answer")
+
+    async def test_duplicate_thinking_close_keeps_raw_context_and_diagnostic(self):
+        raw = ("Review the implementation.</think>\nLet me fix it.\n</think>\n"
+               "```bash\necho repaired\n```")
+        sandbox = Sandbox()
+        seen = []
+
+        async def policy_call(_policy, _model, messages, _kwargs):
+            seen.append(messages)
+            message = Message()
+            message.content = raw if len(seen) == 1 else "TASK_COMPLETE"
+            return SimpleNamespace(choices=[SimpleNamespace(
+                message=message, finish_reason="stop")])
+
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, {
+                    "DSEC_ROLLOUT_WORKER_SOCKET": "/tmp/unused.sock",
+                    "DSEC_AGENT_STEP_TIMEOUT_MS": "30000", "OPENENV_MAX_TURNS": "2",
+                    "DSEC_QWEN35_THINKING": "1", "DSEC_MODEL_OUTPUT_DIR": directory}):
+                reward, metrics = await adapter.run_episode(None, "model", [], {}, {
+                    "task_id": "counter-example", "dsec_environment": "counter"},
+                    client_factory=lambda _: Client(sandbox), policy_call=policy_call)
+            record = json.loads(next(Path(directory).glob("*/0000.json")).read_text())
+            self.assertEqual(record["reply"], raw)
+            self.assertEqual(record["thinking_end_tag_count"], 2)
+            self.assertTrue(record["thinking_boundary_normalized"])
+        self.assertEqual(reward, 1.0)
+        self.assertEqual(metrics["end_reason"], "task_complete")
+        self.assertEqual(metrics["normalized_thinking_steps"], [0])
+        self.assertEqual(len(sandbox.calls), 1)
+        self.assertEqual(sandbox.calls[0][0], "echo repaired")
+        self.assertEqual(seen[1][-2]["content"], raw)
+        self.assertEqual(sandbox.state, "STOPPED")
 
     async def test_thinking_multiblock_executes_first_and_echoes_raw_history(self):
         raw = ("I should write a file.</think>\nFirst draft:\n"
@@ -487,7 +535,7 @@ class MilesAdapterTest(unittest.IsolatedAsyncioTestCase):
 
             async def policy_call(*_args):
                 return SimpleNamespace(choices=[SimpleNamespace(
-                    message=SimpleNamespace(content="thought</think>more</think>```bash\necho bad\n```"),
+                    message=SimpleNamespace(content="thought</think>```bash\necho discarded\n```</think>```bash\necho bad\n```"),
                     finish_reason="stop")])
 
             with patch.dict(os.environ, {

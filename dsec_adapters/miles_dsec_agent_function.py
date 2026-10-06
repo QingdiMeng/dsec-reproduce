@@ -54,14 +54,17 @@ def _private_json(directory: Path, filename: str, value: dict) -> None:
 
 def _persist_model_reply(rollout_id: str, step_id: int, reply: str,
                          finish_reason: str | None,
-                         final_reply: str | None = None) -> None:
+                         final_reply: str | None = None,
+                         thinking_boundary_normalized: bool = False) -> None:
     root = os.getenv("DSEC_MODEL_OUTPUT_DIR")
     if not root:
         return
     _private_json(Path(root) / rollout_id, f"{step_id:04d}.json",
                   {"rollout_id": rollout_id, "step_id": step_id,
                    "finish_reason": finish_reason, "reply": reply,
-                   "final_reply": final_reply})
+                   "final_reply": final_reply,
+                   "thinking_end_tag_count": reply.count("</think>"),
+                   "thinking_boundary_normalized": thinking_boundary_normalized})
 
 
 async def _capture_tito(policy, rollout_id: str, turns: int, *, fetch=None) -> str | None:
@@ -134,9 +137,14 @@ def _final_reply(reply: str, reasoning_content: str | None = None) -> str | None
         return reply
     if "</think>" not in reply:
         return reply
-    if reply.count("</think>") != 1:
+    parts = reply.split("</think>")
+    # Qwen's official template takes the answer after the LAST closing tag.
+    # Accept repeated prose boundaries, but never discard a candidate action
+    # between tags or split a closing tag embedded inside a fenced command.
+    if any("```" in part or "<tool_call>" in part or
+           part.strip() == "TASK_COMPLETE" for part in parts[1:-1]):
         return None
-    final = reply.split("</think>", 1)[1].strip()
+    final = parts[-1].strip()
     return final if "<think>" not in final else None
 
 
@@ -170,6 +178,7 @@ async def run_episode(policy, model_name: str, messages: list[dict],
             "rollout_id": rollout_id, "task_id": task_id,
             "dsec_environment": kind, "worker_socket": socket_path})
     gen_times, tool_times = [], []
+    normalized_thinking_steps = []
     reset_started = time.monotonic()
     async with client_factory(socket_path) as client:
         episode = DSecAgentEnvironment(client, adapter, task_id, rollout_id)
@@ -193,10 +202,15 @@ async def run_episode(policy, model_name: str, messages: list[dict],
                 gen_times.append(time.monotonic() - t0)
                 choice = completion.choices[0]
                 reply = choice.message.content or ""
-                final_reply = _final_reply(
-                    reply, getattr(choice.message, "reasoning_content", None))
+                reasoning_content = getattr(choice.message, "reasoning_content", None)
+                final_reply = _final_reply(reply, reasoning_content)
+                normalized = (os.getenv("DSEC_QWEN35_THINKING") == "1" and
+                              not reasoning_content and reply.count("</think>") > 1
+                              and final_reply is not None)
+                if normalized:
+                    normalized_thinking_steps.append(step_id)
                 _persist_model_reply(rollout_id, step_id, reply,
-                                     choice.finish_reason, final_reply)
+                                     choice.finish_reason, final_reply, normalized)
                 if choice.finish_reason == "length":
                     end_reason = "length"
                     break
@@ -249,6 +263,7 @@ async def run_episode(policy, model_name: str, messages: list[dict],
         "turns": len(gen_times), "end_reason": end_reason,
         "format_valid": end_reason not in ("invalid_format", "invalid_thinking_format"),
         "tool_calls": len(tool_times), "gen_times": gen_times,
+        "normalized_thinking_steps": normalized_thinking_steps,
         "tool_times": tool_times, "reset_time": reset_time,
         "eval_time": eval_time,
         "verifier_diagnostic": {"raw_reward": reward,
