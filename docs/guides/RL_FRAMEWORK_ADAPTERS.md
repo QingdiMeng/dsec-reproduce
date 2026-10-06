@@ -113,14 +113,14 @@ sudo python3 reviewed-privileges/install-privileges.py --apply
 ```sh
 mkdir -p "$HOME/dsec-training/recipe"
 gh release download v0.1.0-dev.0 --repo QingdiMeng/dsec-reproduce \
-  --pattern qwen35-tb21-grpo-recipe-20261006-r2.tar.gz --dir "$HOME/dsec-training"
-sha256sum "$HOME/dsec-training/qwen35-tb21-grpo-recipe-20261006-r2.tar.gz"
-tar -xzf "$HOME/dsec-training/qwen35-tb21-grpo-recipe-20261006-r2.tar.gz" \
+  --pattern qwen35-tb21-grpo-recipe-20261006-r3.tar.gz --dir "$HOME/dsec-training"
+sha256sum "$HOME/dsec-training/qwen35-tb21-grpo-recipe-20261006-r3.tar.gz"
+tar -xzf "$HOME/dsec-training/qwen35-tb21-grpo-recipe-20261006-r3.tar.gz" \
   -C "$HOME/dsec-training/recipe"
 ```
 
 该制品的 SHA-256 为
-`29a13331bb712407c2f07763864ead4bdefad093fac40dccd631ea4c8fe0f413`。
+`27057eb390e4d7f7f08172b13b9eb4b898cd8eab1a1284fbf1faeef1393d184b`。
 其 `source-manifest.json` 固定每个源文件；包含 MIT/Apache-2.0 许可与 NOTICE。
 私有项目下载需要有权限的 GitHub 登录。离线传输可以使用校验过的同一制品。
 
@@ -162,8 +162,13 @@ RepoDigest。recipe 使用 `--pull never`，不临时下载或修改 trainer 镜
 `temperature=0.6, top_p=0.95, top_k=20, min_p=0, presence_penalty=0,
 repetition_penalty=1`；回复上限 32768，context 上限 65536。
 
-当前 agent 限制为 16 轮、单命令 120 秒、episode 1200 秒。这是本次集成配置，
-不是 TB2.1 官方统一限制，也不能据此宣称获得官方完整 benchmark 成绩。
+agent 默认限制为 16 轮、单命令 120 秒、episode 1200 秒。可在配置中设置
+`max_turns`、`command_timeout_ms`、`episode_timeout`；单命令最多 900000 毫秒，
+且不能超过 episode 预算。大量依赖安装可能超过 120 秒；超时会终止命令，
+后续 `sleep` 不会让已终止的安装继续。需要更长安装预算时，可在新作业中显式设置
+`command_timeout_ms=600000`、`episode_timeout=3600`、`max_turns=32`。
+这些是集成配置，任务官方 agent/verifier 时间分别见各自 `task.toml`，
+不能据此宣称获得官方完整 benchmark 成绩。
 
 ### 5. 检查结果与失败
 
@@ -175,6 +180,8 @@ repetition_penalty=1`；回复上限 32768，context 上限 65536。
 成功需要 `recipe-result.json` 的 `status=passed`，完整任务覆盖和有效轨迹检查
 通过，并分别检查梯度与 adapter 变化。全量模式要求每题准确四条训练样本，不能
 只看总计 356 条。`learning_update_observed` 只证明观察到更新，不证明学习收益。
+容器正常退出或抛出异常时，将作业目录所有权还给启动训练的宿主用户，
+确保原始回复与失败证据可直接读取；强制杀死容器仍可能需要管理员修复权限。
 失败先保留该输出目录、定位并修复问题；本版本尚不提供一条命令自动断点续训。
 
 ## 接入其他训练框架
