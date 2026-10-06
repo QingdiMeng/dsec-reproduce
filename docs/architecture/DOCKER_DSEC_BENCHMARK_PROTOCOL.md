@@ -1,5 +1,9 @@
 # Docker 与 DSec 对照：发布版验收口径
 
+> Historical record: references marked “historical source not included”
+> refer to experiment files outside this repository. They are not runnable
+> instructions for the current release. Use the [documentation index](../README.md) for supported entry points.
+
 目标是验证可复现系统的能力与成本，而非预设 DSec 在所有指标上优于
 Docker。使用同一任务集合、任务修订、镜像身份、agent/model 参数、
 verifier、超时和并发预算。每次配对记录任务 ID、trial、环境目录摘要、
@@ -32,9 +36,9 @@ DAX、ready 池、OverlayBD 按需读取分别作为具名条件，并计入其�
 峰值回填为某个后端。TB2.1 是其中一个工作负载；还需至少一个非 TB2
 工作负载证明系统接口的通用性。
 
-既有证据与已知边界见 [TB2 对照](TB2_DOCKER_DSEC_COMPARISON.md)、
-[资源计量](TB2_RESOURCE_ACCOUNTING.md) 和
-[通用 DAX 对照](GENERIC_DAX_DOCKER_SCOPE_REPORT.md)。
+既有证据与已知边界见 TB2 对照 (`TB2_DOCKER_DSEC_COMPARISON.md`; historical source not included)、
+资源计量 (`TB2_RESOURCE_ACCOUNTING.md`; historical source not included) 和
+通用 DAX 对照 (`GENERIC_DAX_DOCKER_SCOPE_REPORT.md`; historical source not included)。
 
 ## 2026-10-04 实验机门禁
 
@@ -56,7 +60,7 @@ EROFS 制品已发布；还须验证其余三任务的 VM 路径和完整服务�
 不能用本地 EROFS 冒充远端读取。
 
 目前 `regex-log` 已完成
-[远端 EROFS 无网络功能烟测](TB2_2_1_REMOTE_EROFS_PILOT.md)；四任务远端
+远端 EROFS 无网络功能烟测 (`TB2_2_1_REMOTE_EROFS_PILOT.md`; historical source not included)；四任务远端
 制品均已发布和哈希校验，四任务无网络 VM 功能烟测均通过。官方
 verifier、并发和完整资源归属仍未过门禁。
 
@@ -66,17 +70,17 @@ verifier、并发和完整资源归属仍未过门禁。
 探针成功只证明测试进程能获得 I/O 计数，并不代表完整 DSec 后端已隔离。
 后续真实 VMM 同 scope 探针已用宿主 `fsync` 与 4 MiB 校准证明原始
 `io.stat` 能计入物理写入；结果和阶段边界见
-[隔离 scope pilot](TB2_2_1_ISOLATED_SCOPE_PILOT.md)。这个探针尚未包含
+隔离 scope pilot (`TB2_2_1_ISOLATED_SCOPE_PILOT.md`; historical source not included)。这个探针尚未包含
 独立的 sandboxd/worker、OverlayBD/ublk 与 3FS 服务端成本。
 Docker 独立 daemon 的空 store、manifest/config 身份核对与单任务
 冷拉取/已缓存管道已通过，详见
-[隔离 scope pilot](TB2_2_1_ISOLATED_SCOPE_PILOT.md)；它尚不能与
+隔离 scope pilot (`TB2_2_1_ISOLATED_SCOPE_PILOT.md`; historical source not included)；它尚不能与
 没有相同资源边界的 DSec 数据计算收益百分比。
 
 TB2.1 四任务的同镜像固定轨迹已完成 Docker/DSec 配对；其中三任务
 两侧完成官方 verifier，第四项缺离线依赖。时长与现有资源采样的
 原始结果及其计量边界见
-[四任务配对 pilot](TB2_2_1_FOUR_TASK_PAIRED_PILOT.md)。
+四任务配对 pilot (`TB2_2_1_FOUR_TASK_PAIRED_PILOT.md`; historical source not included)。
 
 ## 2026-10-06 完整后端成本 r4
 
@@ -118,5 +122,5 @@ DSec SDK reset 宣称为相同边界的 VMM 启动对照。
 系统。三项保护检查、冷解析、15 次评分、完整后端计量及回收均通过。
 DSec 准备从 15.155 s 降到 0.928 s，该阶段采样峰值从 22.184 GiB 降到
 0.145 GiB；完整 episode 仍比 Docker 慢。一次性发布成本和对照局限见
-[r5 报告](DSEC_VERITY_PILOT_REPORT.md)。r4 正文保留为历史结果，不把
+[r5 报告](../reports/DSEC_VERITY_PILOT_REPORT.md)。r4 正文保留为历史结果，不把
 本地工具盘收益外推至远端 3FS 或 DAX。

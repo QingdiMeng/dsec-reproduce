@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 from tools.package_release_source import package, SECRET
+from tools.check_docs import check
 
 
 class SourceReleaseTests(unittest.TestCase):
@@ -24,10 +25,18 @@ class SourceReleaseTests(unittest.TestCase):
                     self.assertEqual(hashlib.sha256(archive.extractfile(name).read()).hexdigest(), digest)
                     self.assertFalse(name.startswith(('experiments/', 'results/', '.runtime/')))
                 for name in ('LICENSE', 'licenses/miles-APACHE-2.0.txt', 'guest_agent.c',
-                             'QUICKSTART.md', 'apps/tb21/pyproject.toml'):
+                             'docs/guides/QUICKSTART.md', 'apps/tb21/pyproject.toml'):
                     self.assertIn(name, manifest['files'])
                 self.assertFalse(any('miles_lora_nvme' in n or n.endswith('.ext4')
                                      for n in manifest['files']))
+                # Validate the exported tree, which has fewer files than the
+                # development workspace. A link must work for a new checkout.
+                exported = Path(tmp)/'exported'
+                for name in manifest['files']:
+                    target = exported/name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(archive.extractfile(name).read())
+                self.assertEqual(check(exported), [])
             with self.assertRaises(FileExistsError):
                 package(root, a)
 

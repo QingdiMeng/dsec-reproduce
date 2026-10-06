@@ -1,5 +1,9 @@
 # 常驻服务与小规模并发验证
 
+> Historical record: references marked “historical source not included”
+> refer to experiment files outside this repository. They are not runnable
+> instructions for the current release. Use the [documentation index](../README.md) for supported entry points.
+
 2026-09-29，已在 `xiaoxiaohu@192.168.0.110` 部署并启用用户级 `dsec-sandboxd.service`。用户原本已启用 Linger；没有修改其他用户服务。
 
 ## 路径与日常操作
@@ -34,7 +38,7 @@ client.call('stop', sb['id'])
 
 服务保持本地 Unix socket、0600 权限，不开放 TCP 端口。当前限制为 4 个未停止沙箱、8 个在处理的客户端连接，accept backlog 为 16。每个 microVM 仍为 1 vCPU / 256 MiB。
 
-2026-10-01 的 [C3 对照](E5_C3_REPORT.md)后，`sandboxd.py` 增加启动参数 `--snapshot-cache-policy retain|evict`。当前常驻用户服务仍使用默认 `retain`，以保持此前延迟和缓存行为；需要在本地磁盘快照停止后回收计算 cgroup 内存的隔离部署可显式选 `evict`。该策略在快照持久化后给出 `posix_fadvise(DONTNEED)` 建议，`status` 返回请求策略与建议是否成功。真实 Firecracker/worker 对照表明内存降低但恢复延迟增加，不能把它当作无代价默认优化。常驻服务已在无活动沙箱时重启加载新代码，69 条旧记录均为 STOPPED，仍为默认 `retain`。
+2026-10-01 的 C3 对照 (`E5_C3_REPORT.md`; historical source not included)后，`sandboxd.py` 增加启动参数 `--snapshot-cache-policy retain|evict`。当前常驻用户服务仍使用默认 `retain`，以保持此前延迟和缓存行为；需要在本地磁盘快照停止后回收计算 cgroup 内存的隔离部署可显式选 `evict`。该策略在快照持久化后给出 `posix_fadvise(DONTNEED)` 建议，`status` 返回请求策略与建议是否成功。真实 Firecracker/worker 对照表明内存降低但恢复延迟增加，不能把它当作无代价默认优化。常驻服务已在无活动沙箱时重启加载新代码，69 条旧记录均为 STOPPED，仍为默认 `retain`。
 
 ## 并发与过载语义
 

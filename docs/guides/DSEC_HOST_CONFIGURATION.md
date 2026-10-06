@@ -100,7 +100,7 @@ made directly by an external trainer need corresponding client-side rate control
 installed commands. `doctor` checks host access and free-disk prerequisites;
 `doctor --live` also checks service health. `wait` handles asynchronous startup.
 Rendered units are not installed or started automatically, and rendering refuses
-to replace differing files. See [README](README.md) for the executable sequence.
+to replace differing files. See [README](../../README.md) for the executable sequence.
 
 `smoke` uses a non-TB task and saves dialogue, version, rollout identity and
 cleanup evidence. Its write command fails if accidentally executed a second
@@ -161,4 +161,4 @@ instance; it is not a parallel fork performance test.
 v0.1 targets a trusted single-host runtime user. Private sockets, scoped helpers
 and leases do not isolate mutually hostile host users. Fresh-host helper
 provisioning, provenance and license review, whole-backend comparison and the
-remaining release gates are tracked in [release plan](DSEC_V01_RELEASE_PLAN.md).
+remaining release gates are tracked in [release plan](../../ROADMAP.md).

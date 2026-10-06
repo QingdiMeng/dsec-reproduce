@@ -46,13 +46,13 @@ The current candidate passed 49 core regressions, short GRPO with rewards
 `[1,0]` / `[0,0]`, four actual VMM terminate/resume events and prepared-state
 isolation. This establishes integration and a valid learning update, not
 long-term learning gains or all-task correctness. See the
-[latest GRPO acceptance](DSEC_V01_GRPO_ACCEPTANCE.md).
+[latest GRPO acceptance](docs/reports/DSEC_V01_GRPO_ACCEPTANCE.md).
 
 The latest two-task paired pilot still has slower complete warm episodes than
 Docker. It excludes DAX, remote 3FS and the ready pool. No general speed or
 memory advantage is claimed. See the
-[cost report](DSEC_VERITY_PILOT_REPORT.md) and
-[comparison protocol](DOCKER_DSEC_BENCHMARK_PROTOCOL.md).
+[cost report](docs/reports/DSEC_VERITY_PILOT_REPORT.md) and
+[comparison protocol](docs/architecture/DOCKER_DSEC_BENCHMARK_PROTOCOL.md).
 
 ## M0 — publish a reproducible v0.1
 
@@ -84,7 +84,7 @@ environment workflow. Extend working components before adding a new backend.
 | RM-104 | Mechanism and full-cost benchmark suite | Run matched Docker/DSec trajectories through the installed system, including fresh, warm and repeated-episode conditions. Report preparation, queue, reset, work, verifier, recovery and cleanup separately, with full backend costs and raw evidence. |
 
 Application entry points and their current packaging gaps are listed in
-[use cases](USE_CASES.md). RM-104 includes exporting the API-agent and general
+[use cases](docs/guides/USE_CASES.md). RM-104 includes exporting the API-agent and general
 benchmark drivers as supported examples, rather than requiring private
 experiment launchers.
 
@@ -181,5 +181,5 @@ not a prerequisite for describing a smaller working deployment accurately.
 The immediate execution order is **RM-001/002/003 → RM-101 →
 RM-102/103/104 → RM-201/202/203**. The production and distributed milestones
 remain explicit future scope. The current v0.1 delivery checklist is maintained
-in [the release plan](DSEC_V01_RELEASE_PLAN.md), and historical implementation
-records are in [system status](DSEC_ELASTIC_SYSTEM_STATUS.md).
+in [the release plan](ROADMAP.md), and historical implementation
+records are in [system status](ROADMAP.md).

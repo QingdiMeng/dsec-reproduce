@@ -88,7 +88,7 @@ preserves VMMs for recovery; it is not a substitute for stopping owned sandboxes
 
 ## 4. Add a task application or optional storage
 
-The [TB2.1 application](apps/tb21/README.md) is an optional, separately installed
+The [TB2.1 application](../../apps/tb21/README.md) is an optional, separately installed
 package. Prepare only the selected tasks and artifacts, register a pinned
 environment catalog, then configure the dedicated instance. Installing the
 core does not prepare TB2.1 or require that application package.
@@ -120,6 +120,6 @@ restart/reuse and resource-boundary evidence. A new smoke guest can be built
 from source and checked independently of those TB images. The experiment
 machine's existing KVM, VMM/kernel and optional storage deployments have been
 reused; this is not a claim that every optional dependency was installed from
-zero on a second physical host. See the [acceptance record](DSEC_V01_INSTALL_ACCEPTANCE.md).
+zero on a second physical host. See the [acceptance record](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md).
 The latest installed candidate's grouped training and prepared-state isolation
-are recorded separately in [r5 GRPO acceptance](DSEC_V01_GRPO_ACCEPTANCE.md).
+are recorded separately in [r5 GRPO acceptance](../reports/DSEC_V01_GRPO_ACCEPTANCE.md).

@@ -32,6 +32,8 @@ jobs:
           python tools/check_wheel.py dist/core/*.whl
           python -m build --wheel --no-isolation --outdir dist/tb21 apps/tb21
           python -m pip install dist/core/*.whl dist/tb21/*.whl
+      - name: Documentation links
+        run: python tools/check_docs.py
       - name: Core and source export regressions
         run: |
           python - <<'PY'

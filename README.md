@@ -1,140 +1,98 @@
-# DSec reproduction: elastic sandbox control plane
+# DSec Reproduce
 
-This repository is an experimental, independent reproduction of DSec's elastic
-sandbox ideas. The Python control plane provides a libdsec-style client,
-long-lived rollout worker, resource-aware scheduler, artifact catalog and
-publisher, and Firecracker microVM lifecycle with durable request handling.
-It also contains Docker and Terminal-Bench adapters for comparison. It is not
-the original DSec implementation.
+An independent implementation of elastic sandboxes for agent execution and RL,
+inspired by the [DSec paper](https://arxiv.org/abs/2609.22978).
 
-The v0.1 development wheel contains the runtime modules listed in
-`pyproject.toml` and the `dsec_adapters` task/trainer plugins. It does **not** contain benchmark tasks,
-downloaded upstream repositories, VM images, kernels, 3FS, OverlayBD/ublk
-binaries, experiment results, or a preconfigured host. TB2 adapters are present
-for compatibility but the core environment ID and rollout interfaces are not
-specific to TB2.
+**Status: v0.1 development preview for a trusted user on one Linux host.**
+This is not DeepSeek's original implementation. It is not yet a production
+multi-tenant platform, and current measurements do not establish a general
+performance or memory advantage over Docker.
 
-The installed TB2 verifier uses the packaged plugin. Legacy experiment imports
-are compatibility aliases; running the installed services does not require
-the experiment directory or `PYTHONPATH`.
+[Quickstart](docs/guides/QUICKSTART.md) ·
+[Use cases](docs/guides/USE_CASES.md) ·
+[Documentation](docs/README.md) ·
+[Roadmap](ROADMAP.md) ·
+[Development release](https://github.com/QingdiMeng/dsec-reproduce/releases/tag/v0.1.0-dev.0)
 
-The sandbox and rollout worker can serve different RL trainers. Miles has an
-experimental adapter with short real training and GRPO reuse validation; verl and Uni-Agent
-need their own trajectory and reward adapters and have not yet been validated.
-See [RL framework adapters](RL_FRAMEWORK_ADAPTERS.md).
+## What it provides
 
-`agent_environment.py` defines the framework-independent episode boundary:
-`reset`, one durable `step`, `evaluate`, and `stop`. A task adapter supplies the
-instruction, work directory, sandbox profile, and verifier interpretation;
-the trainer keeps ownership of prompts, token IDs, logprobs, and sampling.
-The TB2 and non-TB counter adapters live in `dsec_adapters`. OpenEnv is not a
-required service or core dependency. E2B-compatible sandbox APIs can be added below this episode
-boundary without changing a task adapter's scoring contract. See the
-[agent environment contract](AGENT_ENVIRONMENT_CONTRACT.md) for the lifecycle,
-recovery rules, and separation from the sandbox SDK.
+- **Sandbox lifecycle:** Firecracker microVM execution, pause/snapshot/restore,
+  durable requests and prepared-state forks with private writable state.
+- **Storage:** EROFS layers, OverlayBD/ublk writable disks, explicit local or
+  3FS-backed environment catalogs, and optional DAX configurations.
+- **Scheduling:** resource budgets, admission checks, queued work, leases,
+  wait reasons and resource monitoring on one host.
+- **Agent integration:** framework-independent `reset`, `step`, `evaluate`
+  and `stop` boundaries, plus experimental Miles adapters.
 
-## Use cases
+OpenEnv is not a required service. A task plugin supplies the task instruction,
+environment and verifier; the trainer owns model sampling, tokens, logprobs
+and the RL algorithm.
 
-See [use cases and runnable entry points](USE_CASES.md) for TB2.1 task
-execution, API-driven agents, Miles RL, prepared-state episode reuse and custom
-non-TB tasks. Each case identifies shipped commands, external dependencies,
-validation evidence and missing application launchers. Start with the non-TB
-smoke, then the optional [TB2.1 application](apps/tb21/README.md).
+## Quick start
 
-## Roadmap and paper alignment
-
-The [project roadmap](ROADMAP.md) records current paper alignment, remaining
-gaps, stable work IDs and acceptance gates. The planned order is a reproducible
-v0.1 release, unified storage and measured reuse, complete elastic rollout
-execution, then production isolation and distributed scale. These are future
-milestones; existing single-host experiments do not establish production or
-paper-scale capability. The [v0.1 release checklist](DSEC_V01_RELEASE_PLAN.md)
-tracks the current delivery separately.
-
-See [contribution instructions](CONTRIBUTING.md) for issue reports, package
-checks and the distinction between CI regressions and real Linux acceptance.
-
-## Install the control plane
-
-For a new host, follow [the deployment quickstart](QUICKSTART.md), including a
-fresh non-TB smoke guest build. The [TB2.1 application](apps/tb21/README.md) has
-a separately installed `dsec-tb21-case` package for explicit task staging,
-file checks, image preparation and environment registration. Core installation
-does not install that application or download its tasks and images.
-
-On Linux with Python 3.11 or newer:
+Install the Python control plane on Linux with Python 3.11 or newer:
 
 ```sh
+git clone git@github.com:QingdiMeng/dsec-reproduce.git
+cd dsec-reproduce
 python3 -m venv .venv
 .venv/bin/python -m pip install .
-.venv/bin/dsec-sandboxd --help
-.venv/bin/dsec-rollout-worker --help
 .venv/bin/dsec-host --help
 ```
 
-Running a microVM also requires a Firecracker binary, a compatible guest
-kernel and root filesystem, KVM access, and the storage/network helpers chosen
-by the environment catalog. Configure their paths explicitly:
+Repository access currently requires authorization: this development repository
+is private. Installation alone does not provision a working microVM host.
+Running sandboxes requires KVM access, a compatible Firecracker binary, guest
+kernel/root filesystem, and the storage/network helpers selected by the catalog.
 
-```sh
-.venv/bin/dsec-host --config host.json init --instance local \
-  --state-root "$HOME/dsec-state" --network-interface eth0 \
-  --binary /opt/dsec/firecracker --kernel /opt/dsec/vmlinux \
-  --template /opt/dsec/guest.ext4
-.venv/bin/dsec-host --config host.json doctor
-.venv/bin/dsec-host --config host.json run sandbox --validate-only
-.venv/bin/dsec-host --config host.json render --out rendered-units
-systemd-analyze --user verify rendered-units/*.service
-mkdir -p "$HOME/.config/systemd/user"
-# Inspect the rendered units before installing them; use an unused instance name.
-cp rendered-units/dsec-local-*.service "$HOME/.config/systemd/user/"
-systemctl --user daemon-reload
-systemctl --user start dsec-local-sandbox.service dsec-local-worker.service
-.venv/bin/dsec-host --config host.json wait
-.venv/bin/dsec-host --config host.json doctor --live
-.venv/bin/dsec-host --config host.json smoke --out acceptance.json
-.venv/bin/dsec-host --config host.json status
-```
+Follow the [deployment quickstart](docs/guides/QUICKSTART.md) to build a smoke
+guest, configure an isolated instance, start services and run the non-TB task
+acceptance. Configure networking and permissions once before launching jobs.
 
-Use the actual host network interface. `init` writes a private configuration and
-refuses to replace an existing file. All configured relative paths resolve from
-the configuration directory. Its initial budgets are explicit small-example
-settings; adjust them to the host and environment catalog. Installed services
-use Python isolated mode to ignore source-tree imports. The default `service_group`
-is `kvm`, so the runtime user must already be a member; the launcher refreshes
-that existing group membership without changing device permissions.
+The core wheel has no third-party Python runtime dependencies. It does not
+bundle tasks, model weights, guest images, kernels, 3FS, storage binaries or
+experimental GPU training patches.
 
-An isolated acceptance instance can additionally run
-`smoke --restart-services --out restart-acceptance.json`. This restarts only the
-two user services derived from its instance name and checks live VMM identity,
-committed-action deduplication, paused recovery, scoring and lease cleanup.
-Stopping the sandbox service preserves VMMs for recovery: stop owned sandboxes
-through the SDK before retiring the instance.
+## Use cases
 
-The core wheel has no third-party Python runtime dependencies. The Miles plugin
-uses the `miles` extra and an existing Miles installation; GPU training patches
-remain experimental and are excluded. See [host configuration](DSEC_HOST_CONFIGURATION.md),
-[service deployment](SERVICE_DEPLOYMENT.md),
-[sandbox daemon](SANDBOX_DAEMON.md), and [system status](DSEC_ELASTIC_SYSTEM_STATUS.md)
-before configuring a host. Artifact preparation and experimental scripts live
-in `experiments/` and are not installed by the wheel.
+| Application | Available today | Start here |
+| --- | --- | --- |
+| Custom agent tasks | Task protocol and a counter smoke task | [Task contract](docs/architecture/AGENT_ENVIRONMENT_CONTRACT.md) |
+| TB2.1 execution and scoring | Optional application package, task preparation and representative official-verifier acceptance | [TB2.1 application](apps/tb21/README.md) |
+| API-driven agents | Environment/task interfaces; bring a model client and agent loop | [Use cases](docs/guides/USE_CASES.md) |
+| Miles GRPO | Agent/generate/reward adapters and short real training validation; portable training recipe is being developed | [RL integration](docs/guides/RL_FRAMEWORK_ADAPTERS.md) |
+| Repeated episodes | Prepared-state fork API and isolation/recovery acceptance tool | [Use cases](docs/guides/USE_CASES.md) |
 
-## Measurement boundary
+Installing the core does not download TB2.1. Install its application only when
+needed with `.venv/bin/python -m pip install ./apps/tb21`.
 
-Docker comparison must pair the same task revision, verifier, model, image
-identity, cache state and concurrency. Shared DSec services, guest memory and
-host page cache belong in its full backend resource total. See the
-[comparison protocol](DOCKER_DSEC_BENCHMARK_PROTOCOL.md). Existing small-scale
-measurements have **not** established a general DSec memory or performance
-advantage over Docker.
+## Validation and limits
 
-The project's own code and documentation use the [MIT License](LICENSE).
-The packaged Miles-derived agent loop retains Apache-2.0; both licenses and
-attribution accompany the wheel. See [third-party notices](THIRD_PARTY_NOTICES.md).
-This is a development packaging checkpoint, not a public release. Final source
-publication is a separate step. The r5 installed candidate passed protected-disk
-integrity, paired backend accounting, short GRPO and prepared-state isolation;
-see the [latest acceptance](DSEC_V01_GRPO_ACCEPTANCE.md) and
-[cost report](DSEC_VERITY_PILOT_REPORT.md). This is a trusted single-host control
-plane. External binaries, images and models remain separately provisioned and
-subject to their own licenses; a complete deployment image is not included.
+The installed v0.1 candidate passed selected Linux regressions, representative
+TB2.1 scoring, short Qwen3.5-4B GRPO, real microVM restore and prepared-state
+isolation checks. These are bounded acceptance results: all 89 tasks have not
+passed model episodes, and long training, multiple hosts, verl and Uni-Agent
+have not been validated.
+
+See the [latest GRPO acceptance](docs/reports/DSEC_V01_GRPO_ACCEPTANCE.md),
+[installation acceptance](docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md) and
+[complete-cost report](docs/reports/DSEC_VERITY_PILOT_REPORT.md). CI checks
+packages and selected regressions; it does not provision a real GPU/KVM host.
+
+## Documentation and development
+
+The [documentation index](docs/README.md) separates setup guides, architecture
+contracts and historical acceptance reports. The [roadmap](ROADMAP.md) records
+paper alignment and future work with explicit acceptance gates.
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for package checks and contribution
+requirements. Runtime modules remain at the repository root to preserve their
+installed import paths; task/trainer plugins are in `dsec_adapters/`, optional
+applications in `apps/`, and build/acceptance tools in `tools/`.
+
+## License
+
+Project code and documentation use [MIT](LICENSE). The Miles-derived agent loop
+retains Apache-2.0. See [third-party notices](THIRD_PARTY_NOTICES.md) for source
+attribution and external component licenses.

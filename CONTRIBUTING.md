@@ -1,8 +1,8 @@
 # Contributing
 
 This project independently reproduces DSec mechanisms. Start with the
-[roadmap](ROADMAP.md), [quickstart](QUICKSTART.md) and
-[comparison protocol](DOCKER_DSEC_BENCHMARK_PROTOCOL.md). The current support
+[roadmap](ROADMAP.md), [quickstart](docs/guides/QUICKSTART.md) and
+[comparison protocol](docs/architecture/DOCKER_DSEC_BENCHMARK_PROTOCOL.md). The current support
 boundary is Linux, a trusted single-host runtime user and explicitly
 provisioned external VM/storage components.
 
@@ -15,6 +15,13 @@ Keep changes focused on one behavior. A pull request should explain the user
 impact, implementation choice, validation and remaining limits. Preserve the
 project's MIT license and the Apache-2.0 notices for Miles-derived code.
 
+Update an existing implementation before adding another runner or helper.
+Keep one canonical source; compatibility entry points should delegate to it.
+Use configuration for deployment differences instead of copying launch scripts.
+Guides and contracts describe current behavior, while acceptance reports record
+bounded evidence. Do not append debugging diaries to operational documentation.
+Trainer compatibility patches remain opt-in and separate from the core package.
+
 ## Local package checks
 
 Use Python 3.11 or newer in a virtual environment:
@@ -24,6 +31,7 @@ python -m pip install 'setuptools>=77' wheel build
 python -m build --wheel --no-isolation --outdir dist/core .
 python tools/check_wheel.py dist/core/*.whl
 python -m unittest tools.test_release_source -v
+python tools/check_docs.py
 python -m build --wheel --no-isolation --outdir dist/tb21 apps/tb21
 python -m pip install dist/core/*.whl dist/tb21/*.whl
 python -m unittest discover -s apps/tb21/tests -v

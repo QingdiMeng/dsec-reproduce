@@ -9,7 +9,7 @@
 [最新训练验收](DSEC_V01_GRPO_ACCEPTANCE.md)。
 
 日期：2026-10-06。发行入口阶段完成；完整开源交付仍按
-[两天计划](DSEC_V01_RELEASE_PLAN.md)继续。此处是功能验收，不是吞吐或
+[两天计划](../../ROADMAP.md)继续。此处是功能验收，不是吞吐或
 Docker 成本优势报告。
 
 冻结开发 wheel：`dsec_reproduce-0.1.0.dev0-py3-none-any.whl`，183697 字节，

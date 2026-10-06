@@ -41,7 +41,7 @@ The supplied task checkout must be the pinned revision
 `7131e4375048a0e408a8fb404b5f499d726b695b`. Registration consumes an existing
 validated environment catalog; it does not build disks. If one is unavailable,
 use the explicit `prepare-image` recipe in the
-[application guide](apps/tb21/README.md), including its local image/tool and
+[application guide](../../apps/tb21/README.md), including its local image/tool and
 device-count requirements. Neither command implicitly downloads task images.
 
 Configure an isolated instance with that catalog, the staged tasks and the
@@ -91,7 +91,7 @@ training additionally needs exact tokens, logprobs, masks and weight versions.
 These interfaces are installed, but a complete API-client/parser/task-sweep
 CLI has not yet been exported as a supported example. Historical API harness
 experiments are not a substitute for that missing launcher. See the
-[environment contract](AGENT_ENVIRONMENT_CONTRACT.md); exporting this application
+[environment contract](../architecture/AGENT_ENVIRONMENT_CONTRACT.md); exporting this application
 driver belongs with the benchmark entry points in roadmap `RM-104`.
 
 ## UC-03 — Miles RL rollouts
@@ -127,7 +127,7 @@ evidence, not a claim of learning gains. The historical single-16-GiB-GPU run
 used separate training-side patches; they are not installed by DSec and the
 unmodified trainer is not guaranteed to fit that hardware. See
 [RL adapter boundaries](RL_FRAMEWORK_ADAPTERS.md) and
-[the latest training acceptance](DSEC_V01_GRPO_ACCEPTANCE.md).
+[the latest training acceptance](../reports/DSEC_V01_GRPO_ACCEPTANCE.md).
 
 There is no complete portable model-download/GPU-training launcher in this
 preview. verl and Uni-Agent adapters remain planned, not validated use cases.
@@ -158,8 +158,8 @@ The baseline must not contain reference answers or another policy's history.
 Prepared memory forking is our extension; it is not the paper's disk-only
 `pack_diff` workflow. Account for baseline creation, retained memory/disk and
 reuse count when assessing whether preparation amortizes. See the
-[environment contract](AGENT_ENVIRONMENT_CONTRACT.md)
-and [cost report](DSEC_VERITY_PILOT_REPORT.md).
+[environment contract](../architecture/AGENT_ENVIRONMENT_CONTRACT.md)
+and [cost report](../reports/DSEC_VERITY_PILOT_REPORT.md).
 
 ## UC-05 — custom tasks without TB2.1
 
@@ -186,9 +186,9 @@ a matching verdict guard. The core does not restrict direct adapters to TB2.1.
 
 ## Comparing applications on Docker and DSec
 
-The [comparison protocol](DOCKER_DSEC_BENCHMARK_PROTOCOL.md) defines matched
+The [comparison protocol](../architecture/DOCKER_DSEC_BENCHMARK_PROTOCOL.md) defines matched
 tasks, trajectories, cache/storage conditions and full backend costs. The
-[r5 cost report](DSEC_VERITY_PILOT_REPORT.md) is historical pilot evidence,
+[r5 cost report](../reports/DSEC_VERITY_PILOT_REPORT.md) is historical pilot evidence,
 not a shipped general benchmark command. Unified application sweep and cost
 drivers remain roadmap `RM-104`. Preserve failures and distinguish functional
 acceptance, model quality, RL integration and system performance.

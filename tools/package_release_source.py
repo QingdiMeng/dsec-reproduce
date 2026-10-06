@@ -11,15 +11,16 @@ import tomllib
 
 
 DOCS = (
-    'README.md', 'ROADMAP.md', 'USE_CASES.md', 'CONTRIBUTING.md', 'QUICKSTART.md', 'DSEC_HOST_CONFIGURATION.md',
-    'DSEC_V01_RELEASE_PLAN.md', 'DSEC_V01_INSTALL_ACCEPTANCE.md',
-    'DSEC_ELASTIC_SYSTEM_STATUS.md', 'SERVICE_DEPLOYMENT.md', 'SANDBOX_DAEMON.md',
-    'AGENT_ENVIRONMENT_CONTRACT.md', 'RL_FRAMEWORK_ADAPTERS.md',
-    'ARTIFACT_PUBLICATION.md', 'DOCKER_DSEC_BENCHMARK_PROTOCOL.md',
-    'DSEC_VERITY_PILOT_REPORT.md',
-    'DSEC_V01_GRPO_ACCEPTANCE.md',
+    'README.md', 'docs/README.md', 'ROADMAP.md', 'docs/guides/USE_CASES.md', 'CONTRIBUTING.md', 'docs/guides/QUICKSTART.md', 'docs/guides/DSEC_HOST_CONFIGURATION.md',
+    'docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md',
+    'docs/guides/SERVICE_DEPLOYMENT.md', 'docs/architecture/SANDBOX_DAEMON.md',
+    'docs/architecture/AGENT_ENVIRONMENT_CONTRACT.md', 'docs/guides/RL_FRAMEWORK_ADAPTERS.md',
+    'docs/guides/ARTIFACT_PUBLICATION.md', 'docs/architecture/DOCKER_DSEC_BENCHMARK_PROTOCOL.md',
+    'docs/reports/DSEC_VERITY_PILOT_REPORT.md',
+    'docs/reports/DSEC_V01_GRPO_ACCEPTANCE.md',
 )
 TESTS = (
+    'test_agent_environment.py',
     'test_work_scheduler.py', 'test_rollout_scheduler.py', 'test_work_journal.py',
     'test_admission_guard.py', 'test_scheduled_dsec.py',
     'test_shared_snapshot_layers.py', 'test_prepared_fork_concurrency.py',
@@ -31,7 +32,7 @@ TESTS = (
 TOOLS = (
     '.github/workflows/ci.yml',
     'tools/check_wheel.py', 'tools/package_release_source.py',
-    'tools/test_release_source.py',
+    'tools/test_release_source.py', 'tools/check_docs.py',
     'tools/build_smoke_guest.py', 'tools/verify_installed_task.py',
     'tools/verify_installed_fork.py', 'tools/fixtures/tb21-openssl.json',
 )
