@@ -90,7 +90,8 @@ EROFS 内容哈希不变。只复制 catalog 文件不足以完成迁移。3FS �
 verifier/DAX 配置也应保留。调度预算要覆盖选中任务的最大单题资源需求，不能沿用
 单个小任务的预算；`capacity` 和实际并发可以小于每题采样数量。
 
-先写入 `network.helper`、`max_slots` 和 `dns`，然后生成并由管理员安装权限：
+先配置 `network.max_slots` 和 `dns`，然后生成并由管理员安装权限。省略
+`helper` 时，入口使用与 installer 一致的实例专用路径；也可以显式指定：
 
 ```sh
 .venv/bin/dsec-host --config host.json render-privileges \

@@ -147,6 +147,7 @@ def load_config(path):
     network = cfg.get('network')
     if network is not None:
         _keys(network, NETWORK_KEYS, 'network')
+        network.setdefault('helper', '/usr/local/libexec/dsec-'+cfg['instance']+'-netns-helper')
         network['helper'] = _path(network['helper'], path.parent)
         if 'dax_binary' in network:
             network['dax_binary'] = _path(network['dax_binary'], path.parent)
@@ -192,12 +193,14 @@ def worker_arguments(cfg, budget_file):
     return args
 
 
-def private_directory(path, *, storage_access=False):
+def check_private_directory(path, *, storage_access=False):
+    """Check existing state without changing permissions or ownership."""
     path = Path(path)
     if path.is_symlink():
         raise ValueError('Instance directory cannot be a symlink')
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
     info = path.stat()
+    if not path.is_dir():
+        raise ValueError('Instance state must be a directory: '+str(path))
     forbidden = 0o067 if storage_access else 0o077
     if info.st_uid != os.getuid() or info.st_mode & forbidden:
         raise PermissionError('Instance directory has unexpected ownership or shared access: '+str(path))
@@ -206,6 +209,17 @@ def private_directory(path, *, storage_access=False):
         gid = grp.getgrnam('kvm').gr_gid
         if info.st_mode & 0o010 and info.st_gid != gid:
             raise PermissionError('Storage traversal group does not match kvm: '+str(path))
+
+
+def private_directory(path, *, storage_access=False):
+    path = Path(path)
+    if path.is_symlink():
+        raise ValueError('Instance directory cannot be a symlink')
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    check_private_directory(path, storage_access=storage_access)
+    if storage_access:
+        import grp
+        gid = grp.getgrnam('kvm').gr_gid
         # Storage daemon gets search only; worker registry and sockets remain private.
         os.chown(path, -1, gid)
         path.chmod(0o2710)
@@ -243,6 +257,11 @@ def doctor(cfg, live=False):
     while not existing.exists():
         existing = existing.parent
     check('state_storage', lambda: require(os.access(existing, os.W_OK | os.X_OK), 'State parent is not writable'))
+    for path in (root, root/'sandboxes', root/'worker'):
+        if path.exists() or path.is_symlink():
+            access='overlaybd_ublk_socket' in cfg['sandbox'] and path != root/'worker'
+            check('state_permissions:'+path.name, lambda path=path, access=access:
+                  check_private_directory(path, storage_access=access))
     check('disk_floor', lambda: require(shutil.disk_usage(existing).free // 2**20 >
           cfg['scheduler'].get('min_disk_free_mb', 20480), 'Free disk is below the configured admission floor'))
     if 'overlaybd_ublk_socket' in cfg['sandbox']:

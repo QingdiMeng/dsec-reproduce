@@ -111,6 +111,24 @@ class HostConfigurationTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             dsec_host.private_directory(directory)
 
+    def test_doctor_rejects_shared_state_without_repairing_it(self):
+        directory=self.root/'state'
+        directory.mkdir(mode=0o755)
+        cfg=self.load()
+        before=directory.stat()
+        report=dsec_host.doctor(cfg)
+        check=next(c for c in report['checks'] if c['check']=='state_permissions:state')
+        self.assertFalse(check['ok'])
+        after=directory.stat()
+        self.assertEqual((before.st_mode,before.st_uid,before.st_gid),
+                         (after.st_mode,after.st_uid,after.st_gid))
+
+    def test_network_helper_defaults_to_the_scoped_installer_target(self):
+        self.data['sandbox']['microvm_environment_catalog']='catalog.json'
+        self.data['network']={'max_slots':2,'dns':'1.1.1.1'}
+        cfg=self.load()
+        self.assertEqual(cfg['network']['helper'],'/usr/local/libexec/dsec-pilot-netns-helper')
+
     def test_storage_root_accepts_only_service_group_traversal(self):
         import os
         from types import SimpleNamespace
