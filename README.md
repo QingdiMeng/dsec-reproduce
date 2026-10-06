@@ -33,6 +33,14 @@ boundary without changing a task adapter's scoring contract. See the
 [agent environment contract](AGENT_ENVIRONMENT_CONTRACT.md) for the lifecycle,
 recovery rules, and separation from the sandbox SDK.
 
+## Use cases
+
+See [use cases and runnable entry points](USE_CASES.md) for TB2.1 task
+execution, API-driven agents, Miles RL, prepared-state episode reuse and custom
+non-TB tasks. Each case identifies shipped commands, external dependencies,
+validation evidence and missing application launchers. Start with the non-TB
+smoke, then the optional [TB2.1 application](apps/tb21/README.md).
+
 ## Roadmap and paper alignment
 
 The [project roadmap](ROADMAP.md) records current paper alignment, remaining

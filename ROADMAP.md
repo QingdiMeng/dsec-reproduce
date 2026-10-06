@@ -83,6 +83,11 @@ environment workflow. Extend working components before adding a new backend.
 | RM-103 | Supported `pack_diff` workflow | Build with an isolated builder identity, export an incremental disk checkpoint, remove build residuals/reference answers, validate and publish an immutable environment, then create independent sandboxes from it. Reject incompatible parents, failed sanitation and incomplete publication. |
 | RM-104 | Mechanism and full-cost benchmark suite | Run matched Docker/DSec trajectories through the installed system, including fresh, warm and repeated-episode conditions. Report preparation, queue, reset, work, verifier, recovery and cleanup separately, with full backend costs and raw evidence. |
 
+Application entry points and their current packaging gaps are listed in
+[use cases](USE_CASES.md). RM-104 includes exporting the API-agent and general
+benchmark drivers as supported examples, rather than requiring private
+experiment launchers.
+
 RM-101 defines the configurations used by the other work items. Run a bounded
 representative set first: a small environment, a large sparsely read
 environment, shared read-only data across VMs, and private-write episodes.
