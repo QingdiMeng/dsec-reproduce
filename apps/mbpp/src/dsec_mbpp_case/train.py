@@ -48,7 +48,9 @@ def plan(args):
                 train_tasks=train_count, evaluation_split=args.evaluation_split,
                 evaluation_tasks=min(args.validation_samples, manifest["counts"][args.evaluation_split]),
                 rollouts_per_task=8, seed=args.seed, response_length=args.response_length,
-                generation_concurrency=args.generation_concurrency)
+                generation_concurrency=args.generation_concurrency,
+                gpu_memory_utilization=args.gpu_memory_utilization,
+                mamba_cache_slots=args.mamba_cache_slots)
 
 
 def overrides(args, agent_config):
@@ -98,7 +100,7 @@ def overrides(args, agent_config):
         "+actor_rollout_ref.rollout.engine_kwargs.sglang.random_seed": args.seed,
         "actor_rollout_ref.rollout.max_num_seqs": args.generation_concurrency,
         "actor_rollout_ref.rollout.tensor_model_parallel_size": 1,
-        "actor_rollout_ref.rollout.gpu_memory_utilization": .4,
+        "actor_rollout_ref.rollout.gpu_memory_utilization": args.gpu_memory_utilization,
         "actor_rollout_ref.rollout.enforce_eager": True,
         "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu": 1,
         "actor_rollout_ref.rollout.agent.num_workers": 4,
@@ -129,6 +131,8 @@ def overrides(args, agent_config):
         "+ray_kwargs.ray_init.object_store_memory": 536870912,
         "+ray_kwargs.ray_init.include_dashboard": False,
     }
+    if args.mamba_cache_slots is not None:
+        settings["+actor_rollout_ref.rollout.engine_kwargs.sglang.max_mamba_cache_size"] = args.mamba_cache_slots
     return [key + "=" + json.dumps(value) for key, value in settings.items()]
 
 
@@ -150,6 +154,9 @@ def main():
     parser.add_argument("--response-length", type=int, default=4096)
     parser.add_argument("--generation-concurrency", type=int, default=16,
                         help="maximum simultaneous sequences in the generation backend")
+    parser.add_argument("--gpu-memory-utilization", type=float, default=.4)
+    parser.add_argument("--mamba-cache-slots", type=int,
+                        help="explicit GDN state slots; SGLang otherwise derives capacity from its memory budget")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--checkpoint-every", type=int, default=0, help="periodic checkpoints; zero saves only the final update")
     parser.add_argument("--dry-run", action="store_true", help="compose the complete native Hydra config; no GPU run")
@@ -159,6 +166,8 @@ def main():
             args.generation_concurrency) < 1 or
             args.steps == 0 or args.epochs == 0 or args.checkpoint_every < 0 or args.seed < 0):
         parser.error("training/evaluation sizes must be positive, checkpoint interval and seed nonnegative")
+    if not 0 < args.gpu_memory_utilization < 1 or (args.mamba_cache_slots is not None and args.mamba_cache_slots < 1):
+        parser.error("GPU memory utilization must be between zero and one, Mamba cache slots positive")
     for name in ("verl_root", "model", "data"):
         setattr(args, name, getattr(args, name).resolve(strict=True))
     args.out = args.out.resolve()

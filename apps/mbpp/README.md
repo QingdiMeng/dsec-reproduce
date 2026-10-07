@@ -165,10 +165,20 @@ Both evaluations use these same limits.
   --environment-id "$DSEC_MBPP_ENVIRONMENT_ID" --out /data/mbpp-full \
   --epochs 1 --batch-size 2 --prompt-length 4096 --seed 42 \
   --response-length 8192 --generation-concurrency 32 \
+  --gpu-memory-utilization 0.6 --mamba-cache-slots 160 \
   --evaluation-split test --validation-samples 500 --evaluation-batch-size 32 \
   --evaluate-before-train --checkpoint-every 20
 .venv/bin/dsec-mbpp-compare --run /data/mbpp-full --out /data/mbpp-comparison.json
 ```
+
+SGLang may cap effective concurrency below the requested value when GDN state
+slots are insufficient. On the pinned backend, allow up to five state slots per
+running request for radix caching and overlap buffers. This recipe explicitly
+reserves 160 slots for 32 requests without changing state precision. Verify
+`max_running_requests` and `num_running_reqs` through SGLang's `/v1/loads`
+endpoint; changing `max_num_seqs` alone does not guarantee the requested capacity.
+The 60% inference memory budget must fit the target GPU. Native verl releases
+the inference engine's memory for the training phase.
 
 Start from the base model with a fresh LoRA adapter; this command does not
 resume the earlier pilot. Both initial and final evaluations sample eight

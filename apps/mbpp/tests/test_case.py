@@ -48,7 +48,8 @@ class CaseTests(unittest.TestCase):
                 reference_solutions_included=False, files=files, counts={"train":374,"validation":90})))
             args = SimpleNamespace(data=root, evaluation_split="validation", epochs=1,
                 batch_size=32, steps=None, validation_samples=90, seed=42,
-                response_length=8192, generation_concurrency=32)
+                response_length=8192, generation_concurrency=32,
+                gpu_memory_utilization=.6, mamba_cache_slots=160)
             with self.assertRaisesRegex(ValueError, "drops"):
                 train.plan(args)
             args.batch_size = 2
@@ -65,6 +66,8 @@ class CaseTests(unittest.TestCase):
             self.assertEqual(settings["actor_rollout_ref.rollout.response_length"], "8192")
             self.assertEqual(settings["actor_rollout_ref.rollout.max_model_len"], "12288")
             self.assertEqual(settings["actor_rollout_ref.rollout.max_num_seqs"], "32")
+            self.assertEqual(settings["actor_rollout_ref.rollout.gpu_memory_utilization"], "0.6")
+            self.assertEqual(settings["+actor_rollout_ref.rollout.engine_kwargs.sglang.max_mamba_cache_size"], "160")
             (root / "train.jsonl").write_text("changed")
             with self.assertRaisesRegex(ValueError, "changed"):
                 train.plan(args)
