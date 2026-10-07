@@ -19,6 +19,7 @@ parquet = ["pyarrow>=14"]
 dsec-mbpp = "dsec_mbpp_case.dataset:main"
 dsec-mbpp-verify = "dsec_mbpp_case.acceptance:main"
 dsec-mbpp-train = "dsec_mbpp_case.train:main"
+dsec-mbpp-compare = "dsec_mbpp_case.compare:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

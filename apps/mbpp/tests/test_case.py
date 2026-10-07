@@ -12,7 +12,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from dsec_mbpp_case import dataset, reward
+from dsec_mbpp_case import compare, dataset, reward, train
 from scheduled_dsec import ScheduledOutcomeUnknown
 
 
@@ -32,6 +32,44 @@ def good_result():
 
 
 class CaseTests(unittest.TestCase):
+    def test_epoch_plan_rejects_dropped_tail_and_prepared_data_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = {}
+            for split in ("train", "validation"):
+                low, high = dataset.SPLITS[split]
+                for suffix in ("jsonl", "parquet"):
+                    data = "".join(json.dumps({"extra_info": {"task_id": i}}) + "\n" for i in range(low, high+1))
+                    p = root / (split + "." + suffix)
+                    p.write_text(data)
+                    import hashlib
+                    files[p.name] = hashlib.sha256(p.read_bytes()).hexdigest()
+            (root / "manifest.json").write_text(json.dumps(dict(source_sha256=dataset.SOURCE_SHA256,
+                reference_solutions_included=False, files=files, counts={"train":374,"validation":90})))
+            args = SimpleNamespace(data=root, evaluation_split="validation", epochs=1,
+                batch_size=32, steps=None, validation_samples=90, seed=42)
+            with self.assertRaisesRegex(ValueError, "drops"):
+                train.plan(args)
+            args.batch_size = 2
+            self.assertEqual(train.plan(args)["steps"], 187)
+            (root / "train.jsonl").write_text("changed")
+            with self.assertRaisesRegex(ValueError, "changed"):
+                train.plan(args)
+
+    def test_comparison_keeps_zeros_and_rejects_incomplete_sample_groups(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "scores.jsonl"
+            rows = [dict(gts=json.dumps(dict(source_sha256=dataset.SOURCE_SHA256,task_id=i)),
+                         score=int(i == 11 and n == 0)) for i in [11,12] for n in range(8)]
+            path.write_text("".join(json.dumps(r)+"\n" for r in rows))
+            scores, _ = compare.read_scores(path, [11,12], 8)
+            result = compare.summarize(scores)
+            self.assertEqual(result["pass_at_1"], 1/16)
+            self.assertEqual(result["pass_at_8"], .5)
+            path.write_text("".join(json.dumps(r)+"\n" for r in rows[:-1]))
+            with self.assertRaisesRegex(ValueError, "coverage"):
+                compare.read_scores(path, [11,12], 8)
+
     def test_rows_exclude_reference_solutions_and_preserve_tests(self):
         d = dataset.row({"task_id": 601, "text": "Add two integers",
                          "code": "REFERENCE_NOT_FOR_POLICY", "test_setup_code": "",

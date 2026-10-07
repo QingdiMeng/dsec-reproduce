@@ -61,3 +61,4 @@ jobs:
           dsec-mbpp --help
           dsec-mbpp-verify --help
           dsec-mbpp-train --help
+          dsec-mbpp-compare --help

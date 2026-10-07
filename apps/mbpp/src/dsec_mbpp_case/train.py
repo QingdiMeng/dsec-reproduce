@@ -1,4 +1,4 @@
-"""Launch the pinned native verl Qwen3.5-2B LoRA/GRPO acceptance recipe."""
+"""Launch native verl Qwen3.5-2B LoRA/GRPO pilots or complete MBPP epochs."""
 import argparse
 import hashlib
 import json
@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from . import reward
+from . import dataset, reward
 
 VERL_REVISION = "8718ca30a3f002f93b7c4fd99b9b2506718681bc"
 VERL_SOURCE_SHA256 = "2811dc7f02a4f79ac5428fcd5e925fa41922e9af8bfbb6182b83cf4d394b6d55"
@@ -26,15 +26,40 @@ def verify_source(root):
         raise ValueError("verl source/configuration differs from the supported revision " + VERL_REVISION)
 
 
+def plan(args):
+    manifest = json.loads((args.data / "manifest.json").read_text())
+    if manifest["source_sha256"] != dataset.SOURCE_SHA256 or manifest["reference_solutions_included"] is not False:
+        raise ValueError("Training requires the prepared original MBPP data without reference solutions")
+    for split in {"train", args.evaluation_split}:
+        for suffix in ("parquet", "jsonl"):
+            name = split + "." + suffix
+            if hashlib.sha256((args.data / name).read_bytes()).hexdigest() != manifest["files"][name]:
+                raise ValueError("Prepared dataset changed: " + name)
+        ids = [json.loads(line)["extra_info"]["task_id"] for line in
+               (args.data / (split + ".jsonl")).read_text().splitlines()]
+        low, high = dataset.SPLITS[split]
+        if sorted(ids) != list(range(low, high + 1)) or len(ids) != manifest["counts"][split]:
+            raise ValueError("Prepared split is incomplete or duplicated: " + split)
+    train_count = manifest["counts"]["train"]
+    if args.epochs and train_count % args.batch_size:
+        raise ValueError("Full epochs require a batch size dividing the train count; verl drops the final partial batch")
+    steps = (train_count // args.batch_size) * args.epochs if args.epochs else (args.steps or 1)
+    return dict(steps=steps, epochs=args.epochs or 1, full_epochs=bool(args.epochs),
+                train_tasks=train_count, evaluation_split=args.evaluation_split,
+                evaluation_tasks=min(args.validation_samples, manifest["counts"][args.evaluation_split]),
+                rollouts_per_task=8, seed=args.seed)
+
+
 def overrides(args, agent_config):
+    scope = plan(args)
     settings = {
         "algorithm.adv_estimator": "grpo", "algorithm.use_kl_in_reward": False,
         "data.train_files": str(args.data / "train.parquet"),
-        "data.val_files": str(args.data / "validation.parquet"),
-        "data.train_batch_size": args.batch_size, "data.val_batch_size": 4,
+        "data.val_files": str(args.data / (args.evaluation_split + ".parquet")),
+        "data.train_batch_size": args.batch_size, "data.val_batch_size": args.evaluation_batch_size,
         "data.val_max_samples": args.validation_samples,
-        "data.max_prompt_length": 1024, "data.max_response_length": 4096,
-        "data.filter_overlong_prompts": True, "data.truncation": "error",
+        "data.max_prompt_length": args.prompt_length, "data.max_response_length": 4096,
+        "data.filter_overlong_prompts": False, "data.truncation": "error", "data.seed": args.seed,
         "data.dataloader_num_workers": 0,
         "+data.apply_chat_template_kwargs.enable_thinking": False,
         "actor_rollout_ref.model.path": str(args.model),
@@ -66,9 +91,10 @@ def overrides(args, agent_config):
         "actor_rollout_ref.rollout.temperature": .7,
         "actor_rollout_ref.rollout.top_p": .8,
         "actor_rollout_ref.rollout.top_k": 20,
-        "actor_rollout_ref.rollout.prompt_length": 1024,
+        "actor_rollout_ref.rollout.prompt_length": args.prompt_length,
         "actor_rollout_ref.rollout.response_length": 4096,
-        "actor_rollout_ref.rollout.max_model_len": 5120,
+        "actor_rollout_ref.rollout.max_model_len": args.prompt_length + 4096,
+        "+actor_rollout_ref.rollout.engine_kwargs.sglang.random_seed": args.seed,
         "actor_rollout_ref.rollout.max_num_seqs": 16,
         "actor_rollout_ref.rollout.tensor_model_parallel_size": 1,
         "actor_rollout_ref.rollout.gpu_memory_utilization": .4,
@@ -91,8 +117,9 @@ def overrides(args, agent_config):
         "trainer.n_gpus_per_node": 1, "trainer.nnodes": 1,
         "trainer.logger": ["console"], "trainer.project_name": "dsec_mbpp_verl",
         "trainer.experiment_name": args.out.name, "trainer.resume_mode": "disable",
-        "trainer.total_training_steps": args.steps, "trainer.total_epochs": 1,
-        "trainer.val_before_train": False, "trainer.test_freq": args.steps, "trainer.save_freq": args.steps,
+        "trainer.total_training_steps": scope["steps"], "trainer.total_epochs": scope["epochs"],
+        "trainer.val_before_train": args.evaluate_before_train,
+        "trainer.test_freq": scope["steps"], "trainer.save_freq": args.checkpoint_every or scope["steps"],
         "trainer.max_actor_ckpt_to_keep": 1,
         "trainer.default_local_dir": str(args.out / "checkpoints"),
         "trainer.rollout_data_dir": str(args.out / "rollouts"),
@@ -110,20 +137,31 @@ def main():
         parser.add_argument("--" + name, type=Path, required=True)
     for name in ("worker-socket", "environment-id"):
         parser.add_argument("--" + name, required=True)
-    parser.add_argument("--steps", type=int, default=1)
+    duration = parser.add_mutually_exclusive_group()
+    duration.add_argument("--steps", type=int, help="bounded pilot; default one update")
+    duration.add_argument("--epochs", type=int, help="complete epochs with no dropped train tasks")
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--validation-samples", type=int, default=4)
+    parser.add_argument("--evaluation-split", choices=["validation", "test"], default="validation")
+    parser.add_argument("--evaluation-batch-size", type=int, default=4)
+    parser.add_argument("--evaluate-before-train", action="store_true")
+    parser.add_argument("--prompt-length", type=int, default=1024)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--checkpoint-every", type=int, default=0, help="periodic checkpoints; zero saves only the final update")
     parser.add_argument("--dry-run", action="store_true", help="compose the complete native Hydra config; no GPU run")
     args = parser.parse_args()
-    if min(args.steps, args.batch_size, args.validation_samples) < 1:
-        parser.error("steps, batch size and validation samples must be positive")
+    if (min(args.steps or 1, args.epochs or 1, args.batch_size, args.validation_samples,
+            args.evaluation_batch_size, args.prompt_length) < 1 or
+            args.steps == 0 or args.epochs == 0 or args.checkpoint_every < 0 or args.seed < 0):
+        parser.error("training/evaluation sizes must be positive, checkpoint interval and seed nonnegative")
     for name in ("verl_root", "model", "data"):
         setattr(args, name, getattr(args, name).resolve(strict=True))
     args.out = args.out.resolve()
     verify_source(args.verl_root)
-    for name in ("train.parquet", "validation.parquet"):
+    for name in ("train.parquet", args.evaluation_split + ".parquet"):
         if not (args.data / name).is_file():
             parser.error("Missing prepared dataset: " + name)
+    scope = plan(args)
     args.out.mkdir(parents=True, exist_ok=False)
     agent_config = args.out / "agent-loop.json"
     agent_config.write_text(json.dumps([{"name": "dsec_mbpp_single_turn",
@@ -133,7 +171,7 @@ def main():
     if args.dry_run:
         command.extend(["--cfg", "job", "--resolve"])
     (args.out / "launch.json").write_text(json.dumps({"verl_revision_required": VERL_REVISION,
-            "command": command, "dry_run": args.dry_run}, indent=2))
+            "command": command, "dry_run": args.dry_run, "scope": scope}, indent=2))
     environment = dict(os.environ, TOKENIZERS_PARALLELISM="false")
     # Selecting a venv interpreter does not activate its command-line tools.
     # FlashInfer invokes Ninja through PATH, including in subprocess Ray workers.

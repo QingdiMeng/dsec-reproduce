@@ -144,8 +144,42 @@ responses and FSDP2 trains the adapter; verl itself requires a rollout backend.
 The DSec reward hook depends on the unified sandbox SDK, not on either GPU
 backend. The pilot uses native full-state FSDP checkpoints, about 4.23 GiB each
 on this model, and retains one final checkpoint. Reserve space before launch.
-The upstream shuffle seed was null in this pilot; cohorts and scores are
-recorded, and this report does not claim deterministic reruns.
+The upstream shuffle seed was null in the earlier pilot; cohorts and scores
+were recorded. The launcher now fixes dataset and SGLang engine seeds to 42
+(configurable with `--seed`), without claiming bitwise deterministic sampling.
+
+### Complete training and held-out comparison
+
+Run a complete epoch over all 374 training tasks with eight responses each.
+The default two-prompt batch gives 187 GRPO updates and 2,992 training samples.
+The launcher checks prepared data hashes and task IDs. `--epochs` rejects batch
+sizes that would discard the final partial batch; prompt filtering is disabled
+and overlong inputs fail explicitly. A 4096-token prompt window includes the
+longest original test prompt; the response limit remains 4096.
+
+```sh
+.venv/bin/dsec-mbpp-train --verl-root "$PWD" --model /models/Qwen3.5-2B \
+  --data /data/mbpp-prepared --worker-socket "$DSEC_ROLLOUT_WORKER_SOCKET" \
+  --environment-id "$DSEC_MBPP_ENVIRONMENT_ID" --out /data/mbpp-full \
+  --epochs 1 --batch-size 2 --prompt-length 4096 --seed 42 \
+  --evaluation-split test --validation-samples 500 --evaluation-batch-size 32 \
+  --evaluate-before-train --checkpoint-every 20
+.venv/bin/dsec-mbpp-compare --run /data/mbpp-full --out /data/mbpp-comparison.json
+```
+
+Start from the base model with a fresh LoRA adapter; this command does not
+resume the earlier pilot. Both initial and final evaluations sample eight
+responses for each of the same 500 test tasks. The native `val_files` channel
+is used for this held-out evaluation only: test scores never enter gradients
+or checkpoint selection. Evaluation runs before training and at the final
+step; intermediate checkpoints retain only one actor state.
+
+The comparison checks complete train/test coverage, reward/generation linkage
+and VM cleanup, retaining format and candidate-timeout zeros. It reports mean
+sample success (the pass@1 estimate), pass@8, newly solved/unsolved tasks,
+length-stop counts and a paired-task bootstrap interval for the pass@1 change.
+Samples before and after training are independent draws under the same preset;
+the interval does not establish universal improvement from a single run.
 
 ### Selected acceptance preset
 
