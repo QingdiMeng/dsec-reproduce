@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import platform
 import re
 import shutil
 import subprocess
@@ -147,73 +146,25 @@ def register(suite, catalog_path, output):
 
 
 def prepare_image(args):
-    from .layers import convert
-    from .boot import build
-    if platform.system() != 'Linux' or platform.machine() not in ('x86_64', 'amd64'):
-        raise ValueError('Guest image preparation requires Linux x86_64')
+    from dsec_image.prepare import prepare
     suite, manifest = validate_suite(args.suite)
     if args.task not in manifest['tasks']:
         raise ValueError('Task is not staged')
-    if not IMAGE_ID.fullmatch(args.image) or not IMAGE_ID.fullmatch(args.tools_image):
-        raise ValueError('Task and mkfs tools images must be exact local sha256 image IDs')
     spec = manifest['tasks'][args.task]
     original_id = subprocess.check_output(
         ['docker', 'image', 'inspect', spec['docker_image'], '--format', '{{.Id}}'], text=True).strip()
     if args.image != original_id:
         raise ValueError('Provided image differs from the staged task Docker image')
-    tools_id = subprocess.check_output(
-        ['docker', 'image', 'inspect', args.tools_image, '--format', '{{.Id}}'], text=True).strip()
-    if tools_id != args.tools_image:
-        raise ValueError('Tools image pin differs')
-    if args.output.exists():
-        raise FileExistsError('Use a fresh per-task output directory')
-    if not 256 <= args.boot_size_mb <= 102400 or args.reserve_gib < 1:
-        raise ValueError('Invalid boot capacity or disk reserve')
-    ancestor = args.output.resolve().parent
-    while not ancestor.exists():
-        ancestor = ancestor.parent
-    inspected = json.loads(subprocess.check_output(
-        ['docker', 'image', 'inspect', args.image], text=True))[0]
-    if spec.get('gpus', 0) != 0 or not 1 <= len(inspected['RootFS']['Layers']) <= 12:
-        raise ValueError('Standalone builder supports CPU tasks with 1..12 direct layers; register a separately prepared compacted recipe for larger layouts')
-    # Account for save, per-layer conversion and boot allocation before work.
-    required = args.reserve_gib * 1024**3 + 3 * inspected['Size'] + args.boot_size_mb * 1024**2
-    if shutil.disk_usage(ancestor).free < required:
-        raise RuntimeError('Image preparation would violate the disk reserve')
+    if spec.get('gpus', 0) != 0:
+        raise ValueError('Standalone builder supports CPU tasks only')
     settings = tomllib.loads((suite/'tasks'/args.task/'task.toml').read_text())
     timeout_ms = max(30000, int(settings['verifier']['timeout_sec']*1000))
-    if not 30000 <= timeout_ms <= 12000000:
-        raise ValueError('Unsupported verifier command timeout')
-    args.output.mkdir(parents=True)
-    result = {'status':'running', 'task_id':args.task, 'source_commit':COMMIT,
-              'image_id':args.image, 'tools_image_id':args.tools_image,
-              'root_block_backend':'file-ext4', 'network':args.network}
-    try:
-        layers_path = convert(args.image, args.output/'erofs', args.tools_image)
-        layers = json.loads(layers_path.read_text())
-        boot = args.output/'boot.ext4'
-        build(layers_path, args.agent_source.resolve(strict=True), args.busybox.resolve(strict=True),
-              boot, timeout_ms, args.network, args.boot_size_mb)
-        kernel = args.kernel.resolve(strict=True)
-        entry = {'backend':'microvm', 'rootfs':'erofs_layers',
-                 'boot_template':str(boot.resolve()), 'boot_sha256':sha(boot),
-                 'kernel':str(kernel), 'kernel_sha256':sha(kernel),
-                 'cpus':spec['cpus'], 'memory_mb':spec['memory_mb'],
-                 'command_timeout_ms':timeout_ms,
-                 'layers':[{'name':'layer'+str(i), 'file':layer['erofs'],
-                            'sha256':layer['erofs_sha256'], 'bytes':layer['erofs_bytes']}
-                           for i, layer in enumerate(layers['layers'])]}
-        prepared_catalog = args.output/'catalog.json'
-        write_new(prepared_catalog, {'format':1, 'environments':{'tb2-'+args.task:entry}})
-        MicroVMEnvironmentCatalog(prepared_catalog).resolve('tb2-'+args.task)
-        result.update(status='passed', catalog=str(prepared_catalog.resolve()),
-                      layer_count=len(entry['layers']))
-        return result
-    except BaseException as exc:
-        result.update(status='failed', error=repr(exc))
-        raise
-    finally:
-        write_new(args.output/'prepare-result.json', result)
+    return prepare(image=args.image, tools_image=args.tools_image, output=args.output,
+                   environment_id='tb2-'+args.task, kernel=args.kernel,
+                   agent_source=args.agent_source, busybox=args.busybox,
+                   cpus=spec['cpus'], memory_mb=spec['memory_mb'], timeout_ms=timeout_ms,
+                   network=args.network, boot_size_mb=args.boot_size_mb,
+                   reserve_gib=args.reserve_gib, metadata={'task_id':args.task, 'source_commit':COMMIT})
 
 
 def main():

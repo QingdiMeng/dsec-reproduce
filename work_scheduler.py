@@ -93,7 +93,8 @@ class ProcHostSampler:
         fields = Path("/proc/stat").read_text().splitlines()[0].split()[1:]
         values = [int(value) for value in fields]
         idle = values[3] + values[4]
-        return sum(values), idle, values[4]
+        # Linux includes guest/guest_nice in user/nice already.
+        return sum(values[:8]), idle, values[4]
 
     def _disk(self):
         if self.disk_device is None:

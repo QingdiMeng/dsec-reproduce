@@ -1,7 +1,15 @@
 import asyncio
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
-from work_scheduler import HostSample, ResourceBudget, ResourceDemand, WorkScheduler
+from work_scheduler import HostSample, ProcHostSampler, ResourceBudget, ResourceDemand, WorkScheduler
+
+
+class HostSamplerTests(unittest.TestCase):
+    def test_cpu_total_counts_vm_time_once(self):
+        with patch.object(Path, "read_text", return_value="cpu 100 10 50 500 20 5 5 0 40 2\n"):
+            self.assertEqual(ProcHostSampler("/tmp", "unused")._cpu(), (690, 520, 20))
 
 
 def budget(**changes):

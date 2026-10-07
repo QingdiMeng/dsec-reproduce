@@ -14,6 +14,7 @@ from complete application launchers that are still missing.
 | UC-03: Miles RL rollouts | Packaged Miles agent/generate/reward adapters | Short real GRPO integration validated. Trainer, model and hardware-specific GPU patches are separate; no complete portable training launcher is claimed. |
 | UC-04: Repeated episodes from prepared state | Baseline sealing/fork API; installed fork acceptance tool | State isolation, actual snapshot recovery and shared-object cleanup validated on an OverlayBD-backed case. |
 | UC-05: Custom tasks outside TB2.1 | Task adapter protocol; counter task and `dsec-host smoke` | Non-TB execution, scoring, restart recovery and cleanup validated. |
+| UC-06: MBPP GRPO with verl | Optional `apps/mbpp` data, verification, native training and comparison entry points | Qwen3.5-2B completed all 374 train tasks, 187 updates and eight responses per task. Full 500-task before/after evaluation improved mean sample success from 39.775% to 42.275%. |
 
 Start with the [deployment quickstart](QUICKSTART.md). Commands below assume
 the core is installed in the active Linux venv and that an isolated instance
@@ -129,8 +130,11 @@ unmodified trainer is not guaranteed to fit that hardware. See
 [RL adapter boundaries](RL_FRAMEWORK_ADAPTERS.md) and
 [the latest training acceptance](../reports/DSEC_V01_GRPO_ACCEPTANCE.md).
 
-There is no complete portable model-download/GPU-training launcher in this
-preview. verl and Uni-Agent adapters remain planned, not validated use cases.
+Model downloading and hardware provisioning remain explicit external steps.
+The optional MBPP application includes a pinned SGLang/FSDP2 native verl
+launcher, validated with one complete training epoch and held-out evaluation. Stateful multi-turn verl and
+Uni-Agent adapters remain planned. See [MBPP with verl](../../apps/mbpp/README.md)
+and its [first-use report](../reports/MBPP_VERL_FIRST_USE.md).
 
 ## UC-04 — independent episodes from prepared runtime state
 
@@ -183,6 +187,36 @@ owns instructions, work directory, resource demand and verifier semantics;
 the caller owns the agent/model loop. A new task adapter can be used directly;
 using it through Miles additionally requires explicit plugin registration and
 a matching verdict guard. The core does not restrict direct adapters to TB2.1.
+
+## UC-06 — Qwen3.5-2B GRPO on MBPP with verl
+
+Use [the MBPP application guide](../../apps/mbpp/README.md) for the ordered
+installation, pinned-data preparation, generic Python guest build, isolated
+instance setup, fixture acceptance and full training recipe. The optional
+package provides `dsec-mbpp`, `dsec-mbpp-verify`, `dsec-mbpp-train` and
+`dsec-mbpp-compare`; the core does not install this benchmark or GPU trainer.
+
+The completed case trains all 374 original train tasks with eight responses
+per prompt and 187 GRPO updates, using Non-Thinking Qwen3.5-2B and LoRA on a
+16-GiB RTX 4080. Training and evaluation retain native token/logprob/mask data;
+DSec executes the generated Python and three original tests in independently
+writable networkless VMs. Immutable EROFS layers are shared across episodes.
+The case exercises execution rewards, scheduling, isolation and cleanup, not
+stateful multi-turn interaction or prepared-memory forks.
+
+The same 500 held-out test tasks receive eight responses each before and after
+training. `dsec-mbpp-compare` checks complete task/sample coverage and reward
+evidence, keeps valid zero rewards, and reports sample success, tasks solved
+in eight attempts, stop/format failures and a paired-task bootstrap interval.
+Mean sample success rose from 39.775% to 42.275%, and eight-attempt task success
+from 64.8% to 68.4% in this run. Tests are public assertions, and this is one
+sampling run; these results do not establish general model or sandbox superiority.
+
+The guide also documents bounded SGLang logprob workspace and evaluation-only
+checkpoint recovery. Keep failed evidence separately; use a complete replacement
+post-evaluation from the final checkpoint, with no extra gradient updates or
+mixing of partial results. See the [case report](../reports/MBPP_VERL_FIRST_USE.md)
+for the actual failure/recovery, preserved evidence and measurement limits.
 
 ## Comparing applications on Docker and DSec
 

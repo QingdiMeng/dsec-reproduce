@@ -31,7 +31,8 @@ jobs:
           python -m build --wheel --no-isolation --outdir dist/core .
           python tools/check_wheel.py dist/core/*.whl
           python -m build --wheel --no-isolation --outdir dist/tb21 apps/tb21
-          python -m pip install dist/core/*.whl dist/tb21/*.whl
+          python -m build --wheel --no-isolation --outdir dist/mbpp apps/mbpp
+          python -m pip install dist/core/*.whl dist/tb21/*.whl dist/mbpp/*.whl
       - name: Documentation links
         run: python tools/check_docs.py
       - name: Core and source export regressions
@@ -46,11 +47,18 @@ jobs:
           raise SystemExit(not result.wasSuccessful())
           PY
       - name: Optional application regressions
-        run: python -m unittest discover -s apps/tb21/tests -v
+        run: |
+          python -m unittest discover -s apps/tb21/tests -v
+          python -m unittest discover -s apps/mbpp/tests -v
       - name: Installed entry points outside the source tree
         working-directory: /tmp
         run: |
           dsec-sandboxd --help
           dsec-rollout-worker --help
           dsec-host --help
+          dsec-prepare-image --help
           dsec-tb21 --help
+          dsec-mbpp --help
+          dsec-mbpp-verify --help
+          dsec-mbpp-train --help
+          dsec-mbpp-compare --help

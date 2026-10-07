@@ -23,7 +23,7 @@ performance or memory advantage over Docker.
 - **Scheduling:** resource budgets, admission checks, queued work, leases,
   wait reasons and resource monitoring on one host.
 - **Agent integration:** framework-independent `reset`, `step`, `evaluate`
-  and `stop` boundaries, plus experimental Miles adapters.
+  and `stop` boundaries, Miles adapters and an optional native verl MBPP case.
 
 OpenEnv is not a required service. A task plugin supplies the task instruction,
 environment and verifier; the trainer owns model sampling, tokens, logprobs
@@ -34,15 +34,14 @@ and the RL algorithm.
 Install the Python control plane on Linux with Python 3.11 or newer:
 
 ```sh
-git clone git@github.com:QingdiMeng/dsec-reproduce.git
+git clone https://github.com/QingdiMeng/dsec-reproduce.git
 cd dsec-reproduce
 python3 -m venv .venv
 .venv/bin/python -m pip install .
 .venv/bin/dsec-host --help
 ```
 
-Repository access currently requires authorization: this development repository
-is private. Installation alone does not provision a working microVM host.
+Installation alone does not provision a working microVM host.
 Running sandboxes requires KVM access, a compatible Firecracker binary, guest
 kernel/root filesystem, and the storage/network helpers selected by the catalog.
 
@@ -62,6 +61,7 @@ experimental GPU training patches.
 | TB2.1 execution and scoring | Optional application package, task preparation and representative official-verifier acceptance | [TB2.1 application](apps/tb21/README.md) |
 | API-driven agents | Environment/task interfaces; bring a model client and agent loop | [Use cases](docs/guides/USE_CASES.md) |
 | Miles GRPO | Agent/generate/reward adapters and short real training validation; portable training recipe is being developed | [RL integration](docs/guides/RL_FRAMEWORK_ADAPTERS.md) |
+| MBPP + verl GRPO | Qwen3.5-2B, one complete epoch, eight responses per task and full before/after held-out evaluation | [MBPP training case](apps/mbpp/README.md) |
 | Repeated episodes | Prepared-state fork API and isolation/recovery acceptance tool | [Use cases](docs/guides/USE_CASES.md) |
 
 Installing the core does not download TB2.1. Install its application only when
@@ -71,9 +71,14 @@ needed with `.venv/bin/python -m pip install ./apps/tb21`.
 
 The installed v0.1 candidate passed selected Linux regressions, representative
 TB2.1 scoring, short Qwen3.5-4B GRPO, real microVM restore and prepared-state
-isolation checks. These are bounded acceptance results: all 89 tasks have not
-passed model episodes, and long training, multiple hosts, verl and Uni-Agent
-have not been validated.
+isolation checks. The optional MBPP/verl case completed 187 GRPO updates and
+evaluated all 500 original test tasks with eight responses each before and
+after training: mean sample success rose from 39.775% to 42.275%, and tasks
+solved at least once in eight responses rose from 64.8% to 68.4%. See the
+[case report](docs/reports/MBPP_VERL_FIRST_USE.md) for scoring, evaluation recovery
+and sampling limits. These are bounded acceptance results: all 89 TB2.1 tasks
+have not passed model episodes; multiple hosts, stateful multi-turn verl and
+Uni-Agent have not been validated.
 
 See the [latest GRPO acceptance](docs/reports/DSEC_V01_GRPO_ACCEPTANCE.md),
 [installation acceptance](docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md) and

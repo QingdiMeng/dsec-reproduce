@@ -14,6 +14,7 @@ record the tested revision and configuration; they are not installation guides.
 | [Artifact publication](guides/ARTIFACT_PUBLICATION.md) | Prepare and publish immutable environment artifacts |
 | [RL integration](guides/RL_FRAMEWORK_ADAPTERS.md) | Trainer responsibilities, Miles integration and historical GPU experiments |
 | [TB2.1 application](../apps/tb21/README.md) | Optional task staging, image preparation and registration |
+| [MBPP + verl training case](../apps/mbpp/README.md) | Optional Python environment, Qwen3.5-2B GRPO, full-epoch training and before/after evaluation |
 
 ## Architecture and contracts
 
@@ -34,6 +35,7 @@ Current operational instructions are in the guides above.
 | [Installation acceptance](reports/DSEC_V01_INSTALL_ACCEPTANCE.md) | Installed runtime and fresh virtual-environment checks |
 | [Latest GRPO acceptance](reports/DSEC_V01_GRPO_ACCEPTANCE.md) | Short real model training, snapshots, forks and cleanup |
 | [Integrity and cost report](reports/DSEC_VERITY_PILOT_REPORT.md) | Protected verifier artifacts and complete backend comparison |
+| [MBPP + verl case report](reports/MBPP_VERL_FIRST_USE.md) | First-use issues, execution concurrency, 187 GRPO updates and 500-task before/after results |
 | [Current roadmap](../ROADMAP.md) | Implementation boundaries and remaining work |
 
 ## Project
