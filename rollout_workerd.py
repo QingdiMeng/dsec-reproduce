@@ -62,6 +62,7 @@ class Rollout:
         self.pending = None
         self.uncertain = []
         self.reward = None
+        self.verifier_failure = None
         self.baseline_sealed = False
         self.baseline_rollout_id = None
         self.baseline_sandbox_id = None
@@ -87,6 +88,8 @@ class Rollout:
             result["lease_held"] = self.lease_held
             result["resource_summary"] = self.resource_summary
             result["meter_error"] = self.meter_error
+        if self.verifier_failure is not None:
+            result["verifier_failure"] = self.verifier_failure
         return result
 
     def record(self):
@@ -207,6 +210,7 @@ class RolloutWorker:
             rollout.dialogue_feedback_version = feedback_version
             rollout.next_step = saved["next_step"]
             rollout.reward = saved.get("reward")
+            rollout.verifier_failure = saved.get("verifier_failure")
             rollout.baseline_sealed = saved.get("baseline_sealed", False)
             rollout.baseline_rollout_id = saved.get("baseline_rollout_id")
             rollout.baseline_sandbox_id = saved.get("baseline_sandbox_id")
@@ -976,10 +980,15 @@ class RolloutWorker:
                 info.get("harness") != "tests/test.sh" or
                 (evidence_dir is not None and
                  info.get("evidence", {}).get("directory") != str(evidence_dir))):
-            rollout.state = "UNKNOWN"
-            rollout.persist()
             diagnostic = (str(result.observation.error) or
                           "Verifier evidence was not durably exported")
+            rollout.verifier_failure = {
+                "error": diagnostic,
+                "stage": info.get("verifier_stage"),
+                "evidence": info.get("evidence", {}),
+                "evidence_error": info.get("evidence_error")}
+            rollout.state = "UNKNOWN"
+            rollout.persist()
             if len(diagnostic) > 1800:
                 diagnostic = diagnostic[:120] + " ... " + diagnostic[-1660:]
             raise RuntimeError("TB2 canonical verifier produced no valid verdict: " +
