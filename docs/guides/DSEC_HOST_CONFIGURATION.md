@@ -81,6 +81,17 @@ and catalog directly. Trainer-side environment configuration prefers
 option and does not require OpenEnv. Official scoring uses the task's
 `tests/test.sh`; diagnostic offline modes must not be reported as official scores.
 
+The canonical verifier inherits the guest's network and proxy configuration.
+Mounting a dependency cache does not force uv offline or prove that a task's
+dependencies are complete. The optional worker-service environment override
+`DSEC_TB2_VERIFIER_ONLINE=0` explicitly selects uv offline mode; `=1` permits uv
+network access within the existing guest network policy. Neither grants network
+access or changes firewall rules. With no override, uv uses its environment
+defaults. Cache/tool compatibility and dependency preparation are case specific.
+Failed verification exports available logs, reward/CTRF files and a failure
+receipt before VM cleanup. Missing files and export failures are recorded;
+a bootstrap failure without a valid CTRF report remains an unscored episode.
+
 An isolated network configuration has `helper`, `max_slots`, `dns`, and optional
 `dax_binary` fields under `network`. It requires a catalog. The helper must be
 root-owned, non-writable by the runtime user and scoped to that instance's

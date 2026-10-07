@@ -30,6 +30,20 @@ EVIDENCE_CHUNK_BYTES = 32768
 MAX_EVIDENCE_BYTES = 16 * 1024 * 1024
 
 
+def _canonical_uv_network_setup() -> str:
+    """A mounted cache must not override the guest's network configuration.
+
+    Keep the explicit legacy operator override, but inherit the environment
+    when it is absent. Cache completeness is a task preparation concern.
+    """
+    online = os.getenv("DSEC_TB2_VERIFIER_ONLINE")
+    if online is None:
+        return ""
+    if online not in ("0", "1"):
+        raise ValueError("DSEC_TB2_VERIFIER_ONLINE must be 0 or 1")
+    return "export UV_OFFLINE=" + ("0" if online == "1" else "1") + "; "
+
+
 def _pinned_uv_installer_setup() -> str:
     """Serve only the suite's fixed uv installer URL from the pinned tool disk."""
     script = (
@@ -166,7 +180,9 @@ class TB2MicroVMEnv:
             raise RuntimeError(f"Verifier evidence changed during export: {source}")
         return data
 
-    async def _save_verifier_evidence(self, reward: float) -> dict:
+    async def _save_verifier_evidence(self, reward: float | None, *,
+                                      failure: str | None = None,
+                                      stage: str | None = None) -> dict:
         """Export complete verifier artifacts before the episode VM can stop."""
         destination = self.evidence_dir
         if destination is None:
@@ -174,15 +190,28 @@ class TB2MicroVMEnv:
         if destination.exists():
             raise RuntimeError("Verifier evidence destination already exists")
         data = {}
+        export_errors = {}
         for name, source in (("ctrf.json", "/logs/verifier/ctrf.json"),
                              ("verifier.log", "/logs/verifier/dsec-test.log"),
+                             ("testsh.log", "/logs/verifier/testsh.log"),
                              ("reward.txt", "/logs/verifier/reward.txt")):
-            data[name] = await self._read_guest_evidence(source)
-        report = json.loads(data["ctrf.json"])
-        if report["results"]["summary"]["tests"] <= 0:
-            raise RuntimeError("Verifier evidence has no executed tests")
-        if float(data["reward.txt"].decode().strip()) != reward:
-            raise RuntimeError("Verifier reward sentinel disagrees with parsed verdict")
+            try:
+                data[name] = await self._read_guest_evidence(source)
+            except Exception as exc:
+                if failure is None:
+                    raise
+                export_errors[name] = f"{type(exc).__name__}: {exc}"
+        if failure is None:
+            report = json.loads(data["ctrf.json"])
+            if report["results"]["summary"]["tests"] <= 0:
+                raise RuntimeError("Verifier evidence has no executed tests")
+            if float(data["reward.txt"].decode().strip()) != reward:
+                raise RuntimeError("Verifier reward sentinel disagrees with parsed verdict")
+        else:
+            data["failure.json"] = (json.dumps({
+                "task_id": self.task_id, "reward": None, "stage": stage,
+                "error": failure, "export_errors": export_errors}, sort_keys=True)
+                + "\n").encode()
         destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         temporary = destination.parent / ("." + uuid.uuid4().hex + ".tmp")
         temporary.mkdir(mode=0o700)
@@ -199,7 +228,9 @@ class TB2MicroVMEnv:
                                    "sha256": hashlib.sha256(content).hexdigest()}
             with (temporary / "manifest.json").open("x") as stream:
                 os.chmod(temporary / "manifest.json", 0o600)
-                json.dump({"task_id": self.task_id, "artifacts": artifacts}, stream,
+                json.dump({"task_id": self.task_id, "artifacts": artifacts,
+                           "status": "failed" if failure is not None else "scored",
+                           "export_errors": export_errors}, stream,
                           sort_keys=True)
                 stream.write("\n")
                 stream.flush()
@@ -218,7 +249,8 @@ class TB2MicroVMEnv:
         finally:
             if temporary.exists():
                 shutil.rmtree(temporary)
-        return {"directory": str(destination), "artifacts": artifacts}
+        return {"directory": str(destination), "artifacts": artifacts,
+                "export_errors": export_errors}
 
     async def _shell(self, command: str, *, timeout_ms: int = 120000,
                      verifier: bool = False):
@@ -299,6 +331,7 @@ class TB2MicroVMEnv:
                 raise RuntimeError("This episode was already evaluated")
             self.evaluated = True
             verifier_started = time.monotonic()
+            verifier_stage = "preparing"
             try:
                 if self.verifier_mode in ("offline", "offline-shared", "layered-uv"):
                     status = await self.sandbox.status()
@@ -374,17 +407,17 @@ class TB2MicroVMEnv:
                             "UV_PYTHON_INSTALL_DIR=/mnt/dsec-verifier/runtime/python "
                             "UV_PYTHON_DOWNLOADS=never UV_CACHE_DIR=/.cache/uv "
                             + ("UV_LINK_MODE=symlink " if status.get("verifier_dax") else "") +
-                            "UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple " +
-                            ("UV_OFFLINE=0; " if os.getenv("DSEC_TB2_VERIFIER_ONLINE") == "1"
-                             else "UV_OFFLINE=1; ")
+                            "UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple; "
                             + ("export GIT_CONFIG_COUNT=1 "
                                "GIT_CONFIG_KEY_0=http.version "
                                "GIT_CONFIG_VALUE_0=HTTP/1.1; "
                                if os.getenv("DSEC_TB2_GIT_HTTP11") == "1" else "")
                             + eval_command)
                         self.verifier_cache = True
+                    eval_command = _canonical_uv_network_setup() + eval_command
                 if self.verifier_phase is not None:
                     await self.verifier_phase("verifier_ready")
+                verifier_stage = "executing"
                 if self.evidence_dir is not None or os.getenv("DSEC_CAPTURE_VERIFIER_LOG") == "1":
                     eval_command = (
                         "(" + eval_command + ") > /logs/verifier/dsec-test.log 2>&1; "
@@ -394,6 +427,7 @@ class TB2MicroVMEnv:
                     timeout_ms=self.verifier_timeout_s * 1000, verifier=True)
                 if self.verifier_phase is not None:
                     await self.verifier_phase("test_sh_finished")
+                verifier_stage = "validating_verdict"
                 reward = _parse_canonical_reward(result["output"])
                 if result["timed_out"] or reward not in (0.0, 1.0):
                     raise RuntimeError(
@@ -427,9 +461,19 @@ class TB2MicroVMEnv:
                           "evidence":evidence})
                 return SimpleNamespace(observation=observation, reward=reward)
             except Exception as exc:
+                failure = f"{type(exc).__name__}: {exc}"
+                evidence = {}
+                evidence_error = None
+                try:
+                    evidence = await self._save_verifier_evidence(
+                        None, failure=failure, stage=verifier_stage)
+                except Exception as export_exc:
+                    evidence_error = f"{type(export_exc).__name__}: {export_exc}"
                 observation = SimpleNamespace(
-                    instruction="", output="", error=f"{type(exc).__name__}: {exc}",
-                    info={"backend": self.backend_name, "verifier_mode":self.verifier_mode})
+                    instruction="", output="", error=failure,
+                    info={"backend": self.backend_name, "verifier_mode":self.verifier_mode,
+                          "verifier_stage": verifier_stage, "evidence": evidence,
+                          "evidence_error": evidence_error})
                 return SimpleNamespace(observation=observation, reward=None)
             finally:
                 self.verifier_seconds += time.monotonic() - verifier_started
