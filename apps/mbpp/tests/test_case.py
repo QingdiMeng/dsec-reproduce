@@ -2,12 +2,14 @@
 
 import asyncio
 import json
+import importlib.util
 from pathlib import Path
 import shlex
 import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from dsec_mbpp_case import dataset, reward
@@ -124,6 +126,68 @@ class FakeClient:
 
 
 class RewardTests(unittest.IsolatedAsyncioTestCase):
+    async def test_concurrent_generation_failures_keep_their_own_request_evidence(self):
+        class Server:
+            async def generate(self, **kwargs):
+                await asyncio.sleep(.02 if kwargs["prompt_ids"] == [1] else 0)
+                raise RuntimeError("generation failed")
+        class Parent:
+            def __init__(self, server_manager):
+                self.server_manager = server_manager
+            async def run(self, sampling_params, **kwargs):
+                return await self.server_manager.generate(
+                    prompt_ids=kwargs["prompt_ids"], sampling_params=sampling_params)
+        name = "verl.experimental.agent_loop.single_turn_agent_loop"
+        spec = importlib.util.spec_from_file_location(
+            "test_mbpp_verl_failed_agent", Path(reward.__file__).with_name("verl_agent.py"))
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {name: SimpleNamespace(SingleTurnAgentLoop=Parent)}):
+            spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = module.MBPPSingleTurnAgentLoop(Server(), evidence_dir=tmp)
+            failures = await asyncio.gather(agent.run({}, prompt_ids=[1]),
+                                            agent.run({}, prompt_ids=[2]), return_exceptions=True)
+            self.assertTrue(all(isinstance(x, RuntimeError) for x in failures))
+            records = [json.loads(p.read_text()) for p in Path(tmp).glob("*.json")]
+            self.assertCountEqual([x["request"]["prompt_ids"] for x in records], [[1], [2]])
+
+    async def test_native_loop_extension_preserves_parent_token_output_and_sampling_input(self):
+        tokens, mask, logprobs = [1, 2], [1, 1], [-.2, -.3]
+        calls = []
+        class Server:
+            async def generate(self, **kwargs):
+                calls.append(kwargs)
+                return SimpleNamespace(token_ids=tokens, log_probs=logprobs,
+                                       stop_reason="length", extra_fields={})
+        class Parent:
+            def __init__(self, server_manager):
+                self.server_manager = server_manager
+            async def run(self, sampling_params, **kwargs):
+                output = await self.server_manager.generate(prompt_ids=[3, 4], sampling_params=sampling_params)
+                return SimpleNamespace(prompt_ids=[3, 4], response_ids=output.token_ids, response_mask=mask,
+                                       response_logprobs=output.log_probs, extra_fields=output.extra_fields)
+        name = "verl.experimental.agent_loop.single_turn_agent_loop"
+        path = Path(reward.__file__).with_name("verl_agent.py")
+        spec = importlib.util.spec_from_file_location("test_mbpp_verl_agent", path)
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {name: SimpleNamespace(SingleTurnAgentLoop=Parent)}):
+            spec.loader.exec_module(module)
+        params = {"temperature": .7, "top_p": .8, "top_k": 20}
+        with tempfile.TemporaryDirectory() as tmp:
+            result = await module.MBPPSingleTurnAgentLoop(Server(), evidence_dir=tmp).run(params)
+            saved = json.loads(next(Path(tmp).glob('*.json')).read_text())
+            self.assertEqual(saved['response_ids'], tokens)
+            self.assertEqual(saved['response_mask'], mask)
+            self.assertEqual(saved['response_logprobs'], logprobs)
+            self.assertEqual(saved['generation_id'], result.extra_fields['dsec_generation_id'])
+        self.assertEqual(params, {"temperature": .7, "top_p": .8, "top_k": 20})
+        self.assertEqual(calls[0]["sampling_params"]["presence_penalty"], 1.5)
+        self.assertEqual(calls[0]["sampling_params"]["min_p"], 0)
+        self.assertIs(result.response_ids, tokens)
+        self.assertIs(result.response_mask, mask)
+        self.assertIs(result.response_logprobs, logprobs)
+        self.assertEqual(result.extra_fields["dsec_finish_reason"], "length")
+
     async def asyncSetUp(self):
         FakeClient.instances = []
         FakeClient.failure = None

@@ -56,5 +56,8 @@ jobs:
           dsec-sandboxd --help
           dsec-rollout-worker --help
           dsec-host --help
+          dsec-prepare-image --help
           dsec-tb21 --help
           dsec-mbpp --help
+          dsec-mbpp-verify --help
+          dsec-mbpp-train --help

@@ -132,6 +132,7 @@ async def compute_score(data_source, solution_str, ground_truth, extra_info=None
     started = time.monotonic()
     receipt = {"schema": "dsec.mbpp.execution.v1", "task_id": truth["task_id"],
                "rollout_id": rid, "source_sha256": SOURCE_SHA256,
+               "generation_id": (extra_info or {}).get("dsec_generation_id"),
                "solution_sha256": hashlib.sha256(solution_str.encode()).hexdigest(),
                "profile": profile.as_dict(), "raw_solution": solution_str}
     output = Path(evidence_dir)
@@ -144,15 +145,22 @@ async def compute_score(data_source, solution_str, ground_truth, extra_info=None
         else:
             client = ScheduledDSecClient(worker_socket)
             await client.open()
+            admission_started = time.monotonic()
             sandbox = await client.create(
                 task_id="mbpp-" + str(truth["task_id"]), rollout_id=rid, profile=profile,
                 resources={"cpu": 1, "memory_mb": 512, "disk_mb": 256,
                            "network_mbps": 0, "api_episode_slots": 1}, ttl_running_stop=300)
             if sandbox.state == "QUEUED":
+                receipt["queued"] = True
+                queue_started = time.monotonic()
                 await sandbox.wait_ready(timeout=180)
+                receipt["queue_wait_seconds"] = time.monotonic() - queue_started
+            receipt["create_and_admission_seconds"] = time.monotonic() - admission_started
             command = verifier_command(code, truth, candidate_timeout)
+            execution_started = time.monotonic()
             result = await sandbox.run_shell(command, step_id=0, action_id="mbpp-test-v1",
                                              timeout_ms=30000, output_limit=65536)
+            receipt["execution_seconds"] = time.monotonic() - execution_started
             receipt["execution"] = result
             receipt["verdict"] = read_verdict(result, truth["task_id"])
             receipt.update(score=receipt["verdict"]["score"], reward_source="execution")
@@ -166,7 +174,9 @@ async def compute_score(data_source, solution_str, ground_truth, extra_info=None
     finally:
         try:
             if sandbox is not None and not unknown:
+                cleanup_started = time.monotonic()
                 await sandbox.stop()
+                receipt["cleanup_seconds"] = time.monotonic() - cleanup_started
                 receipt["cleanup"] = "stopped"
         except Exception as exc:
             receipt["cleanup_error"] = str(exc)
@@ -175,7 +185,8 @@ async def compute_score(data_source, solution_str, ground_truth, extra_info=None
             if client is not None:
                 await client.close()
             receipt["elapsed_seconds"] = time.monotonic() - started
-            with (output / (rid + ".json")).open("x") as stream:
+            fd = os.open(output / (rid + ".json"), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w") as stream:
                 json.dump(receipt, stream, ensure_ascii=False, indent=2)
     return {"score": float(receipt["score"]), "acc": float(receipt["score"]),
             "dsec_rollout_id": rid, "dsec_reward_source": receipt["reward_source"]}

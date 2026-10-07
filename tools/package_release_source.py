@@ -18,6 +18,7 @@ DOCS = (
     'docs/guides/ARTIFACT_PUBLICATION.md', 'docs/architecture/DOCKER_DSEC_BENCHMARK_PROTOCOL.md',
     'docs/reports/DSEC_VERITY_PILOT_REPORT.md',
     'docs/reports/DSEC_V01_GRPO_ACCEPTANCE.md',
+    'docs/reports/MBPP_VERL_FIRST_USE.md',
 )
 TESTS = (
     'tests/unit/test_admission_guard.py',
@@ -29,6 +30,7 @@ TESTS = (
     'tests/unit/test_egress_proxy.py',
     'tests/unit/test_elastic_resource_monitor.py',
     'tests/unit/test_environment_catalog.py',
+    'tests/unit/test_image_prepare.py',
     'tests/unit/test_overlaybd_daemon_permissions.py',
     'tests/unit/test_overlaybd_root_store.py',
     'tests/unit/test_overlaybd_ublk_client.py',

@@ -25,12 +25,13 @@ dsec-rollout-worker = "rollout_workerd:main"
 dsec-artifact-publisher = "artifact_publisher:main"
 dsec-artifact-integrity = "artifact_integrity:main"
 dsec-host = "dsec_host:main"
+dsec-prepare-image = "dsec_image.prepare:main"
 
 [project.optional-dependencies]
 miles = ["openai>=1", "httpx>=0.27"]
 
 [tool.setuptools]
-packages = ["dsec_adapters"]
+packages = ["dsec_adapters", "dsec_image"]
 py-modules = [
     "admission_guard", "artifact_publisher", "artifact_integrity", "container_backend",
     "container_lifecycle_journal", "container_runtime_agent", "container_supervisord",
