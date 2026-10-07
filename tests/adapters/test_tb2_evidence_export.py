@@ -11,6 +11,26 @@ from dsec_adapters.tb2_microvm_env import TB2MicroVMEnv
 
 
 class EvidenceExportTest(unittest.IsolatedAsyncioTestCase):
+    async def test_only_verifier_script_selects_verifier_shell(self):
+        calls = []
+
+        class Sandbox:
+            async def run_shell(self, command, **kwargs):
+                calls.append(("agent", command, kwargs))
+                return {"exit_code": 0}
+
+            async def run_verifier_shell(self, command, **kwargs):
+                calls.append(("verifier", command, kwargs))
+                return {"exit_code": 0}
+
+        env = object.__new__(TB2MicroVMEnv)
+        env.sandbox = Sandbox()
+        env.backend_name = "dsec-microvm"
+        await env._shell("true")
+        await env._shell("bash /tests/test.sh", timeout_ms=3600000, verifier=True)
+        self.assertEqual([c[0] for c in calls], ["agent", "verifier"])
+        self.assertEqual(calls[1][2]["timeout_ms"], 3600000)
+
     async def test_export_survives_guest_loss_and_rejects_reward_mismatch(self):
         report = {"results": {"summary": {"tests": 1}, "tests": [{
             "name": "test_answer", "status": "failed", "message": "missing answer"}]}}

@@ -238,6 +238,15 @@ class DSecSandbox:
             "execute", request_id=request_id, command=command,
             timeout_ms=timeout_ms, output_limit=output_limit)
 
+    async def run_verifier_shell(self, command: str, *, timeout_ms: int,
+                                 output_limit: int = 65536,
+                                 request_id: str | None = None):
+        """Host evaluator only; ordinary agent actions keep their command limit."""
+        return await self._call_when_ready(
+            "execute", request_id=request_id, command=command,
+            timeout_ms=timeout_ms, output_limit=output_limit,
+            execution_scope="verifier")
+
     async def pause(self, *, request_id: str | None = None):
         return await asyncio.to_thread(self._transport.call, "pause", self.id,
                                        request_id=request_id)

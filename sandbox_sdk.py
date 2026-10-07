@@ -187,7 +187,8 @@ class Sandbox:
                   manager.tb2_verifier_dax_binary if (self.verifier_dax or self.erofs_dax_layers)
                   else manager.binary)
         self.vm = MicroVM(binary, self.directory,
-                          max_timeout_ms=manager.command_timeout_ms(environment_id))
+                          max_timeout_ms=max(manager.command_timeout_ms(environment_id),
+                                             manager.verifier_timeout_ms(environment_id)))
         self.memory_evidence = None
         self.lock = threading.RLock()
         self.ttl = ttl
@@ -414,7 +415,8 @@ class Sandbox:
             self._fail("restore_failed: "+str(exc))
             raise
 
-    def execute(self, command, timeout_ms=5000, output_limit=65536):
+    def execute(self, command, timeout_ms=5000, output_limit=65536,
+                execution_scope="agent"):
         # Validate before creating side effects (including automatic resume).
         if not isinstance(command, str) or "\0" in command or len(command.encode()) > 65536:
             raise ValueError("Invalid command")
@@ -423,9 +425,18 @@ class Sandbox:
             getattr(self.manager, "egress_proxy_bypass_hosts", ()))
         if len(execution_command.encode()) > 65536:
             raise ValueError("Command exceeds guest limit after proxy environment")
-        max_timeout_ms = self.manager.command_timeout_ms(self.environment_id)
-        if not 1 <= timeout_ms <= max_timeout_ms or not 1 <= output_limit <= 1048576:
-            raise ValueError("Invalid timeout/output limit")
+        if execution_scope not in ("agent", "verifier"):
+            raise ValueError("Unknown command execution scope")
+        max_timeout_ms = (self.manager.verifier_timeout_ms(self.environment_id)
+                          if execution_scope == "verifier" else
+                          self.manager.command_timeout_ms(self.environment_id))
+        if (not isinstance(timeout_ms, int) or isinstance(timeout_ms, bool) or
+                not 1 <= timeout_ms <= max_timeout_ms):
+            raise ValueError(f"{execution_scope} timeout_ms={timeout_ms!r} exceeds "
+                             f"allowed range 1..{max_timeout_ms}")
+        if (not isinstance(output_limit, int) or isinstance(output_limit, bool) or
+                not 1 <= output_limit <= 1048576):
+            raise ValueError("output_limit must be an integer in 1..1048576")
         with self.lock:
             if self.reserved:
                 raise SandboxError("Sandbox is reserved for warm checkout")
@@ -923,7 +934,12 @@ class SandboxManager:
         if environment_id not in self.tb2_templates:
             return 30000
         limits = self.tb2_resources.get(environment_id, {})
-        return limits.get("command_timeout_ms", limits.get("verifier_timeout_ms", 900000))
+        return limits.get("command_timeout_ms", 900000)
+
+    def verifier_timeout_ms(self, environment_id):
+        """Trusted evaluator deadline, pinned independently of agent commands."""
+        limits = self.tb2_resources.get(environment_id, {})
+        return limits.get("verifier_timeout_ms", self.command_timeout_ms(environment_id))
 
     def create(self, idle_ttl_seconds=300, environment_id="default", memory_profile="baseline",
                verifier_storage=None, storage="local", baseline_id=None):

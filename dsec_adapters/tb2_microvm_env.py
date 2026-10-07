@@ -220,7 +220,8 @@ class TB2MicroVMEnv:
                 shutil.rmtree(temporary)
         return {"directory": str(destination), "artifacts": artifacts}
 
-    async def _shell(self, command: str, *, timeout_ms: int = 120000):
+    async def _shell(self, command: str, *, timeout_ms: int = 120000,
+                     verifier: bool = False):
         if self.backend_name == "dsec-microvm":
             # Docker's PATH prioritizes /usr/local/bin. The bootstrap guest
             # shell otherwise defaults to /bin, and appending image paths lets
@@ -228,9 +229,10 @@ class TB2MicroVMEnv:
             command = ("export HOME=/root "
                        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; "
                        + command)
-        return await self.sandbox.run_shell(command, timeout_ms=timeout_ms,
-                                            output_limit=65536,
-                                            request_id=uuid.uuid4().hex)
+        shell = (self.sandbox.run_verifier_shell if verifier and
+                 hasattr(self.sandbox, "run_verifier_shell") else self.sandbox.run_shell)
+        return await shell(command, timeout_ms=timeout_ms,
+                           output_limit=65536, request_id=uuid.uuid4().hex)
 
     async def _stage_tests(self):
         if hasattr(self.sandbox, "prepare_verifier"):
@@ -389,7 +391,7 @@ class TB2MicroVMEnv:
                         "status=$?; tail -c 8192 /logs/verifier/dsec-test.log; "
                         "exit $status")
                 result = await self._shell(eval_command,
-                    timeout_ms=self.verifier_timeout_s * 1000)
+                    timeout_ms=self.verifier_timeout_s * 1000, verifier=True)
                 if self.verifier_phase is not None:
                     await self.verifier_phase("test_sh_finished")
                 reward = _parse_canonical_reward(result["output"])

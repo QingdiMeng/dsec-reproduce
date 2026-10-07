@@ -86,6 +86,10 @@ episode 的 `agent_metrics.normalized_thinking_steps` 记录发生兼容处理�
 ### Episode 预算结束
 
 Miles 的 DSec 适配器在沙箱就绪后开始 agent 预算，调度排队和 verifier 不消耗该预算。
+Agent shell 的 `command_timeout_ms` 与官方 verifier 的 `verifier_timeout_ms` 独立。
+TB2.1 verifier 上限从固定版本任务的 `task.toml` 读取；只有宿主 evaluator 的
+`run_verifier_shell` 选择该上限，普通 agent 动作仍按命令上限校验。
+请求超出范围会在执行前拒绝，并报告 scope、请求值和允许范围；这不表示测试已经超时。
 到期后不再发起模型请求或执行新动作；在途 shell 命令的 timeout 受剩余预算限制。
 已发出的模型请求允许返回完整响应，以保留真实 token/logprob，因此收尾可能超过预算；
 `budget_overrun_seconds` 单独记录这部分时间，不承诺严格的墙钟终止。
