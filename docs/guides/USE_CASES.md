@@ -14,6 +14,7 @@ from complete application launchers that are still missing.
 | UC-03: Miles RL rollouts | Packaged Miles agent/generate/reward adapters | Short real GRPO integration validated. Trainer, model and hardware-specific GPU patches are separate; no complete portable training launcher is claimed. |
 | UC-04: Repeated episodes from prepared state | Baseline sealing/fork API; installed fork acceptance tool | State isolation, actual snapshot recovery and shared-object cleanup validated on an OverlayBD-backed case. |
 | UC-05: Custom tasks outside TB2.1 | Task adapter protocol; counter task and `dsec-host smoke` | Non-TB execution, scoring, restart recovery and cleanup validated. |
+| UC-06: MBPP execution reward with verl | Optional `apps/mbpp` preparation CLI and native reward hook | Preparation candidate; fixed data splits and reward/lifecycle regressions implemented. Real VM and verl update acceptance pending. |
 
 Start with the [deployment quickstart](QUICKSTART.md). Commands below assume
 the core is installed in the active Linux venv and that an isolated instance
@@ -130,7 +131,9 @@ unmodified trainer is not guaranteed to fit that hardware. See
 [the latest training acceptance](../reports/DSEC_V01_GRPO_ACCEPTANCE.md).
 
 There is no complete portable model-download/GPU-training launcher in this
-preview. verl and Uni-Agent adapters remain planned, not validated use cases.
+preview. The optional MBPP application prepares a native verl execution-reward
+hook; it is not yet a validated live training use case. Stateful multi-turn
+verl and Uni-Agent adapters remain planned. See [MBPP preparation](../../apps/mbpp/README.md).
 
 ## UC-04 — independent episodes from prepared runtime state
 

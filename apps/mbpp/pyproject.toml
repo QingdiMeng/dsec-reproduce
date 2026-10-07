@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dsec-mbpp-case"
+version = "0.1.0.dev0"
+description = "Optional MBPP data preparation and verl execution reward for DSec"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = ["dsec-reproduce==0.1.0.dev0"]
+
+[project.optional-dependencies]
+parquet = ["pyarrow>=14"]
+
+[project.scripts]
+dsec-mbpp = "dsec_mbpp_case.dataset:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

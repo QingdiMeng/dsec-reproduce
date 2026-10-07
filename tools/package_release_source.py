@@ -83,10 +83,11 @@ def source_files(root):
         files.update(str(p.relative_to(root)) for p in directory.rglob('*.py'))
         for pattern in settings.get('package-data', {}).get(package, []):
             files.update(str(p.relative_to(root)) for p in directory.glob(pattern) if p.is_file())
-    app = root/'apps/tb21'
-    files.update('apps/tb21/'+name for name in ('pyproject.toml', 'README.md', 'LICENSE'))
-    files.update(str(p.relative_to(root)) for p in (app/'src/dsec_tb21_case').glob('*.py'))
-    files.add('apps/tb21/tests/test_case.py')
+    for name, package_name in (("tb21", "dsec_tb21_case"), ("mbpp", "dsec_mbpp_case")):
+        app = root/'apps'/name
+        files.update('apps/'+name+'/'+filename for filename in ('pyproject.toml', 'README.md', 'LICENSE'))
+        files.update(str(p.relative_to(root)) for p in (app/'src'/package_name).glob('*.py'))
+        files.add('apps/'+name+'/tests/test_case.py')
     return config, sorted(files)
 
 
@@ -112,7 +113,7 @@ def package(root, output):
     manifest = {'schema':1, 'version':config['project']['version'],
                 'license_expression':config['project']['license'],
                 'files':{name:hashlib.sha256(data).hexdigest() for name, data in contents.items()},
-                'boundary':'Runtime, selected regression/acceptance tools, and optional TB2.1 preparation code; no tasks, images, models, results or GPU training patches.'}
+                'boundary':'Runtime, selected regression/acceptance tools, and optional application preparation/adapters; no tasks, images, models, results or GPU training patches.'}
     contents['SOURCE_MANIFEST.json'] = (json.dumps(manifest, indent=2, sort_keys=True)+'\n').encode()
     output.parent.mkdir(parents=True, exist_ok=True)
     try:

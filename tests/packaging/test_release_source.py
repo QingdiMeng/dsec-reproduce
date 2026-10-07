@@ -25,7 +25,8 @@ class SourceReleaseTests(unittest.TestCase):
                     self.assertEqual(hashlib.sha256(archive.extractfile(name).read()).hexdigest(), digest)
                     self.assertFalse(name.startswith(('experiments/', 'results/', '.runtime/')))
                 for name in ('LICENSE', 'licenses/miles-APACHE-2.0.txt', 'guest_agent.c',
-                             'docs/guides/QUICKSTART.md', 'apps/tb21/pyproject.toml'):
+                             'docs/guides/QUICKSTART.md', 'apps/tb21/pyproject.toml',
+                             'apps/mbpp/pyproject.toml', 'apps/mbpp/src/dsec_mbpp_case/reward.py'):
                     self.assertIn(name, manifest['files'])
                 self.assertFalse(any('miles_lora_nvme' in n or n.endswith('.ext4')
                                      for n in manifest['files']))
