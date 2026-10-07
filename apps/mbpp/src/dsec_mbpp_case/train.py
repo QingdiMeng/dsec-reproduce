@@ -47,7 +47,8 @@ def plan(args):
     return dict(steps=steps, epochs=args.epochs or 1, full_epochs=bool(args.epochs),
                 train_tasks=train_count, evaluation_split=args.evaluation_split,
                 evaluation_tasks=min(args.validation_samples, manifest["counts"][args.evaluation_split]),
-                rollouts_per_task=8, seed=args.seed)
+                rollouts_per_task=8, seed=args.seed, response_length=args.response_length,
+                generation_concurrency=args.generation_concurrency)
 
 
 def overrides(args, agent_config):
@@ -58,7 +59,7 @@ def overrides(args, agent_config):
         "data.val_files": str(args.data / (args.evaluation_split + ".parquet")),
         "data.train_batch_size": args.batch_size, "data.val_batch_size": args.evaluation_batch_size,
         "data.val_max_samples": args.validation_samples,
-        "data.max_prompt_length": args.prompt_length, "data.max_response_length": 4096,
+        "data.max_prompt_length": args.prompt_length, "data.max_response_length": args.response_length,
         "data.filter_overlong_prompts": False, "data.truncation": "error", "data.seed": args.seed,
         "data.dataloader_num_workers": 0,
         "+data.apply_chat_template_kwargs.enable_thinking": False,
@@ -92,10 +93,10 @@ def overrides(args, agent_config):
         "actor_rollout_ref.rollout.top_p": .8,
         "actor_rollout_ref.rollout.top_k": 20,
         "actor_rollout_ref.rollout.prompt_length": args.prompt_length,
-        "actor_rollout_ref.rollout.response_length": 4096,
-        "actor_rollout_ref.rollout.max_model_len": args.prompt_length + 4096,
+        "actor_rollout_ref.rollout.response_length": args.response_length,
+        "actor_rollout_ref.rollout.max_model_len": args.prompt_length + args.response_length,
         "+actor_rollout_ref.rollout.engine_kwargs.sglang.random_seed": args.seed,
-        "actor_rollout_ref.rollout.max_num_seqs": 16,
+        "actor_rollout_ref.rollout.max_num_seqs": args.generation_concurrency,
         "actor_rollout_ref.rollout.tensor_model_parallel_size": 1,
         "actor_rollout_ref.rollout.gpu_memory_utilization": .4,
         "actor_rollout_ref.rollout.enforce_eager": True,
@@ -146,12 +147,16 @@ def main():
     parser.add_argument("--evaluation-batch-size", type=int, default=4)
     parser.add_argument("--evaluate-before-train", action="store_true")
     parser.add_argument("--prompt-length", type=int, default=1024)
+    parser.add_argument("--response-length", type=int, default=4096)
+    parser.add_argument("--generation-concurrency", type=int, default=16,
+                        help="maximum simultaneous sequences in the generation backend")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--checkpoint-every", type=int, default=0, help="periodic checkpoints; zero saves only the final update")
     parser.add_argument("--dry-run", action="store_true", help="compose the complete native Hydra config; no GPU run")
     args = parser.parse_args()
     if (min(args.steps or 1, args.epochs or 1, args.batch_size, args.validation_samples,
-            args.evaluation_batch_size, args.prompt_length) < 1 or
+            args.evaluation_batch_size, args.prompt_length, args.response_length,
+            args.generation_concurrency) < 1 or
             args.steps == 0 or args.epochs == 0 or args.checkpoint_every < 0 or args.seed < 0):
         parser.error("training/evaluation sizes must be positive, checkpoint interval and seed nonnegative")
     for name in ("verl_root", "model", "data"):

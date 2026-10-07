@@ -155,13 +155,16 @@ The default two-prompt batch gives 187 GRPO updates and 2,992 training samples.
 The launcher checks prepared data hashes and task IDs. `--epochs` rejects batch
 sizes that would discard the final partial batch; prompt filtering is disabled
 and overlong inputs fail explicitly. A 4096-token prompt window includes the
-longest original test prompt; the response limit remains 4096.
+longest original test prompt. The following recipe allows 8192 generated tokens
+and 32 concurrent generation sequences, giving a total context window of 12288.
+Both evaluations use these same limits.
 
 ```sh
 .venv/bin/dsec-mbpp-train --verl-root "$PWD" --model /models/Qwen3.5-2B \
   --data /data/mbpp-prepared --worker-socket "$DSEC_ROLLOUT_WORKER_SOCKET" \
   --environment-id "$DSEC_MBPP_ENVIRONMENT_ID" --out /data/mbpp-full \
   --epochs 1 --batch-size 2 --prompt-length 4096 --seed 42 \
+  --response-length 8192 --generation-concurrency 32 \
   --evaluation-split test --validation-samples 500 --evaluation-batch-size 32 \
   --evaluate-before-train --checkpoint-every 20
 .venv/bin/dsec-mbpp-compare --run /data/mbpp-full --out /data/mbpp-comparison.json
@@ -198,11 +201,13 @@ it does not forward presence penalty. Our thin native-loop extension explicitly
 forwards presence penalty 1.5 and min-p 0.0; saved requests confirmed the preset
 in the live pilot. Native response token IDs, masks and logprobs are preserved.
 
-Set the response limit to **4,096 generated tokens for the entire response**,
+The validated short pilot used **4,096 generated tokens for the entire response**,
 using both `data.max_response_length=4096` and
 `actor_rollout_ref.rollout.response_length=4096`. Disable Thinking through
 `data.apply_chat_template_kwargs.enable_thinking=false`. The launcher sets both limits and the native chat-template option. GPU
-acceptance of this recipe passed. Inspect the saved
+acceptance of the 4096-token pilot passed. Use `--response-length` and
+`--generation-concurrency` to change the limits together for training and
+evaluation; these values are recorded in `launch.json`. Inspect the saved
 effective request parameters and token counts when changing backends or versions.
 Record `finish_reason`, response length and incomplete-code/thinking rates;
 report the bounded-response baseline without discarding length-limited

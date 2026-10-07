@@ -47,11 +47,24 @@ class CaseTests(unittest.TestCase):
             (root / "manifest.json").write_text(json.dumps(dict(source_sha256=dataset.SOURCE_SHA256,
                 reference_solutions_included=False, files=files, counts={"train":374,"validation":90})))
             args = SimpleNamespace(data=root, evaluation_split="validation", epochs=1,
-                batch_size=32, steps=None, validation_samples=90, seed=42)
+                batch_size=32, steps=None, validation_samples=90, seed=42,
+                response_length=8192, generation_concurrency=32)
             with self.assertRaisesRegex(ValueError, "drops"):
                 train.plan(args)
             args.batch_size = 2
             self.assertEqual(train.plan(args)["steps"], 187)
+            self.assertEqual(train.plan(args)["response_length"], 8192)
+            self.assertEqual(train.plan(args)["generation_concurrency"], 32)
+            args.prompt_length = 4096
+            args.model, args.out = root, root / "run"
+            args.worker_socket, args.environment_id = "worker.sock", "python-mbpp"
+            args.evaluation_batch_size, args.checkpoint_every = 32, 20
+            args.evaluate_before_train = True
+            settings = dict(item.split("=", 1) for item in train.overrides(args, root / "agent.json"))
+            self.assertEqual(settings["data.max_response_length"], "8192")
+            self.assertEqual(settings["actor_rollout_ref.rollout.response_length"], "8192")
+            self.assertEqual(settings["actor_rollout_ref.rollout.max_model_len"], "12288")
+            self.assertEqual(settings["actor_rollout_ref.rollout.max_num_seqs"], "32")
             (root / "train.jsonl").write_text("changed")
             with self.assertRaisesRegex(ValueError, "changed"):
                 train.plan(args)
