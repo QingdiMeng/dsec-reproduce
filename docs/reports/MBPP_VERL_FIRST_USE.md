@@ -155,3 +155,24 @@ Evidence: `generated-cohort-validation-r2-repeat2.jsonl` with its SHA-256 in
 `generated-load-r1/summary.json`; per-execution receipts, `phase-summary.json`
 and `host-concurrency-{8,16,32,48}.jsonl` under the same root. Replayed programs
 are not new training samples and were never executed on the host.
+
+## Requested generation concurrency versus effective capacity
+
+When increasing the full-run response limit to 8192 and requested generation
+concurrency to 32, SGLang's `/v1/loads` showed only six running requests and an
+effective maximum of six, with requests waiting. The pinned SGLang cache
+configurator caps hybrid-model concurrency by GDN state slots per request;
+`max_num_seqs` alone did not increase that capacity. This is a generation-engine
+resource limit, separate from DSec sandbox admission.
+
+The launcher now exposes `--gpu-memory-utilization` and `--mamba-cache-slots`.
+With a 0.6 inference memory budget and 160 state slots, the runtime interface
+confirmed 32 running requests and an effective maximum of 32. The sampled GPU
+allocation was 11002 MiB on the 16376-MiB RTX 4080. State precision and sampling
+parameters were unchanged. This validates effective concurrency, not a completed
+full-epoch accuracy comparison or worst-case training memory at 8192 tokens.
+Superseded partial evaluations are retained as diagnostics and excluded from
+the new before/after comparison.
+
+Evidence: `mbpp-verl-preparation/full-grpo-r3/sglang-runtime.json`, `launch.json`,
+`provenance.json`, generation/reward receipts and `trainer.log` on the host.
