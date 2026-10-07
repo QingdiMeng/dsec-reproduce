@@ -176,3 +176,67 @@ the new before/after comparison.
 
 Evidence: `mbpp-verl-preparation/full-grpo-r3/sglang-runtime.json`, `launch.json`,
 `provenance.json`, generation/reward receipts and `trainer.log` on the host.
+
+## Completed full-epoch GRPO and held-out evaluation
+
+Qwen3.5-2B completed one native verl GRPO epoch over all 374 original MBPP
+training tasks: eight responses per task, 2992 training responses and 187
+optimizer updates. The final checkpoint's 144 optimizer parameter states all
+record step 187. The run uses Non-Thinking mode, an 8192-token response limit,
+32 requested/effective generation slots and the sampling/LoRA preset above.
+The same 500 held-out test tasks received eight responses each before and
+after training. Test scores were not used for gradients or checkpoint selection.
+
+| Metric | Before | After | Change |
+| --- | --- | --- | --- |
+| Successful responses / 4000 | 1591 | 1691 | +100 |
+| Mean sample success (pass@1 estimate) | 39.775% | 42.275% | +2.5 percentage points |
+| Tasks with at least one success in eight samples | 324/500 (64.8%) | 342/500 (68.4%) | +18 tasks / +3.6 percentage points |
+| Responses stopped by the length limit | 86 (2.15%) | 108 (2.70%) | +22 |
+| Model-format zero rewards | 105 (2.625%) | 123 (3.075%) | +18 |
+
+Of the test tasks, 41 became solved and 23 became unsolved in the sampled
+cohorts. The paired-task bootstrap 95% interval for the mean sample success
+change is +0.975 to +4.0 percentage points. Before/after responses are independent
+draws under the same sampling preset, not matched random streams. These are
+results from one epoch/run and the three original public assertions per task;
+challenge tests are excluded. The result supports this integration's ability
+to complete training and evaluate a held-out improvement, not a general claim
+that all tasks improve or that DSec outperforms another sandbox.
+
+The original final evaluation failed after checkpoint 187 was saved. SGLang's
+input-logprob row-selection allocation requested another 1.89 GiB while only
+1.35 GiB was free. With the 248320-word vocabulary, a 2048-row FP32 matrix is
+about 1.89 GiB, and its selected-row copy can coexist. The recovery evaluation
+bounded this workspace to 128 rows (about 121 MiB per matrix), restored the
+same final checkpoint and performed no additional optimizer updates. Response
+length, concurrency, state precision, agent/scoring code and sampling preset
+were unchanged. Why the initial evaluation did not hit this peak is not yet
+established. The failed partial final evaluation is excluded entirely.
+
+The replacement evaluation exited zero and saved 4000 generation records plus
+4000 reward receipts, with no generation, infrastructure or cleanup errors.
+All 3877 execution-scored VMs stopped; the 123 format zeros created no VM.
+The complete comparison validates task coverage, output hashes, reward linkage
+and token/mask/logprob lengths. Native training rows omit receipt IDs, so
+training linkage uses task/output-hash/score multiplicities rather than a
+particular native uid for identical outputs. Because native verl dumps the
+last training batch after validation, its missing 16 rows were reconstructed
+from the original saved generation tokens and original reward receipts, with
+that derivation explicitly marked; those samples were not rerun.
+
+Evidence: `full-grpo-r3/comparison-recovered.json`, `completion-recovered.json`,
+`step187-recovery.json` and checkpoint 187; `post-eval-r1/validation/187.jsonl`,
+`trainer.log`, `provenance.json` and the complete generation/reward receipts.
+The original failure record remains intact. The public launcher now supports
+evaluation-only checkpoint recovery, and the comparison accepts a complete
+replacement post-evaluation while checking model/data/sampling identity.
+
+The completed-case application wheel passed all 15 Linux application regressions
+after the GPU job ended. Its installed `dsec-mbpp-compare --post-run` command
+recomputed the saved cohorts and reproduced the reported before/after/training
+metrics, failure counts and bootstrap interval. The wheel SHA-256 is
+`972971eb0d82ed98a3ec01ee82f2cb02cbbe84a0d6c12ea8ca3b92e2f2d6b6bb`;
+this identifies the subsequently verified application package, not the wheel
+used to generate the original training trajectories. Documentation links,
+source-export regressions and local package construction also passed.

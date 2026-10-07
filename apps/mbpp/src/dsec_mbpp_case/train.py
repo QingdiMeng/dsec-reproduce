@@ -50,7 +50,9 @@ def plan(args):
                 rollouts_per_task=8, seed=args.seed, response_length=args.response_length,
                 generation_concurrency=args.generation_concurrency,
                 gpu_memory_utilization=args.gpu_memory_utilization,
-                mamba_cache_slots=args.mamba_cache_slots)
+                mamba_cache_slots=args.mamba_cache_slots, logprob_chunk_size=args.logprob_chunk_size,
+                mode="evaluate_checkpoint" if args.evaluate_checkpoint else "train",
+                evaluate_checkpoint=str(args.evaluate_checkpoint) if args.evaluate_checkpoint else None)
 
 
 def overrides(args, agent_config):
@@ -119,15 +121,19 @@ def overrides(args, agent_config):
         "+reward.custom_reward_function.reward_kwargs.evidence_dir": str(args.out / "execution-evidence"),
         "trainer.n_gpus_per_node": 1, "trainer.nnodes": 1,
         "trainer.logger": ["console"], "trainer.project_name": "dsec_mbpp_verl",
-        "trainer.experiment_name": args.out.name, "trainer.resume_mode": "disable",
+        "trainer.experiment_name": args.out.name,
+        "trainer.resume_mode": "resume_path" if args.evaluate_checkpoint else "disable",
+        "trainer.resume_from_path": str(args.evaluate_checkpoint) if args.evaluate_checkpoint else None,
+        "trainer.val_only": bool(args.evaluate_checkpoint),
         "trainer.total_training_steps": scope["steps"], "trainer.total_epochs": scope["epochs"],
-        "trainer.val_before_train": args.evaluate_before_train,
+        "trainer.val_before_train": args.evaluate_before_train or bool(args.evaluate_checkpoint),
         "trainer.test_freq": scope["steps"], "trainer.save_freq": args.checkpoint_every or scope["steps"],
         "trainer.max_actor_ckpt_to_keep": 1,
         "trainer.default_local_dir": str(args.out / "checkpoints"),
         "trainer.rollout_data_dir": str(args.out / "rollouts"),
         "trainer.validation_data_dir": str(args.out / "validation"),
         "ray_kwargs.ray_init.runtime_env.py_executable": None,
+        "+ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_LOGPROB_CHUNK_SIZE": str(args.logprob_chunk_size),
         "+ray_kwargs.ray_init.object_store_memory": 536870912,
         "+ray_kwargs.ray_init.include_dashboard": False,
     }
@@ -157,13 +163,17 @@ def main():
     parser.add_argument("--gpu-memory-utilization", type=float, default=.4)
     parser.add_argument("--mamba-cache-slots", type=int,
                         help="explicit GDN state slots; SGLang otherwise derives capacity from its memory budget")
+    parser.add_argument("--logprob-chunk-size", type=int, default=128,
+                        help="SGLang input logprob chunk rows; bound the temporary full-vocabulary workspace")
+    parser.add_argument("--evaluate-checkpoint", type=Path,
+                        help="restore a native final checkpoint and evaluate only; no further training updates")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--checkpoint-every", type=int, default=0, help="periodic checkpoints; zero saves only the final update")
     parser.add_argument("--dry-run", action="store_true", help="compose the complete native Hydra config; no GPU run")
     args = parser.parse_args()
     if (min(args.steps or 1, args.epochs or 1, args.batch_size, args.validation_samples,
             args.evaluation_batch_size, args.prompt_length, args.response_length,
-            args.generation_concurrency) < 1 or
+            args.generation_concurrency, args.logprob_chunk_size) < 1 or
             args.steps == 0 or args.epochs == 0 or args.checkpoint_every < 0 or args.seed < 0):
         parser.error("training/evaluation sizes must be positive, checkpoint interval and seed nonnegative")
     if not 0 < args.gpu_memory_utilization < 1 or (args.mamba_cache_slots is not None and args.mamba_cache_slots < 1):
@@ -176,6 +186,15 @@ def main():
         if not (args.data / name).is_file():
             parser.error("Missing prepared dataset: " + name)
     scope = plan(args)
+    if args.evaluate_checkpoint:
+        args.evaluate_checkpoint = args.evaluate_checkpoint.resolve(strict=True)
+        if args.evaluate_checkpoint.name != "global_step_" + str(scope["steps"]):
+            parser.error("Evaluation checkpoint must match the planned final step")
+        for name in ("data.pt", "actor/model_world_size_1_rank_0.pt",
+                     "actor/optim_world_size_1_rank_0.pt", "actor/extra_state_world_size_1_rank_0.pt"):
+            if not (args.evaluate_checkpoint / name).is_file():
+                parser.error("Incomplete native evaluation checkpoint: " + name)
+        scope = plan(args)
     args.out.mkdir(parents=True, exist_ok=False)
     agent_config = args.out / "agent-loop.json"
     agent_config.write_text(json.dumps([{"name": "dsec_mbpp_single_turn",

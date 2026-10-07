@@ -232,11 +232,19 @@ IO 为训练容器 cgroup 的累计字节，网络为宿主默认网卡所有作
 verl 的首个可选接入是 [MBPP 应用](../../apps/mbpp/README.md)：使用原生
 `reward.custom_reward_function`，由已有调度 SDK 在独立 microVM 内执行 Python
 及官方三个测试。数据转换固定原始 MBPP 的 train/validation/test 划分，不包含
-参考答案。它是单轮代码生成的 execution reward 接入，尚未经过真实 microVM
-和 verl 参数更新验收，不能当作已验证的多轮 Agent Loop。核心安装不引入 verl、
+参考答案。它已完成真实 microVM 评分、隔离、超时及清理验收，以及 Qwen3.5-2B
+的一整轮 GRPO：374 道训练题，每题 8 条，共 2992 条样本、187 次更新。它是
+单轮代码生成的 execution reward 接入，不能当作已验证的多轮 Agent Loop。核心安装不引入 verl、
 MBPP 数据或模型。接口检查固定 verl 提交 `8718ca30a3f002f93b7c4fd99b9b2506718681bc`。
 
-验收先检查正确/错误/超时代码与评分证据，再跑模型 rollout，随后用同题四条
+完整案例在同一组 500 道测试题上，训练前后各采样 8 次，单次成功率从 39.775%
+提升到 42.275%，8 次至少成功一次的题目比例从 64.8% 提升到 68.4%。使用
+Non-Thinking、8192 回复长度、LoRA rank 8/alpha 16、SGLang 推理和原生 FSDP2
+训练。运行步骤、logprob 临时显存分块及仅评测恢复见
+[应用指南](../../apps/mbpp/README.md)，完整证据及限制见
+[案例报告](../reports/MBPP_VERL_FIRST_USE.md)。
+
+验收先检查正确/错误/超时代码与评分证据，再跑模型 rollout，随后用同题八条
 独立样本完成 GRPO 更新。模型和训练配置需要独立验证；不承诺未经验证的 verl
 Qwen3.5-4B 路径可放入 16 GiB 显存。多轮 Agent Loop、跨框架 TB2.1 与 Uni-Agent
 仍待接入。新适配器应负责框架的采样与轨迹格式，保留稳定 rollout/action ID，拒收无法证明

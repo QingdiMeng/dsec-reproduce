@@ -49,7 +49,8 @@ class CaseTests(unittest.TestCase):
             args = SimpleNamespace(data=root, evaluation_split="validation", epochs=1,
                 batch_size=32, steps=None, validation_samples=90, seed=42,
                 response_length=8192, generation_concurrency=32,
-                gpu_memory_utilization=.6, mamba_cache_slots=160)
+                gpu_memory_utilization=.6, mamba_cache_slots=160,
+                logprob_chunk_size=128, evaluate_checkpoint=None)
             with self.assertRaisesRegex(ValueError, "drops"):
                 train.plan(args)
             args.batch_size = 2
@@ -68,6 +69,14 @@ class CaseTests(unittest.TestCase):
             self.assertEqual(settings["actor_rollout_ref.rollout.max_num_seqs"], "32")
             self.assertEqual(settings["actor_rollout_ref.rollout.gpu_memory_utilization"], "0.6")
             self.assertEqual(settings["+actor_rollout_ref.rollout.engine_kwargs.sglang.max_mamba_cache_size"], "160")
+            self.assertEqual(settings["+ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_LOGPROB_CHUNK_SIZE"], '"128"')
+            self.assertEqual(settings["trainer.resume_mode"], '"disable"')
+            args.evaluate_checkpoint = root / "global_step_187"
+            settings = dict(item.split("=", 1) for item in train.overrides(args, root / "agent.json"))
+            self.assertEqual(settings["trainer.val_only"], "true")
+            self.assertEqual(settings["trainer.val_before_train"], "true")
+            self.assertEqual(settings["trainer.resume_mode"], '"resume_path"')
+            self.assertEqual(json.loads(settings["trainer.resume_from_path"]), str(args.evaluate_checkpoint))
             (root / "train.jsonl").write_text("changed")
             with self.assertRaisesRegex(ValueError, "changed"):
                 train.plan(args)
@@ -85,6 +94,49 @@ class CaseTests(unittest.TestCase):
             path.write_text("".join(json.dumps(r)+"\n" for r in rows[:-1]))
             with self.assertRaisesRegex(ValueError, "coverage"):
                 compare.read_scores(path, [11,12], 8)
+
+    def test_native_training_receipt_match_keeps_duplicates_and_rejects_reuse(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = "```python\ndef add(a,b): return a+b\n```"
+            digest = hashlib.sha256(output.encode()).hexdigest()
+            for identity in ("first", "second"):
+                (root / (identity + ".json")).write_text(json.dumps(dict(rollout_id=identity,
+                    task_id=601, score=1, raw_solution=output, solution_sha256=digest)))
+            index = compare.ReceiptIndex(root)
+            row = dict(gts=json.dumps(truth()), output=output, score=1)
+            with self.assertRaisesRegex(ValueError, "lacks"):
+                index.take(row)
+            a = index.take(row, allow_content_match=True)
+            b = index.take(row, allow_content_match=True)
+            self.assertNotEqual(a["rollout_id"], b["rollout_id"])
+            with self.assertRaisesRegex(ValueError, "unused"):
+                index.take(row, allow_content_match=True)
+            with self.assertRaisesRegex(ValueError, "reused"):
+                index.take(dict(row, dsec_rollout_id=a["rollout_id"]))
+
+    def test_replacement_eval_requires_final_weights_and_same_sampling(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run, post = Path(tmp) / "run", Path(tmp) / "post"
+            run.mkdir(); post.mkdir()
+            scope = dict(full_epochs=True, evaluation_split="test", evaluation_tasks=500, steps=187, epochs=1)
+            launch = dict(scope=scope, command=["actor_rollout_ref.rollout.val_kwargs.temperature=0.7"])
+            (run / "launch.json").write_text(json.dumps(launch))
+            replacement = dict(scope=dict(mode="evaluate_checkpoint", evaluate_checkpoint=str(run / "checkpoints/global_step_186")),
+                command=["actor_rollout_ref.rollout.val_kwargs.temperature=0.8"])
+            (post / "launch.json").write_text(json.dumps(replacement))
+            with self.assertRaisesRegex(ValueError, "final checkpoint"):
+                compare.compare(run, post)
+            replacement["scope"]["evaluate_checkpoint"] = str(run / "checkpoints/global_step_187")
+            (post / "launch.json").write_text(json.dumps(replacement))
+            with self.assertRaisesRegex(ValueError, "sampling limits"):
+                compare.compare(run, post)
+            replacement["command"] = launch["command"] + ['+ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_LOGPROB_CHUNK_SIZE="128"']
+            (post / "launch.json").write_text(json.dumps(replacement))
+            with patch.object(compare, "read_scores", side_effect=RuntimeError("validated replacement")):
+                with self.assertRaisesRegex(RuntimeError, "validated replacement"):
+                    compare.compare(run, post)
 
     def test_rows_exclude_reference_solutions_and_preserve_tests(self):
         d = dataset.row({"task_id": 601, "text": "Add two integers",

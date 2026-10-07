@@ -6,11 +6,52 @@ and the three official assertions in a fresh scheduled microVM for each sample.
 verl owns generation, token IDs/logprobs, GRPO and model updates. No OpenEnv,
 AgentENV or SandboxFusion service is required by this adapter.
 
-**Status:** live microVM reward/deadline/isolation acceptance, fixed-candidate
-8/16/32/48 execution concurrency and four native verl GRPO updates passed on
-Qwen3.5-2B. This is a bounded integration pilot, not full MBPP accuracy.
+**Status:** Qwen3.5-2B completed one native verl GRPO epoch over all 374 original
+training tasks (187 updates, eight responses per task). Complete before/after
+evaluations each cover all 500 original test tasks with eight responses per
+task. Live microVM reward/deadline/isolation acceptance and fixed-candidate
+8/16/32/48 execution concurrency also passed.
 This is a single-turn code-generation application, not a validated multi-turn
 verl Agent Loop or a claim of production isolation against malicious graders.
+
+## Completed case and results
+
+Use this case to train a code-generation policy with sandbox execution rewards.
+SGLang generates responses; verl's native FSDP2/GRPO path updates the LoRA
+adapter; the DSec scheduler creates an independent networkless microVM for
+each executable response, runs Python and the tests, and stops the VM. All
+episodes share immutable EROFS image layers and have private writable disks.
+This case validates shared-image execution and resource admission; it does not
+exercise prepared-memory forks, DAX or 3FS.
+
+The tested host used one 16-GiB RTX 4080, Qwen3.5-2B in Non-Thinking mode,
+LoRA rank 8/alpha 16, an 8192-token response limit and 32 effective generation
+slots. Each executable sample used one guest CPU and 512 MiB of configured
+guest memory. These are tested settings, not universal capacity guarantees.
+
+| Metric | Before training | After training |
+| --- | --- | --- |
+| Successful responses / 4000 | 1591 | 1691 |
+| Mean sample success (pass@1 estimate) | 39.775% | 42.275% |
+| Tasks solved at least once in eight responses | 324/500 (64.8%) | 342/500 (68.4%) |
+| Length-limited responses | 86 | 108 |
+| Model-format zeros | 105 | 123 |
+
+The mean sample success gain is 2.5 percentage points (paired-task bootstrap
+95% interval: +0.975 to +4.0 points); 41 tasks became solved and 23 became
+unsolved. This is one run scored on the three original public assertions,
+with independently sampled before/after responses. It is not a hidden-test
+result or a Docker/DSec performance comparison. The completed replacement
+post-evaluation has no generation, infrastructure or cleanup errors: all 3877
+created VMs stopped; the 123 format zeros created no VM. The original failed
+post-evaluation is excluded, and recovery performed no new training updates.
+See the [case report](../../docs/reports/MBPP_VERL_FIRST_USE.md) for evidence,
+the logprob-memory fix and the explicitly marked final-training-dump recovery.
+
+Follow the sections below in order: install the optional application, prepare
+the pinned data, build/start the Python sandbox, run fixture acceptance, then
+use the complete-epoch training and comparison commands. Installing DSec alone
+does not install MBPP, verl or model weights.
 
 ## Prepare explicit dependencies
 
@@ -93,7 +134,7 @@ execution, not MBPP model accuracy or independent RL samples.
 
 Interface inspection is pinned to
 [verl revision 8718ca3](https://github.com/verl-project/verl/commit/8718ca30a3f002f93b7c4fd99b9b2506718681bc).
-This pin passed the four-update live GPU acceptance. Install verl and
+This pin passed the four-update pilot and complete-epoch live GPU case. Install verl and
 its supported model/inference backend separately; do not change the running
 Miles environment to install it.
 
@@ -166,6 +207,7 @@ Both evaluations use these same limits.
   --epochs 1 --batch-size 2 --prompt-length 4096 --seed 42 \
   --response-length 8192 --generation-concurrency 32 \
   --gpu-memory-utilization 0.6 --mamba-cache-slots 160 \
+  --logprob-chunk-size 128 \
   --evaluation-split test --validation-samples 500 --evaluation-batch-size 32 \
   --evaluate-before-train --checkpoint-every 20
 .venv/bin/dsec-mbpp-compare --run /data/mbpp-full --out /data/mbpp-comparison.json
@@ -180,6 +222,30 @@ endpoint; changing `max_num_seqs` alone does not guarantee the requested capacit
 The 60% inference memory budget must fit the target GPU. Native verl releases
 the inference engine's memory for the training phase.
 
+The launcher forwards `--logprob-chunk-size` (default 128) to every Ray actor
+through `SGLANG_LOGPROB_CHUNK_SIZE`. Qwen3.5's 248320-word vocabulary makes each
+2048-row FP32 logprob workspace about 1.89 GiB; a row-selection copy can coexist
+with that workspace. The smaller chunk bounds these temporary allocations
+without reducing concurrency, response length or state precision. It does not
+guarantee that every other GPU allocation fits.
+
+If final evaluation fails after the model checkpoint was saved, reuse the same
+recipe with `--evaluate-checkpoint /data/mbpp-full/checkpoints/global_step_187`
+and a new `--out /data/mbpp-post-eval`. The launcher restores the native
+checkpoint, synchronizes its weights and sets `trainer.val_only=true`; it
+performs no further gradient updates. Keep the failed evaluation separately
+and compare only a complete replacement evaluation. Native verl logs the final
+training batch after validation, so a validation failure may leave that batch's
+dump missing even though its optimizer update and checkpoint are complete.
+
+After the replacement evaluation completes, compare it with the original
+training run and its complete initial evaluation:
+
+```bash
+dsec-mbpp-compare --run /data/mbpp-full --post-run /data/mbpp-post-eval \
+  --out /data/mbpp-full/comparison-recovered.json
+```
+
 Start from the base model with a fresh LoRA adapter; this command does not
 resume the earlier pilot. Both initial and final evaluations sample eight
 responses for each of the same 500 test tasks. The native `val_files` channel
@@ -193,6 +259,10 @@ sample success (the pass@1 estimate), pass@8, newly solved/unsolved tasks,
 length-stop counts and a paired-task bootstrap interval for the pass@1 change.
 Samples before and after training are independent draws under the same preset;
 the interval does not establish universal improvement from a single run.
+Evaluation rows link directly to receipt IDs. Native training dumps omit
+custom reward fields, so training rows are matched by task ID, output SHA-256
+and score, preserving duplicate counts and prohibiting receipt reuse. Identical
+outputs cannot be tied to a particular native uid through that fallback.
 
 ### Selected acceptance preset
 
