@@ -233,7 +233,9 @@ class DialogueRecoveryTest(unittest.IsolatedAsyncioTestCase):
             class InvalidEnv(ValidEnv):
                 async def step(self, action):
                     return SimpleNamespace(reward=None, observation=SimpleNamespace(
-                        error="verifier failed", info={"harness": "tests/test.sh"}))
+                        error="verifier failed", info={"harness": "tests/test.sh",
+                            "verifier_stage": "validating_verdict",
+                            "evidence": {"directory": str(self.evidence_dir)}}))
 
             fake.TB2MicroVMEnv = InvalidEnv
             with patch.dict("sys.modules", {"dsec_adapters.tb2_microvm_env": fake}):
@@ -242,6 +244,10 @@ class DialogueRecoveryTest(unittest.IsolatedAsyncioTestCase):
                         "rollout_id": broken.id}})
             self.assertEqual(broken.state, "UNKNOWN")
             self.assertIsNone(broken.reward)
+            saved = json.loads((failing.store.root / (broken.id + ".json")).read_text())
+            self.assertEqual(saved["verifier_failure"]["error"], "verifier failed")
+            self.assertEqual(saved["verifier_failure"]["evidence"]["directory"],
+                             str(failing.store.root / "evidence" / broken.id))
             failing.store.lock.close()
 
             no_evidence = RolloutWorker(FakeClient(transport),
