@@ -120,6 +120,21 @@ Recipes independently select local/3FS layers, DAX and file/OverlayBD roots;
 `sandbox.overlaybd_global_config`. Hashes, layer layout and guest resource limits
 are validated by `run sandbox --validate-only` and before serving them.
 
+A 3FS deployment must provision matching server/client binaries and their
+dynamic libraries, the configured RDMA device, listener NIC/address, and a live
+`fuse.hf3fs` source mount readable by the runtime user. Keep a reproducible runtime
+dependency set: check the restored executables
+with `ldd` inside the intended runtime image before starting services, and pin
+required library packages in that image or an explicitly versioned library mount.
+Do not rely on packages installed only in an existing container's writable layer.
+Publishing to that store
+also needs a separately writable artifact directory; `allow_other` alone does
+not grant publication rights. Keep FUSE propagation scoped to the dedicated
+storage subtree and avoid overlapping recursive parent binds. Core installation
+does not provision or repair this external cluster. R3 exercised one real 3FS
+EROFS layer through two VMs, including private-write isolation and pause/restore;
+that functional check is not a distributed-storage or cold-read benchmark.
+
 For TB2.1 add `worker.tb2_tasks_dir`, `sandbox.tb2_manifest`, and the chosen
 `tb2_verifier_artifact_manifest`/`tb2_verifier_artifact_local`. The installed
 `dsec_adapters.tb2_dsec_environment.TB2DSecEnvironment` accepts the task directory
