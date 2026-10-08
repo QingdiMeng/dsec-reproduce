@@ -428,7 +428,8 @@ def main():
                           "catalog_sha256": microvm_environment_catalog.digest if
                           microvm_environment_catalog else None}))
         return
-    from dsec.runtime.registry import DurableManager, atomic_json, identity
+    from dsec.runtime.registry import atomic_json, identity
+    from dsec.runtime.edge import open_edge
     node_admission=None
     manager=None
     server=None
@@ -450,7 +451,7 @@ def main():
                                if 'node_default_demand' in settings else None,
                 ready_demand=NodeDemand(**settings['node_ready_demand'])
                              if 'node_ready_demand' in settings else None)
-        manager=DurableManager(args.root,args.binary,args.kernel,args.template,
+        manager=open_edge(args.root,args.binary,args.kernel,args.template,
                                capacity=args.capacity,e3=e3,tb2_templates=tb2_templates,
                                tb2_layers=tb2_layers,
                                tb2_layer_counts=tb2_layer_counts,

@@ -1,6 +1,6 @@
 # DSec 模块化重构设计
 
-状态：设计已确认，R0/R1 已实施；R2 已完成评分插件、SDK/容器 Edge 拆分、Edge 节点租约迁移与生命周期状态转换拆分，其余 R2 与 R3 待完成。日期：2026-10-08。
+状态：设计已确认，R0/R1 已实施；R2 已完成评分插件、SDK/容器 Edge 拆分、Edge 节点租约迁移、生命周期状态转换拆分及创建/ready 池/registry 组合，其余 R2 与 R3 待完成。日期：2026-10-08。
 代码基线：`7f70524187e61e13f123c7999098858cf3411bd5`。
 
 ## 1. 目标与范围
@@ -410,3 +410,36 @@ lifecycle façade、registry、SDK、worker 或任务模块。9 个方法相对�
 创建/ready 池调度及 registry 组装仍在兼容管理器中；执行通道和统一 Storage 接口
 尚待收敛。本节点只是状态转换职责拆分，不声称生命周期拆分或 R2 已全部完成。
 真实 VMM、内核和存储的升级验收仍归 R3；本地检查使用既有故障替身。
+
+
+### R2：创建、ready 池与持久 registry 组合节点
+
+`runtime.provisioning.SandboxProvisioner` 接管冷创建、准备基线的分叉入口与预热；
+`runtime.pool.ReadyPool` 接管 FIFO checkout、前台等待和空闲补位。
+组件只持有注入的操作依赖，实例表、状态、锁、条件变量及节点租约仍由同一个 Edge 管理。
+既有管理器入口保留薄委托，不增加第二份池或资源账本。
+
+`runtime.registry_store.RegistryRecords` 处理原 v1 记录、恢复核对和未提交快照清理；
+Linux 身份核对、pidfd 及原子写入通过 `RegistryOperations` 注入。
+`SandboxRegistry` 在创建和恢复 Edge 前取得实例目录独占锁。
+正式服务使用 `runtime.edge.open_edge` 组合普通管理器与 registry；旧 `DurableManager`
+构造器继续转入同一组合路径，旧导入身份和 `registry_lock` 属性保留。
+实例目录、sandbox ID、记录字段和请求摘要未更换；UNKNOWN 不重放副作用。
+
+15 项迁移检查相对于 `d51083c` 的 AST 经参数/注入操作归一化后相同，覆盖池辅助方法、
+冷创建/预热、记录处理、创建前置校验与 checkout 分支。
+另有三项显式安全改进，不属于机械迁移：退役所有权后旧对象不能再操作由新 Edge 接管的 VM；
+服务组装失败只退役线程并关闭进程身份句柄，保留已知存活 VM 及恢复证据；
+显式关闭 Edge 仅在沙箱回收成功后释放目录所有权，回收失败可重试。
+
+`detach` 退役控制线程和所有权，保存记录并关闭本进程句柄，保留沙箱；
+`close` 由当前所有者停止沙箱并清理资源。两者不混用。
+新恢复回归使用真实临时记录及目录锁，覆盖运行态/暂停态接管、所有权冲突、
+中断请求 UNKNOWN、进程身份不符、启动/清理失败和旧对象失效；VMM 与进程身份操作有替身。
+这不替代 Linux `/proc`、真实 pidfd、KVM、网络及存储验收。
+
+本节点完整本地回归 272 项：265 通过、7 项因环境条件跳过，无失败或错误。
+核心 wheel 在源码目录外的独立 venv 通过 51 项快照、创建、分叉、节点及 Edge 恢复检查，
+未安装 TB2.1/MBPP 应用包；3 个 CLI help、旧模块身份、wheel/源码归档及文档边界检查通过。
+wheel 包含 126 个运行时 Python 模块。执行/session 接口、统一 Storage 接口以及剩余
+TB2 manifest/API 和 adapter 规则迁移仍待完成；R2 未全部完成，R3 尚未执行。

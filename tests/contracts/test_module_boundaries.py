@@ -146,6 +146,17 @@ class ModuleBoundaryTests(unittest.TestCase):
                     'dsec.sdk', 'dsec_adapters', 'tb2_', 'sandbox_sdk')),
                     f'Transition component imports {name}')
 
+    def test_edge_components_do_not_import_clients_jobs_or_task_implementations(self):
+        for filename in ('pool.py','provisioning.py','registry_store.py','edge.py'):
+            path = ROOT / 'src/dsec/runtime' / filename
+            for node in ast.walk(ast.parse(path.read_text())):
+                names = ([n.name for n in node.names] if isinstance(node, ast.Import)
+                         else [node.module or ''] if isinstance(node, ast.ImportFrom) else [])
+                for name in names:
+                    self.assertFalse(name.startswith(('dsec.sdk','dsec.rollout',
+                        'dsec.control','dsec_adapters','tb2_','sandbox_sdk','durable_manager')),
+                        f'{filename} imports {name}')
+
     def test_privileged_and_guest_agents_remain_standalone_sources(self):
         # These sources are embedded into a root-owned helper or guest image.
         # They must not require an installed DSec Python package in that context.

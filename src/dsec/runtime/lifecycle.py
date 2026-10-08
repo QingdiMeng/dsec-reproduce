@@ -3,9 +3,10 @@ import errno
 from collections import deque
 import hashlib
 import json
-from dsec.contracts.resources import NodeAdmissionBusy
 from dsec.contracts.errors import SandboxError, ServiceBusy, CommandOutcomeUnknown
 from dsec.runtime.transitions import LifecycleController
+from dsec.runtime.pool import ReadyPool
+from dsec.runtime.provisioning import SandboxProvisioner
 import math
 import os
 from pathlib import Path
@@ -17,9 +18,6 @@ import uuid
 from dsec.storage.digest import sha
 from dsec.runtime.backends.firecracker import MicroVM
 from dsec.runtime.isolation.proxy import guest_proxy_command, validate_proxy_url, validate_proxy_bypass_hosts
-
-
-
 
 
 def _copy_sparse(source, destination):
@@ -238,13 +236,21 @@ class Sandbox:
     def _overlaybd_service_matches(self):
         return self.manager.lifecycle.overlaybd_service_matches(self)
 
+    def _require_owner(self):
+        registry = getattr(self.manager, 'registry', None)
+        if registry is not None:
+            registry.require_owner()
+
     def _release_overlaybd_device(self):
+        self._require_owner()
         return self.manager.lifecycle.release_overlaybd_device(self)
 
     def _fail(self, reason):
+        self._require_owner()
         return self.manager.lifecycle.fail(self, reason)
 
     def _check(self):
+        self._require_owner()
         return self.manager.lifecycle.check(self)
 
     def status(self):
@@ -300,6 +306,7 @@ class Sandbox:
         return seal_baseline(self, allow_prepared_state=allow_prepared_state)
 
     def _restore(self):
+        self._require_owner()
         return self.manager.lifecycle.restore(self)
 
     def execute(self, command, timeout_ms=5000, output_limit=65536,
@@ -350,6 +357,7 @@ class Sandbox:
         return self.manager.lifecycle.recover(self, allow_rollback=allow_rollback)
 
     def _stop(self, reason):
+        self._require_owner()
         return self.manager.lifecycle.stop(self, reason)
 
     def stop(self):
@@ -371,7 +379,7 @@ class SandboxManager:
                  warm_pool_specs=None, warm_refill_workers=None, warm_wait_ms=0,
                  warm_idle_quiet_seconds=0, warm_min_memory_mib=0,
                  warm_min_disk_gib=0, microvm_environment_catalog=None,
-                 egress_proxy_url=None, egress_proxy_bypass_hosts=(), node_admission=None):
+                 egress_proxy_url=None, egress_proxy_bypass_hosts=(), node_admission=None, registry=None):
         if not isinstance(capacity, int) or capacity < 1 or not math.isfinite(poll_seconds) or poll_seconds <= 0:
             raise ValueError("Invalid manager limits")
         if snapshot_cache_policy not in ("retain", "evict"):
@@ -392,6 +400,9 @@ class SandboxManager:
         self.egress_proxy_bypass_hosts = validate_proxy_bypass_hosts(egress_proxy_bypass_hosts)
         self.binary, self.kernel, self.template = map(Path, (binary,kernel,template))
         self.node_admission = node_admission
+        self.registry = registry
+        if registry is not None:
+            self.registry_lock = registry.owner_lock
         # Late binding keeps legacy module-level fault hooks working while
         # the transition component has no dependency on this compatibility host.
         self.lifecycle = LifecycleController(
@@ -399,6 +410,10 @@ class SandboxManager:
             snapshot_hash=lambda *args: _snapshot_hash(*args),
             hash_file=lambda path: sha(path),
             fsync_directory=lambda path: _fsync_directory(path))
+        self.ready_pool = ReadyPool()
+        self.provisioner = SandboxProvisioner(
+            sandbox_factory=lambda *args, **kwargs: Sandbox(*args, **kwargs),
+            copy_sparse=lambda *args: _copy_sparse(*args))
         self.warm_node_waits = {}
         self.e3 = e3
         self.microvm_environment_catalog = microvm_environment_catalog
@@ -513,99 +528,43 @@ class SandboxManager:
                              for _ in range(min(warm_refill_workers, sum(self.warm_pool_specs.values())))]
         self.warm_hits = 0; self.warm_misses = 0; self.warm_refill_errors = 0
         if start_monitor:
-            self.thread.start()
-            for thread in self.warm_threads:
-                thread.start()
+            self.start_monitors()
+
+    def start_monitors(self):
+        self._require_owner()
+        self.thread.start()
+        for thread in self.warm_threads:
+            thread.start()
+
+    def persist(self, sandbox):
+        if self.registry is not None:
+            return self.registry.persist(self, sandbox)
+
+    def _require_owner(self):
+        registry = getattr(self, 'registry', None)
+        if registry is not None:
+            registry.require_owner()
+
+    def detach(self):
+        """Retire durable service ownership while preserving registered sandboxes."""
+        if self.registry is None:
+            raise SandboxError("Edge has no durable registry")
+        return self.registry.detach(self)
 
     def warm_pool_status(self):
-        with self.lock:
-            pools = []
-            for (environment_id, storage), target in self.warm_pool_specs.items():
-                reserved = [sb for sb in self.sandboxes.values()
-                            if sb.reserved and sb.environment_id == environment_id and
-                            sb.verifier_storage == storage and sb.state != "STOPPED"]
-                ready = sum(sb.state == "RUNNING" for sb in reserved)
-                pools.append({"environment_id": environment_id, "verifier_storage": storage,
-                              "target": target, "ready": ready,
-                              "preparing": sum(sb.state == "CREATING" for sb in reserved),
-                              "refill_workers_active": self.warm_inflight[(environment_id, storage)],
-                              "waiting_requests": len(self.warm_waiters[(environment_id, storage)]),
-                              "deficit": max(0, target-ready),
-                              "node_wait_reasons":self.warm_node_waits.get((environment_id, storage), [])})
-            return {"pools": pools, "hits": self.warm_hits, "misses": self.warm_misses,
-                    "foreground_active": self.foreground_active,
-                    "refill_errors": self.warm_refill_errors}
+        return self.ready_pool.status(self)
 
     def foreground_enter(self):
-        with self.lock:
-            self.foreground_active += 1
-            self.last_foreground = time.monotonic()
+        return self.ready_pool.foreground_enter(self)
 
     def foreground_exit(self):
-        with self.lock:
-            self.foreground_active -= 1
-            self.last_foreground = time.monotonic()
-        self.warm_wakeup.set()
+        return self.ready_pool.foreground_exit(self)
 
     def _warm_resource_headroom(self):
-        if self.warm_min_memory_mib:
-            with open("/proc/meminfo") as stream:
-                memory = next(int(line.split()[1]) // 1024 for line in stream
-                              if line.startswith("MemAvailable:"))
-            if memory < self.warm_min_memory_mib:
-                return False
-        if self.warm_min_disk_gib:
-            disk = shutil.disk_usage(self.root).free // (1024**3)
-            if disk < self.warm_min_disk_gib:
-                return False
-        return True
+        return self.ready_pool.resource_headroom(self)
 
     def _refill_warm_pool(self):
-        while not self.shutdown.is_set():
-            choice = None
-            with self.lock:
-                active = sum(sb.state != "STOPPED" for sb in self.sandboxes.values())
-                idle = (self.foreground_active == 0 and
-                        time.monotonic()-self.last_foreground >= self.warm_idle_quiet_seconds)
-                if not self.closed and active < self.capacity and idle:
-                    for key, target in self.warm_pool_specs.items():
-                        existing = sum(sb.reserved and sb.environment_id == key[0] and
-                                       sb.verifier_storage == key[1] and sb.state != "STOPPED"
-                                       for sb in self.sandboxes.values())
-                        if existing + self.warm_inflight[key] < target:
-                            choice = key
-                            break
-                if choice is not None and self._warm_resource_headroom():
-                    self.warm_inflight[choice] += 1
-                else:
-                    choice = None
-            if choice is None:
-                self.warm_wakeup.wait(1)
-                self.warm_wakeup.clear()
-                continue
-            try:
-                self._create_cold(3600, choice[0], "baseline", choice[1], reserved=True)
-                with self.lock:
-                    self.warm_node_waits.pop(choice, None)
-            except NodeAdmissionBusy as exc:
-                with self.lock:
-                    self.warm_node_waits[choice] = exc.reasons
-                self.shutdown.wait(1)
-            except SandboxError as exc:
-                if "capacity reached" not in str(exc):
-                    with self.lock:
-                        self.warm_refill_errors += 1
-                        self.errors.append({"component": "warm_pool", "error": str(exc)})
-                self.shutdown.wait(1)
-            except Exception as exc:
-                with self.lock:
-                    self.warm_refill_errors += 1
-                    self.errors.append({"component": "warm_pool", "error": str(exc)})
-                self.shutdown.wait(1)
-            finally:
-                with self.lock:
-                    self.warm_inflight[choice] -= 1
-                self.warm_wakeup.set()
+        return self.ready_pool.refill(self)
 
     def verifier_artifacts_for(self, environment_id):
         stores = self.tb2_verifier_artifacts
@@ -625,304 +584,22 @@ class SandboxManager:
 
     def create(self, idle_ttl_seconds=300, environment_id="default", memory_profile="baseline",
                verifier_storage=None, storage="local", baseline_id=None):
-        if baseline_id is not None:
-            # Admit before fork anchor publication can modify the source.
-            if getattr(self, 'node_admission', None) is not None:
-                self.node_admission.allocate('microvm')
-                self.node_admission.local.source_effects = True
-            from dsec.runtime.fork import fork_baseline
-            return fork_baseline(self, baseline_id, idle_ttl_seconds, environment_id,
-                                 memory_profile, verifier_storage, storage)
-        if not math.isfinite(idle_ttl_seconds) or idle_ttl_seconds <= 0:
-            raise ValueError("TTL must be finite and positive")
-        if storage != "local" and (self.microvm_environment_catalog is None or
-                                    environment_id not in self.microvm_environment_catalog.entries):
-            raise ValueError("Nonlocal storage requires a generic microVM environment")
-        if self.microvm_environment_catalog is not None and \
-                environment_id in self.microvm_environment_catalog.entries:
-            # Validate before allocating a warm slot or creating a VM.
-            self.microvm_environment_catalog.resolve(environment_id, storage)
-        if verifier_storage is not None:
-            store = self.verifier_artifacts_for(environment_id)
-            if store is None or environment_id not in self.tb2_templates:
-                raise ValueError("TB2 verifier artifact is not configured")
-            store.resolve(verifier_storage)
-        started = time.monotonic()
-        key = (environment_id, verifier_storage)
-        pooled = key in self.warm_pool_specs and memory_profile == "baseline"
-        ticket = object() if pooled else None
-        deadline = started + self.warm_wait_ms/1000
-        selected = None
-        manager_wait = 0.0
-        queue_wait = 0.0
-        lock_started = time.monotonic()
-        with self.warm_condition:
-            manager_wait += time.monotonic()-lock_started
-            if self.closed:
-                raise SandboxError("Manager closed")
-            if pooled:
-                self.warm_waiters[key].append(ticket)
-            try:
-                while True:
-                    at_front = not pooled or self.warm_waiters[key][0] is ticket
-                    if at_front:
-                        for sb in self.sandboxes.values():
-                            if not (sb.reserved and sb.state == "RUNNING" and
-                                    sb.environment_id == environment_id and
-                                    sb.memory_profile == memory_profile and
-                                    sb.verifier_storage == verifier_storage):
-                                continue
-                            if not sb.lock.acquire(blocking=False):
-                                continue
-                            try:
-                                sb._check()
-                                if sb.reserved and sb.state == "RUNNING":
-                                    selected = sb
-                                    break
-                            finally:
-                                if selected is not sb:
-                                    sb.lock.release()
-                    if selected is not None:
-                        try:
-                            if getattr(self, 'node_admission', None) is not None:
-                                self.node_admission.checkout(selected)
-                        except BaseException:
-                            selected.lock.release()
-                            raise
-                        original = (selected.reserved, selected.warm_pool_hit,
-                                    selected.ttl, selected.deadline,
-                                    selected.last_create_phases)
-                        selected.reserved = False
-                        selected.warm_pool_hit = True
-                        selected.ttl = idle_ttl_seconds
-                        selected.deadline = time.monotonic() + idle_ttl_seconds
-                        queue_wait = time.monotonic()-started
-                        if pooled:
-                            self.warm_waiters[key].popleft()
-                            self.warm_condition.notify_all()
-                        break
-                    pending = False
-                    if pooled:
-                        reserved = [sb for sb in self.sandboxes.values()
-                                    if sb.reserved and sb.state != "STOPPED" and
-                                    sb.environment_id == environment_id and
-                                    sb.verifier_storage == verifier_storage]
-                        active = sum(sb.state != "STOPPED" for sb in self.sandboxes.values())
-                        pending = bool(self.warm_inflight[key] or any(
-                            sb.state == "CREATING" for sb in reserved) or
-                            (len(reserved) < self.warm_pool_specs[key] and active < self.capacity))
-                    remaining = deadline-time.monotonic()
-                    if not pending or remaining <= 0:
-                        if pooled:
-                            self.warm_misses += 1
-                        break
-                    self.warm_condition.wait(remaining)
-                    if self.closed:
-                        raise SandboxError("Manager closed")
-            finally:
-                if pooled and ticket in self.warm_waiters[key]:
-                    self.warm_waiters[key].remove(ticket)
-                    self.warm_condition.notify_all()
-        if selected is not None:
-            persist_started = time.monotonic()
-            try:
-                selected._persist()
-            except Exception:
-                (selected.reserved, selected.warm_pool_hit, selected.ttl,
-                 selected.deadline, selected.last_create_phases) = original
-                selected.lock.release()
-                self.warm_wakeup.set()
-                with self.warm_condition:
-                    self.warm_condition.notify_all()
-                raise
-            selected.last_create_phases = {
-                "warm_checkout": round(time.monotonic()-started, 6),
-                "warm_manager_wait": round(manager_wait, 6),
-                "warm_queue_wait": round(queue_wait, 6),
-                "warm_persist": round(time.monotonic()-persist_started, 6)}
-            selected.lock.release()
-            if pooled:
-                with self.lock:
-                    self.warm_hits += 1
-            self.warm_wakeup.set()
-            return selected
-        return self._create_cold(idle_ttl_seconds, environment_id, memory_profile,
-                                 verifier_storage, storage=storage)
+        self._require_owner()
+        return self.provisioner.create(self, idle_ttl_seconds, environment_id, memory_profile,
+                                       verifier_storage, storage, baseline_id)
 
     def prewarm(self, *, environment_id, verifier_storage=None, count=1,
                 memory_profile="baseline", idle_ttl_seconds=3600):
-        if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= self.capacity:
-            raise ValueError("Prewarm count must be in 1..capacity")
-        if environment_id not in self.tb2_templates or memory_profile != "baseline":
-            raise ValueError("Prewarm currently supports configured TB2 tasks only")
-        prepared = []
-        for _ in range(count):
-            sb = self._create_cold(idle_ttl_seconds, environment_id, memory_profile,
-                                   verifier_storage, reserved=True)
-            prepared.append(sb.status())
-        return prepared
+        self._require_owner()
+        return self.provisioner.prewarm(self, environment_id=environment_id,
+            verifier_storage=verifier_storage, count=count, memory_profile=memory_profile,
+            idle_ttl_seconds=idle_ttl_seconds)
 
     def _create_cold(self, idle_ttl_seconds=300, environment_id="default", memory_profile="baseline",
                      verifier_storage=None, reserved=False, storage="local", prepare_only=False):
-        stage = "admission"
-        stage_started = time.monotonic()
-        phases = {}
-
-        def advance(next_stage):
-            nonlocal stage, stage_started
-            now = time.monotonic()
-            phases[stage] = round(now-stage_started, 6)
-            stage, stage_started = next_stage, now
-
-        if not math.isfinite(idle_ttl_seconds) or idle_ttl_seconds <= 0:
-            raise ValueError("TTL must be finite and positive")
-        environment_spec = (self.microvm_environment_catalog.resolve(environment_id, storage)
-                            if self.microvm_environment_catalog is not None and
-                            environment_id in self.microvm_environment_catalog.entries else None)
-        if storage != "local" and environment_spec is None:
-            raise ValueError("Nonlocal storage requires a generic microVM environment")
-        if (environment_id, memory_profile) != ("default", "baseline"):
-            if environment_id == "e3-mixed" and memory_profile in (
-                    "baseline", "dax", "damon_fpr", "dax_damon_fpr"):
-                if self.e3 is None:
-                    raise SandboxError("E3 artifacts are not configured")
-            elif environment_id not in self.tb2_templates or memory_profile != "baseline":
-                raise ValueError("Unsupported environment/memory profile")
-        if verifier_storage is not None:
-            store = self.verifier_artifacts_for(environment_id)
-            if environment_id not in self.tb2_templates or store is None:
-                raise ValueError("TB2 verifier artifact is not configured")
-            verifier_disk = store.resolve(verifier_storage)
-        else:
-            verifier_disk = None
-        with self.lock:
-            if self.closed:
-                raise SandboxError("Manager closed")
-            if sum(s.state != "STOPPED" for s in self.sandboxes.values()) >= self.capacity:
-                if (getattr(self, 'node_admission', None) is not None and
-                        not getattr(self.node_admission.local, 'source_effects', False)):
-                    raise NodeAdmissionBusy(['sandbox_capacity'])
-                raise SandboxError("Sandbox capacity reached")
-            network_slot = None
-            if environment_id in self.tb2_templates and self.tb2_network_manager:
-                occupied = {s.network_slot for s in self.sandboxes.values()
-                            if s.state != "STOPPED"}
-                network_slot = self.tb2_network_manager.allocate(occupied)
-                if network_slot is None:
-                    if (getattr(self, 'node_admission', None) is not None and
-                            not getattr(self.node_admission.local, 'source_effects', False)):
-                        raise NodeAdmissionBusy(['network_slots'])
-                    raise SandboxError("TB2 network namespace capacity reached")
-            elif environment_id in self.tb2_templates and self.tb2_network_slots:
-                occupied = {s.network_slot for s in self.sandboxes.values()
-                            if s.state != "STOPPED"}
-                network_slot = next((name for name in self.tb2_network_slots
-                                     if name not in occupied), None)
-                if network_slot is None:
-                    if (getattr(self, 'node_admission', None) is not None and
-                            not getattr(self.node_admission.local, 'source_effects', False)):
-                        raise NodeAdmissionBusy(['network_slots'])
-                    raise SandboxError("TB2 network slot capacity reached")
-            lease_id = None
-            if getattr(self, 'node_admission', None) is not None:
-                lease_id = self.node_admission.allocate('microvm', configured_limits={
-                    'environment_id':environment_id,
-                    'cpu_count':self.tb2_resources.get(environment_id, {}).get('cpus', 1),
-                    'memory_mb':(self.tb2_resources.get(environment_id, {}).get('memory_mb', 2048)
-                                 if environment_id in self.tb2_templates else
-                                 512 if environment_id == 'e3-mixed' else 256)})
-            try:
-                sb = Sandbox(self, idle_ttl_seconds, environment_id, memory_profile,
-                             verifier_storage, reserved=reserved, storage=storage,
-                             environment_spec=environment_spec)
-            except BaseException:
-                # Internal pool creation has no RPC request context to release
-                # an unbound intent. No host handles have been allocated yet.
-                if lease_id is not None:
-                    self.node_admission.release_unbound(lease_id)
-                raise
-            sb.node_lease_id = lease_id
-            sb.network_slot = network_slot
-            sb.network_mode = ("netns" if self.tb2_network_manager and network_slot else
-                               "tap_pool" if network_slot else
-                               "legacy_tap" if self.tb2_network_tap and
-                               environment_id in self.tb2_templates else None)
-            self.sandboxes[sb.id] = sb
-            # Only admission and slot reservation need the manager lock.
-            # Hold this sandbox's lock across preparation so monitor/close
-            # cannot observe or stop a half-built VM.
-            sb.lock.acquire()
-        try:
-            if getattr(self, 'node_admission', None) is not None:
-                self.node_admission.bind(lease_id, sb.id)
-            sb._persist()
-            advance("network_setup")
-            network=None
-            if sb.network_mode == "netns":
-                network=self.tb2_network_manager.ensure(sb.id, sb.network_slot)
-                sb.network_ready=True
-                sb.vm.start_launcher=self.tb2_network_manager.launcher(sb.id,
-                                                                       sb.network_slot)
-                sb._persist()
-            elif sb.network_mode == "tap_pool":
-                network=self.tb2_network_slots[network_slot]
-            if prepare_only:
-                return sb
-            advance("rootfs_copy")
-            source = (self.e3["guest"] if sb.work_disk else
-                      self.tb2_templates.get(environment_id, self.template))
-            if sb.overlaybd_store:
-                sb.overlaybd_device_id, sb.overlaybd_runtime = sb.overlaybd_store.create(
-                    sb.overlaybd_image, sb.directory, sb.disk)
-                sb.overlaybd_daemon_socket_identity = sb.overlaybd_store.socket_identity()
-                sb._persist()
-            elif environment_id in self.tb2_templates:
-                _copy_sparse(source, sb.disk)
-            else:
-                shutil.copy2(source, sb.disk)
-            if not sb.overlaybd_store:
-                sb.disk.chmod(0o600)
-            if sb.work_disk:
-                shutil.copy2(self.e3["work_template"], sb.work_disk)
-                sb.work_disk.chmod(0o600)
-                advance("vm_boot")
-                sb.vm.boot(sb.kernel, sb.disk, memory_profile=sb.memory_profile,
-                           data=self.e3["data"], work=sb.work_disk)
-                sb.memory_evidence = sb.vm.memory_probe(sb.memory_profile)
-            else:
-                tb2_spec = self.tb2_resources.get(environment_id, {})
-                advance("vm_boot")
-                sb.vm.boot(sb.kernel, sb.disk,
-                           memory_mib=tb2_spec.get("memory_mb", 2048) if environment_id in self.tb2_templates else None,
-                           cpu_count=tb2_spec.get("cpus", 1),
-                           tap_name=self.tb2_network_tap if environment_id in self.tb2_templates else None,
-                           network=network, verifier_disk=verifier_disk,
-                           verifier_dax=sb.verifier_dax,
-                           layer_disks=sb.layer_disks,
-                           layer_dax_indices=sb.erofs_dax_layers,
-                           track_dirty_pages=sb.dirty_tracking_enabled,
-                           free_page_reporting=sb.free_page_reporting)
-            advance("publish")
-            sb._event("RUNNING"); sb._touch()
-            advance("done")
-            sb.last_create_phases = phases
-            if getattr(self, 'node_admission', None) is not None:
-                self.node_admission.created('microvm', sb.id, ready=sb.reserved)
-            return sb
-        except Exception as exc:
-            advance("failed")
-            sb.last_create_phases = phases
-            sb._fail("create_failed: "+str(exc))
-            try:
-                sb._stop("create_failed_cleanup")
-            except Exception as cleanup_exc:
-                raise SandboxError(f"create failed: {exc}; cleanup failed: {cleanup_exc}") from exc
-            raise
-        finally:
-            sb.lock.release()
-            if reserved and sb.state == "RUNNING":
-                with self.warm_condition:
-                    self.warm_condition.notify_all()
+        self._require_owner()
+        return self.provisioner.create_cold(self, idle_ttl_seconds, environment_id, memory_profile,
+            verifier_storage, reserved, storage, prepare_only)
 
     def _monitor(self):
         while not self.shutdown.wait(self.poll_seconds):
@@ -940,7 +617,7 @@ class SandboxManager:
                 finally:
                     sb.lock.release()
 
-    def close(self):
+    def _retire_threads(self):
         with self.lock:
             self.closed = True
         self.shutdown.set()
@@ -952,8 +629,15 @@ class SandboxManager:
                 thread.join()
         if self.thread.is_alive():
             self.thread.join(timeout=5)
+
+    def close(self):
+        self._retire_threads()
+        if self.registry is not None and self.registry.owner_lock.closed:
+            return  # A retired Edge cannot terminate a later owner's sandboxes.
         for sb in list(self.sandboxes.values()):
             sb.stop()
+        if self.registry is not None:
+            self.registry.close()
 
     def __enter__(self):
         return self

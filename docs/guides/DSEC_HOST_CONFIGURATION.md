@@ -276,3 +276,15 @@ v0.1 targets a trusted single-host runtime user. Private sockets, scoped helpers
 and leases do not isolate mutually hostile host users. Fresh-host helper
 provisioning, provenance and license review, whole-backend comparison and the
 remaining release gates are tracked in [release plan](../../ROADMAP.md).
+
+
+### Edge ownership during restart
+
+The durable Edge takes an exclusive lock on its instance directory before
+creation or recovery. A second owner is rejected. Graceful service `detach`
+persists the existing records, retires control threads and closes local process
+handles while preserving registered sandboxes for the next Edge. Old Python
+objects lose authority to execute, create or stop sandboxes after this handoff.
+Explicit Edge `close` instead stops sandboxes and releases ownership only after
+cleanup succeeds; failed cleanup retains ownership for a retry. This is one
+instance's directory ownership, not a global lock or budget across host instances.
