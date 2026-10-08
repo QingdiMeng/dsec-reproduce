@@ -1,7 +1,7 @@
 # Terminal-Bench-2.1 application for DSec
 
 This optional application is installed separately from the DSec control plane.
-It contains preparation code, not tasks, images, model weights or an OpenEnv
+It contains preparation code and a worker verifier plugin, not tasks, images, model weights or an OpenEnv
 server. No command downloads anything implicitly. Supply a trusted checkout
 and locally available images and tools explicitly.
 
@@ -39,6 +39,15 @@ Configure a dedicated `dsec-host` instance with the resulting catalog,
 disk and its manifest through the documented host options. Configure an
 instance-specific network helper for networked guests. TB2.1 scoring is the
 staged task's official `tests/test.sh`; verifier outputs are saved by the worker.
+Install this application in the worker's Python environment, using the same
+checkout as the core. Configuring `worker.tb2_tasks_dir` registers
+`tb21-canonical-v1`; without that configuration the generic worker does not
+load the application. A missing application fails before worker state is
+allocated. The legacy `tb2_evaluate` request remains supported. The generic
+scheduled SDK can also call `evaluate("tb21-canonical-v1", timeout_s=12100)`;
+this evaluator accepts no verifier overrides and preserves the official
+binary reward and durable evidence requirements. See the
+[worker scoring contract](../../docs/architecture/AGENT_ENVIRONMENT_CONTRACT.md#worker-评分插件).
 
 ## Prepare a new image
 

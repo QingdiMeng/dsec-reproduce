@@ -20,7 +20,6 @@ from dsec.runtime.backends.container import (CatalogErofsBackend, CatalogLayered
 from dsec.storage.catalog import EnvironmentCatalog
 from dsec.runtime.container_journal import ContainerLifecycleJournal
 from dsec.contracts.requests import request_digest
-from tb2_backend import TB2ContainerBackend
 from dsec.sdk.scheduled import ScheduledDSecClient, ScheduledOutcomeUnknown
 
 
@@ -335,6 +334,7 @@ class DSecClient:
 
     async def run_tb2(self, args: DSecTB2RunArgs, *, request_id: str | None = None):
         """Create a per-episode official TB2 image through our DSec lifecycle facade."""
+        from tb2_backend import TB2ContainerBackend
         self._require_open()
         if not isinstance(args, DSecTB2RunArgs):
             raise TypeError("run_tb2 requires DSecTB2RunArgs")

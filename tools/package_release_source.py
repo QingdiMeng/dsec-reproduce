@@ -55,6 +55,7 @@ TESTS = (
     'tests/unit/test_tb2_verifier_artifact.py',
     'tests/unit/test_work_journal.py',
     'tests/unit/test_work_scheduler.py',
+    'tests/unit/test_worker_evaluators.py',
     'tests/adapters/test_counter_dsec_environment.py',
     'tests/adapters/test_miles_dsec_agent_function.py',
     'tests/adapters/test_miles_dsec_generate.py',

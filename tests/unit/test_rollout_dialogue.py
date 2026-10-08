@@ -221,7 +221,20 @@ class DialogueRecoveryTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(first["reward"]["value"], 0.0)
             self.assertEqual(second["reward"], first["reward"])
             self.assertEqual(calls, ["regex-log"])
+            # A v0.1 completed record has no evaluator identity. Its official
+            # verdict must remain readable without rerunning the verifier.
+            rollout.evaluation_identity = None
+            rollout.persist()
             worker.store.lock.close()
+            recovered = RolloutWorker(FakeClient(transport), state_dir=root / "state",
+                                      tb2_tasks_dir=root)
+            await recovered.initialize()
+            with patch.dict("sys.modules", {"dsec_adapters.tb2_microvm_env": fake}):
+                legacy = await recovered.dispatch({"operation": "tb2_evaluate", "args": {
+                    "rollout_id": rollout.id}})
+            self.assertEqual(legacy["reward"], first["reward"])
+            self.assertEqual(calls, ["regex-log"])
+            recovered.store.lock.close()
 
             failing = RolloutWorker(FakeClient(transport), state_dir=root / "other",
                                     tb2_tasks_dir=root)

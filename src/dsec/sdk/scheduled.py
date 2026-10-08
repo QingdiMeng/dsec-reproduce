@@ -117,6 +117,17 @@ class ScheduledSandbox:
         self._view = await self._call("evaluate", expected_counter=expected_counter)
         return self._view["reward"]
 
+    async def evaluate(self, evaluator: str, parameters=None, *, timeout_s=60):
+        """Use an operator-registered evaluator; never import code from an RPC argument."""
+        if not isinstance(evaluator, str) or not evaluator:
+            raise ValueError("evaluator must be a nonempty registered identity")
+        if parameters is not None and not isinstance(parameters, dict):
+            raise ValueError("Evaluation parameters must be an object")
+        self._view = await self._call("task_evaluate", evaluator=evaluator,
+                                      parameters={} if parameters is None else parameters,
+                                      timeout_s=timeout_s)
+        return self._view["reward"]
+
     async def seal_baseline(self, *, allow_prepared_state=False):
         self._view = await self._call("seal_baseline", timeout_s=300,
                                      allow_prepared_state=allow_prepared_state)

@@ -88,6 +88,30 @@ episode 的 `agent_metrics.normalized_thinking_steps` 记录发生兼容处理�
 `tests/test.sh`，核对 CTRF 结果与完整性，再解释成二元奖励。缺失、无效或无法验证
 的结果应报错并拒收样本，不能记作模型零分。
 
+### Worker 评分插件
+
+[评分契约](../../src/dsec/contracts/evaluation.py)只包含上下文、结果和插件接口，
+不启动沙箱或加载任务代码。部署方给 `RolloutWorker(..., evaluators={id: plugin})`
+注册可信实现；RPC 只能选择已注册的 ID，不能指定 Python 模块或加载代码。
+插件的版本化 ID 在评分语义改变时必须更新。`validate` 在执行前检查任务、环境和参数；
+`evaluate` 使用同一 episode 的沙箱，返回含有限数值 `value` 的 `EvaluationOutcome`。
+`EvaluationFailure` 表示没有有效 verdict，其诊断证据保存在 worker journal。
+
+调用方使用 `ScheduledSandbox.evaluate(evaluator_id, parameters, timeout_s=...)`。
+worker 在执行前持久保存评分器 ID、JSON 参数及摘要；同一已完成评分返回原奖励，
+换评分器或参数则拒绝。缺少评分器身份的旧完成记录由插件核对原奖励格式。
+取消、错误或重启时未完成的多命令 verifier 保持 UNKNOWN，不能自动重跑或合成零分。
+传输 timeout 只控制客户端等待时间，不改变任务规定的 verifier 上限。
+
+TB2.1 的[官方评分插件](../../apps/tb21/src/dsec_tb21_case/worker_evaluator.py)随可选应用安装。
+旧 `tb2_evaluate` 请求与 `--tb2-tasks-dir` 配置通过兼容桥注册该插件；不配置 TB2.1
+时，导入和构造通用 worker 不加载该应用。旧计数任务保留单次 RPC 的证明对账语义。
+TB2 adapter、manifest 验证和命令 PATH 的兼容桥仍有待后续迁移，当前不是完整任务代码拆分。
+
+动作日志同时保存用户命令 `command` 和实际提交命令 `execution_command`。
+重启对账使用后者，避免命令转换策略改变后重新解释已经执行的动作；旧动作没有该字段时，
+按兼容转换规则核对原请求。动作去重继续基于原 step/action ID 与用户载荷。
+
 ### Episode 预算结束
 
 Miles 的 DSec 适配器在沙箱就绪后开始 agent 预算，调度排队和 verifier 不消耗该预算。

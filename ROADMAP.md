@@ -17,8 +17,9 @@ acceptance gate.
 
 The [modular refactor design](docs/architecture/MODULAR_REFACTOR_DESIGN.md)
 was approved on 2026-10-08 against revision `7f70524`. R0 compatibility gates
-and R1 general-module migration are implemented; R2 responsibility separation
-and R3 real-host acceptance remain pending. This does not change the mechanism
+and R1 general-module migration are implemented. R2 has separated worker scoring
+into registered evaluators and the optional TB2.1 application; its other
+responsibility boundaries and R3 real-host acceptance remain pending. This does not change the mechanism
 validation statuses below; moving a component does not establish a missing
 paper capability.
 

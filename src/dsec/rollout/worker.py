@@ -13,7 +13,6 @@ import os
 from pathlib import Path
 import re
 import signal
-from types import SimpleNamespace
 import uuid
 
 from dsec.compat.libdsec import DSecClient, DSecMicroVMRunArgs, DSecContainerRunArgs
@@ -22,6 +21,10 @@ from dsec.sdk.sandbox_transport import RequestOutcomeUnknown, ServiceError
 from dsec.rollout.store import RolloutStore
 from dsec.compat.libdsec import DSecSandbox
 from dsec.contracts.requests import request_digest
+from dsec.contracts.evaluation import EvaluationContext, EvaluationFailure, EvaluationOutcome
+from dsec.compat.counter_evaluator import CounterEvaluator
+from dsec.compat.task_plugins import (LEGACY_EVALUATION_OPERATIONS,
+                                      configured_evaluators, execution_command)
 from dsec.runtime.scheduler import ProcHostSampler, ResourceBudget, ResourceDemand, WorkScheduler
 from dsec.observability.elastic import ElasticResourceMonitor
 from dsec.observability.shared import SharedServiceMonitor
@@ -32,16 +35,6 @@ def container_environment_id(profile):
     if profile.environment in ("erofs_split", "erofs_layers"):
         return profile.environment_id
     return "e1-real" if profile.environment == "erofs_overlay" else "e2-full"
-
-
-def execution_command(rollout, command):
-    """Restore the standard OCI image PATH for TB2 microVM shell commands."""
-    if (rollout.profile.backend == "microvm" and
-            isinstance(rollout.profile.environment_id, str) and
-            rollout.profile.environment_id.startswith("tb2-")):
-        return ("export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:"
-                "/usr/bin:/sbin:/bin; " + command)
-    return command
 
 
 class Rollout:
@@ -63,6 +56,7 @@ class Rollout:
         self.uncertain = []
         self.reward = None
         self.verifier_failure = None
+        self.evaluation_identity = None
         self.baseline_sealed = False
         self.baseline_rollout_id = None
         self.baseline_sandbox_id = None
@@ -88,6 +82,8 @@ class Rollout:
             result["lease_held"] = self.lease_held
             result["resource_summary"] = self.resource_summary
             result["meter_error"] = self.meter_error
+        if self.evaluation_identity is not None:
+            result["evaluation"] = dict(self.evaluation_identity)
         if self.verifier_failure is not None:
             result["verifier_failure"] = self.verifier_failure
         return result
@@ -101,7 +97,23 @@ class Rollout:
 
 
 class RolloutWorker:
-    def __init__(self, sandbox_client, state_dir=None, scheduler=None, tb2_tasks_dir=None):
+    def __init__(self, sandbox_client, state_dir=None, scheduler=None, tb2_tasks_dir=None,
+                 *, evaluators=None, command_transform=None):
+        self.evaluators = dict(evaluators or {})
+        for key, evaluator in configured_evaluators(tb2_tasks_dir).items():
+            if key in self.evaluators:
+                raise ValueError("Conflicting evaluator configuration: " + key)
+            self.evaluators[key] = evaluator
+        for key, evaluator in self.evaluators.items():
+            if (not isinstance(key, str) or
+                    not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,127}", key) or
+                    getattr(evaluator, "id", None) != key or
+                    any(not callable(getattr(evaluator, method, None))
+                        for method in ("validate", "accepts_reward", "evaluate"))):
+                raise ValueError("Invalid evaluator registration")
+        self.command_transform = command_transform or execution_command
+        if not callable(self.command_transform):
+            raise TypeError("command_transform must be callable")
         self.sandbox_client = sandbox_client
         self.rollouts = {}
         self.create_lock = asyncio.Lock()
@@ -211,6 +223,7 @@ class RolloutWorker:
             rollout.next_step = saved["next_step"]
             rollout.reward = saved.get("reward")
             rollout.verifier_failure = saved.get("verifier_failure")
+            rollout.evaluation_identity = saved.get("evaluation")
             rollout.baseline_sealed = saved.get("baseline_sealed", False)
             rollout.baseline_rollout_id = saved.get("baseline_rollout_id")
             rollout.baseline_sandbox_id = saved.get("baseline_sandbox_id")
@@ -484,8 +497,12 @@ class RolloutWorker:
                 return await self._step(rollout, args)
             if op == "evaluate":
                 return await self._evaluate(rollout, args)
-            if op == "tb2_evaluate":
-                return await self._tb2_evaluate(rollout)
+            if op in LEGACY_EVALUATION_OPERATIONS:
+                return await self._plugin_evaluate(
+                    rollout, LEGACY_EVALUATION_OPERATIONS[op], {}, operation=op)
+            if op == "task_evaluate":
+                return await self._plugin_evaluate(
+                    rollout, args.get("evaluator"), args.get("parameters", {}))
             if op == "stop":
                 if rollout.state != "STOPPED":
                     if rollout.sandbox is None:
@@ -675,9 +692,13 @@ class RolloutWorker:
             raise ValueError("Step is out of order")
         if rollout.state not in ("ACTIVE", "PAUSED"):
             raise RuntimeError("Cannot execute step in " + rollout.state)
+        submitted_command = self._execution_command(rollout, command)
+        if not isinstance(submitted_command, str):
+            raise ValueError("Command transform must return a string")
         request_id = uuid.uuid4().hex
         rollout.pending = {"operation": "step", "step_id": step_id,
                            "action_id": action_id, "command": command,
+                           "execution_command": submitted_command,
                            "timeout_ms": timeout_ms, "output_limit": output_limit,
                            "request_id": request_id}
         if assistant_message is not None:
@@ -686,7 +707,7 @@ class RolloutWorker:
         rollout.persist()
         try:
             result = await rollout.sandbox.run_shell(
-                execution_command(rollout, command),
+                submitted_command,
                 timeout_ms=timeout_ms, output_limit=output_limit,
                 **({"request_id": request_id} if request_id else {}))
         except RequestOutcomeUnknown:
@@ -711,7 +732,8 @@ class RolloutWorker:
             rollout.persist()
             raise
         entry = {"step_id": step_id, "action_id": action_id,
-                 "command": command, "timeout_ms": timeout_ms,
+                 "command": command, "execution_command": submitted_command,
+                 "timeout_ms": timeout_ms,
                  "output_limit": output_limit, "request_id": request_id,
                  "result": result}
         if assistant_message is not None:
@@ -802,8 +824,9 @@ class RolloutWorker:
         rpc_operation = operation if operation in ("pause", "seal_baseline", "stop") else "execute"
         rpc_args = ({"allow_prepared_state": True} if operation == "seal_baseline" else
                     {} if operation in ("pause", "stop") else
-                    {"command": (execution_command(rollout, pending["command"])
-                                 if operation == "step" else "cat /rl-counter"),
+                    {"command": ((pending["execution_command"] if "execution_command" in pending
+                                  else self._execution_command(rollout, pending["command"]))
+                                 if operation == "step" else CounterEvaluator.command),
                      "timeout_ms": pending.get("timeout_ms", 5000) if operation == "step" else 5000,
                      "output_limit": pending.get("output_limit", 65536) if operation == "step" else 65536})
         if operation == "stop" and rollout.profile.backend == "container":
@@ -852,13 +875,8 @@ class RolloutWorker:
                 await self.scheduler.release(rollout.id)
             return {"reconciled": True, "request_state": "DONE", "rollout": rollout.view()}
         if operation == "evaluate":
-            result = response["result"]
-            observed = result["output"].strip()
-            expected_counter = pending["expected_counter"]
-            success = result["exit_code"] == 0 and observed == str(expected_counter)
-            rollout.reward = {"value": 1.0 if success else 0.0,
-                              "expected_counter": expected_counter, "observed": observed,
-                              "verifier_exit_code": result["exit_code"]}
+            rollout.reward = CounterEvaluator.reward_from_result(
+                response["result"], pending["expected_counter"])
             rollout.state = "COMPLETED"
             rollout.pending = None
             rollout.persist()
@@ -869,6 +887,8 @@ class RolloutWorker:
                  "output_limit": pending.get("output_limit", 65536),
                  "request_id": request_id,
                  "result": response["result"]}
+        if "execution_command" in pending:
+            entry["execution_command"] = pending["execution_command"]
         if pending.get("assistant_message") is not None:
             entry["assistant_message"] = pending["assistant_message"]
         if entry["step_id"] != rollout.next_step:
@@ -885,9 +905,7 @@ class RolloutWorker:
         return {"reconciled": True, "request_state": "DONE", "rollout": rollout.view()}
 
     async def _evaluate(self, rollout, args):
-        expected = args.get("expected_counter")
-        if not isinstance(expected, int) or isinstance(expected, bool) or expected < 0:
-            raise ValueError("expected_counter must be a nonnegative integer")
+        expected = CounterEvaluator.expected(args)
         if rollout.state not in ("ACTIVE", "PAUSED", "COMPLETED"):
             raise RuntimeError("Cannot evaluate rollout in " + rollout.state)
         if rollout.state == "COMPLETED":
@@ -901,7 +919,7 @@ class RolloutWorker:
         rollout.state = "EXECUTING"
         rollout.persist()
         try:
-            result = await rollout.sandbox.run_shell("cat /rl-counter", **(
+            result = await rollout.sandbox.run_shell(CounterEvaluator.command, **(
                 {"request_id": request_id} if request_id else {}))
         except RequestOutcomeUnknown:
             rollout.state = "UNKNOWN"
@@ -922,11 +940,7 @@ class RolloutWorker:
             rollout.state = "UNKNOWN"
             rollout.persist()
             raise
-        observed = result["output"].strip()
-        success = result["exit_code"] == 0 and observed == str(expected)
-        rollout.reward = {"value": 1.0 if success else 0.0,
-                          "expected_counter": expected, "observed": observed,
-                          "verifier_exit_code": result["exit_code"]}
+        rollout.reward = CounterEvaluator.reward_from_result(result, expected)
         rollout.state = "COMPLETED"
         rollout.pending = None
         try:
@@ -936,66 +950,67 @@ class RolloutWorker:
             raise
         return rollout.view()
 
-    async def _tb2_evaluate(self, rollout):
-        """Run the pinned official verifier inside the same episode VM.
+    def _evaluation_context(self, rollout):
+        evidence = (str(self.store.root / "evidence" / rollout.id)
+                    if self.store is not None else None)
+        return EvaluationContext(rollout.id, rollout.task_id, rollout.profile.backend,
+                                 rollout.profile.environment_id, evidence)
 
-        A worker crash during the multi-command verifier leaves UNKNOWN rather
-        than manufacturing a zero reward or rerunning verifier side effects.
-        """
-        if self.tb2_tasks_dir is None:
-            raise RuntimeError("TB2 tasks directory is not configured")
-        if rollout.profile.backend != "microvm" or not re.fullmatch(
-                r"[a-z0-9][a-z0-9.-]{0,127}", rollout.task_id):
-            raise ValueError("TB2 evaluation requires a pinned microVM task")
-        if rollout.profile.environment_id != "tb2-" + rollout.task_id:
-            raise ValueError("TB2 task and sandbox template do not match")
+    def _execution_command(self, rollout, command):
+        return self.command_transform(self._evaluation_context(rollout), command)
+
+    async def _tb2_evaluate(self, rollout):
+        """Compatibility entry point; task implementation belongs to the application."""
+        return await self._plugin_evaluate(
+            rollout, LEGACY_EVALUATION_OPERATIONS["tb2_evaluate"], {}, operation="tb2_evaluate")
+
+    async def _plugin_evaluate(self, rollout, evaluator_id, parameters, *, operation="task_evaluate"):
+        if not isinstance(evaluator_id, str) or evaluator_id not in self.evaluators:
+            raise RuntimeError("Evaluator is not configured: " + str(evaluator_id))
+        if not isinstance(parameters, dict):
+            raise ValueError("Evaluation parameters must be an object")
+        encoded_parameters = json.dumps(parameters, allow_nan=False, sort_keys=True)
+        parameters = json.loads(encoded_parameters)
+        evaluator = self.evaluators[evaluator_id]
+        context = self._evaluation_context(rollout)
+        evaluator.validate(context, json.loads(encoded_parameters))
+        identity = {"evaluator": evaluator_id, "parameters": parameters,
+                    "digest": request_digest("task_evaluate", rollout.sandbox_id,
+                                             {"evaluator": evaluator_id, "parameters": parameters})}
         if rollout.state == "COMPLETED":
-            if rollout.reward and rollout.reward.get("harness") == "tests/test.sh":
+            if (rollout.evaluation_identity is not None and
+                    rollout.evaluation_identity != identity):
+                raise ValueError("Evaluation conflicts with completed evaluator/parameters")
+            if evaluator.accepts_reward(rollout.reward, json.loads(encoded_parameters)):
                 return rollout.view()
             raise RuntimeError("Rollout was completed by a different evaluator")
         if rollout.state not in ("ACTIVE", "PAUSED"):
             raise RuntimeError("Cannot evaluate rollout in " + rollout.state)
-        task_dir = (self.tb2_tasks_dir / rollout.task_id).resolve()
-        if task_dir.parent != self.tb2_tasks_dir or task_dir.is_symlink():
-            raise ValueError("TB2 task path escapes the pinned task directory")
-        from dsec_adapters.tb2_microvm_env import TB2MicroVMEnv
-
-        evidence_dir = (self.store.root / "evidence" / rollout.id
-                        if self.store is not None else None)
-        env = TB2MicroVMEnv(rollout.sandbox, task_id=rollout.task_id,
-                           task_dir=task_dir, verifier_mode="canonical",
-                           evidence_dir=evidence_dir)
-        rollout.pending = {"operation": "tb2_evaluate", "task_id": rollout.task_id}
+        rollout.evaluation_identity = identity
+        rollout.pending = {"operation": operation, "task_id": rollout.task_id,
+                           "evaluator": evaluator_id, "parameters": parameters}
         rollout.state = "EXECUTING"
         rollout.persist()
         try:
-            await env.reset(task_id=rollout.task_id)
-            result = await env.step(SimpleNamespace(action_type="evaluate"))
-        except Exception:
+            outcome = await evaluator.evaluate(context, rollout.sandbox,
+                                               json.loads(encoded_parameters))
+            if not isinstance(outcome, EvaluationOutcome):
+                raise ValueError("Evaluator returned no validated outcome")
+            # Freeze plugin-owned dictionaries before committing them into worker state.
+            outcome = EvaluationOutcome(json.loads(json.dumps(outcome.reward, allow_nan=False)))
+        except EvaluationFailure as exc:
+            rollout.state = "UNKNOWN"
+            try:
+                rollout.verifier_failure = json.loads(json.dumps(exc.details, allow_nan=False))
+            finally:
+                rollout.persist()
+            raise RuntimeError(str(exc)) from exc
+        except BaseException:
+            # Includes cancellation: a multi-command verifier may already have run.
             rollout.state = "UNKNOWN"
             rollout.persist()
             raise
-        info = result.observation.info
-        if (result.reward not in (0.0, 1.0) or result.observation.error or
-                info.get("harness") != "tests/test.sh" or
-                (evidence_dir is not None and
-                 info.get("evidence", {}).get("directory") != str(evidence_dir))):
-            diagnostic = (str(result.observation.error) or
-                          "Verifier evidence was not durably exported")
-            rollout.verifier_failure = {
-                "error": diagnostic,
-                "stage": info.get("verifier_stage"),
-                "evidence": info.get("evidence", {}),
-                "evidence_error": info.get("evidence_error")}
-            rollout.state = "UNKNOWN"
-            rollout.persist()
-            if len(diagnostic) > 1800:
-                diagnostic = diagnostic[:120] + " ... " + diagnostic[-1660:]
-            raise RuntimeError("TB2 canonical verifier produced no valid verdict: " +
-                               diagnostic)
-        rollout.reward = {"value": float(result.reward), "harness": "tests/test.sh",
-                          "verifier_mode": "canonical", "task_id": rollout.task_id,
-                          "evidence": info.get("evidence", {})}
+        rollout.reward = outcome.reward
         rollout.state = "COMPLETED"
         rollout.pending = None
         try:
