@@ -7,7 +7,7 @@ import re
 
 from dsec.runtime.requests import atomic_json, request_digest
 from dsec.runtime.admission_guard import check_container_create
-from dsec.sdk.sandbox_transport import RequestOutcomeUnknown
+from dsec.contracts.errors import RequestOutcomeUnknown
 
 
 class ContainerLifecycleJournal:

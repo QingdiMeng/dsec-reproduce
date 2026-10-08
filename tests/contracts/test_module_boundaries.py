@@ -157,6 +157,21 @@ class ModuleBoundaryTests(unittest.TestCase):
                         'dsec.control','dsec_adapters','tb2_','sandbox_sdk','durable_manager')),
                         f'{filename} imports {name}')
 
+    def test_command_channels_and_dispatcher_use_contracts_without_client_dependencies(self):
+        from dsec.contracts.errors import RequestOutcomeUnknown
+        self.assertIs(importlib.import_module('sandbox_client').RequestOutcomeUnknown,
+                      RequestOutcomeUnknown)
+        for filename in ('contracts/execution.py', 'runtime/sessions/channel.py',
+                         'runtime/sessions/dispatcher.py', 'runtime/container_journal.py'):
+            for node in ast.walk(ast.parse((ROOT/'src/dsec'/filename).read_text())):
+                names = ([n.name for n in node.names] if isinstance(node, ast.Import)
+                         else [node.module or ''] if isinstance(node, ast.ImportFrom) else [])
+                for name in names:
+                    self.assertFalse(name.startswith(('dsec.sdk','dsec.rollout','dsec.control',
+                        'dsec_adapters','dsec.runtime.lifecycle','dsec.runtime.registry',
+                        'dsec.runtime.backends','tb2_','sandbox_sdk')),
+                        f'{filename} imports {name}')
+
     def test_privileged_and_guest_agents_remain_standalone_sources(self):
         # These sources are embedded into a root-owned helper or guest image.
         # They must not require an installed DSec Python package in that context.

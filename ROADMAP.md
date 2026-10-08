@@ -27,8 +27,12 @@ workers own only episode/API quotas. Existing pause/restore/cleanup transitions
 now live in a composed controller with Sandbox retaining the single state owner.
 Cold creation and ready-pool scheduling now use separate composed components;
 the durable registry owns directory locking and recovery, with a composed Edge
-service entry point. Session/storage boundaries, remaining task-policy migration
-and R3 real-host acceptance remain pending. This does not change the mechanism
+service entry point. Bounded shell dispatch and guest/Docker command channels
+now share an explicit execution contract while retaining existing journals and
+wire protocols.
+Storage boundaries, remaining task-policy migration and R3 real-host acceptance
+remain pending. Interactive sessions and complete aether/chronus remain later
+capabilities. This does not change the mechanism
 validation statuses below; moving a component does not establish a missing
 paper capability.
 

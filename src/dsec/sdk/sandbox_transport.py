@@ -3,15 +3,12 @@ import json
 import socket
 import uuid
 import re
+from dsec.contracts.errors import RequestOutcomeUnknown
 
 class ServiceError(RuntimeError):
     def __init__(self, kind, message, details=None):
         super().__init__(message); self.kind=kind; self.details=details or {}
 
-class RequestOutcomeUnknown(RuntimeError):
-    def __init__(self, message, request_id=None):
-        super().__init__(message)
-        self.request_id=request_id
 
 class SandboxClient:
     def __init__(self, socket_path):

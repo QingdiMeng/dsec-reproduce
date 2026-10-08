@@ -1,6 +1,6 @@
 # DSec 模块化重构设计
 
-状态：设计已确认，R0/R1 已实施；R2 已完成评分插件、SDK/容器 Edge 拆分、Edge 节点租约迁移、生命周期状态转换拆分及创建/ready 池/registry 组合，其余 R2 与 R3 待完成。日期：2026-10-08。
+状态：设计已确认，R0/R1 已实施；R2 已完成评分插件、SDK/容器 Edge 拆分、Edge 节点租约迁移、生命周期状态转换拆分、创建/ready 池/registry 组合及执行通道拆分，其余 R2 与 R3 待完成。日期：2026-10-08。
 代码基线：`7f70524187e61e13f123c7999098858cf3411bd5`。
 
 ## 1. 目标与范围
@@ -443,3 +443,33 @@ Linux 身份核对、pidfd 及原子写入通过 `RegistryOperations` 注入。
 未安装 TB2.1/MBPP 应用包；3 个 CLI help、旧模块身份、wheel/源码归档及文档边界检查通过。
 wheel 包含 126 个运行时 Python 模块。执行/session 接口、统一 Storage 接口以及剩余
 TB2 manifest/API 和 adapter 规则迁移仍待完成；R2 未全部完成，R3 尚未执行。
+
+
+### R2：执行契约、dispatcher 与 channel 节点
+
+`contracts.execution` 给出只含值的 `ShellRequest`、原结果字段的 `ShellResult` 和
+`CommandChannel` 接口。请求值不持有连接、沙箱状态或 journal；Edge 仍按后端能力校验。
+`runtime.sessions.dispatcher.ShellDispatcher` 接管原 Sandbox 的命令/代理/范围校验、自动恢复、
+命令派发与失败处理，继续使用原 Sandbox 锁和生命周期入口。
+`VsockCommandChannel` 负责原 guest 的一次连接一次命令交换；
+`DockerCommandChannel` 负责既有 Docker shell、带请求 ID 的命令日志及结果查询。
+MicroVM、容器和旧 SDK 方法保留薄入口；模块级故障注入仍在组装处解析。
+
+命令 bytes、guest 头部、合并输出和返回字段未改动；超时与截断证据原样返回。
+容器旧路径缺少 `timed_out` 时不补成 false；UNKNOWN 与命令已完成但退出失败分别处理。
+microVM guest 不支持命令级 request ID，仍由 Edge journal 持有原 ID，channel 不假装具备
+guest 去重。容器使用原请求 ID/参数及查询证明。两者都不因丢回复或超时自动重试。
+`RequestOutcomeUnknown` 移入共享异常契约，SDK 旧路径重导出同一类，runtime 不反向依赖客户端。
+
+相对于 `3763e1a` 的 6 项 AST 归一化检查覆盖 dispatcher、两类通信、查询和容器前置校验。
+新增 22 项回归覆盖真实本地 Unix 字节流、UTF-8 长度、分片/断线/拒绝/过大回复、
+代理展开后的边界、agent/verifier 预算、原锁串行、命令超时与容器日志 UNKNOWN/冲突。
+Docker 执行与 VMM 使用替身，不能替代真实内核和 guest 验收。
+
+本节点完整本地回归 295 项：288 通过、7 项因环境条件跳过，无失败或错误。
+核心 wheel 在源码目录外的独立 venv 通过 88 项命令通信、Edge/容器 RPC、日志、快照、
+创建及节点回归；未安装任务应用，旧模块/异常身份与 3 个 CLI help 通过。wheel 包含
+130 个运行时 Python 模块，源码归档、文档链接及包边界通过。
+此处完成执行接口职责收敛，不实现交互式 session、
+后台进程、流式 stdout/stderr 或完整 aether/chronus；这些按既有后续机制里程碑推进。
+统一 Storage 接口与剩余任务规则迁移仍属 R2；真实 Linux/KVM、Docker 与短 RL 验收仍属 R3。

@@ -12,3 +12,9 @@ class ServiceBusy(SandboxError):
 
 class CommandOutcomeUnknown(SandboxError):
     """Transport failed; the command may have had side effects. Never auto-replay."""
+
+
+class RequestOutcomeUnknown(RuntimeError):
+    def __init__(self, message, request_id=None):
+        super().__init__(message)
+        self.request_id=request_id

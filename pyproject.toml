@@ -34,7 +34,7 @@ miles = ["openai>=1", "httpx>=0.27"]
 packages = [
     "dsec", "dsec.contracts", "dsec.storage", "dsec.sdk",
     "dsec.runtime", "dsec.runtime.isolation", "dsec.rollout", "dsec.observability",
-    "dsec.runtime.backends", "dsec.control", "dsec.host", "dsec.compat",
+    "dsec.runtime.backends", "dsec.runtime.sessions", "dsec.control", "dsec.host", "dsec.compat",
     "dsec_adapters", "dsec_image",
 ]
 package-dir = {dsec = "src/dsec"}

@@ -5,6 +5,8 @@ from pathlib import Path
 import socket
 import subprocess
 import time
+from dsec.contracts.execution import ShellRequest
+from dsec.runtime.sessions.channel import VsockCommandChannel
 
 class UnixHTTP(http.client.HTTPConnection):
     def __init__(self, path, timeout=15):
@@ -262,29 +264,9 @@ class MicroVM:
     def execute(self, command, timeout_ms=5000, output_limit=65536):
         if self.state != "RUNNING":
             raise RuntimeError(f"Cannot execute in {self.state}")
-        data = command.encode()
-        if not (1 <= timeout_ms <= self.max_timeout_ms and 1 <= output_limit <= 1048576
-                and len(data) <= 65536):
-            raise ValueError("Request outside protocol limits")
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            sock.settimeout(timeout_ms/1000+3)
-            sock.connect(str(self.vsock))
-            with sock.makefile("rb") as reader:
-                sock.sendall(b"CONNECT 5000\n")
-                if not reader.readline(128).startswith(b"OK "):
-                    raise EOFError("Vsock connection rejected")
-                sock.sendall(f"{timeout_ms} {output_limit} {len(data)}\n".encode()+data)
-                header = reader.readline(128)
-                if not header:
-                    raise EOFError("Command outcome unknown; do not automatically retry")
-                code, timedout, truncated, length = map(int, header.split())
-                if not 0 <= length <= output_limit:
-                    raise ValueError("Invalid response size")
-                output = reader.read(length)
-                if len(output) != length:
-                    raise EOFError("Incomplete command result")
-                return {"exit_code":code, "timed_out":bool(timedout), "truncated":bool(truncated),
-                        "output":output.decode(errors="replace")}
+        return VsockCommandChannel(self.vsock, max_timeout_ms=self.max_timeout_ms,
+            socket_factory=lambda *args: socket.socket(*args)).execute(
+                ShellRequest(command, timeout_ms, output_limit))
 
     def pause(self):
         self.api("PATCH", "/vm", {"state":"Paused"}); self.state = "PAUSED"

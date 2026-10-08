@@ -169,3 +169,17 @@ ID，附着并对账；不得新建 ID 重放可能已经生效的副作用。�
 最新真实训练、恢复与分叉验证见
 [GRPO 验收](../reports/DSEC_V01_GRPO_ACCEPTANCE.md)。短验收不代表全部 89 个任务、
 长训练或多机环境已通过。
+
+
+### Runtime execution boundary
+
+The core `contracts.execution` request/result values and `runtime.sessions`
+channels sit below the existing reset/step/evaluate API. Edge dispatch owns
+command authorization, scope/deadline validation, the sandbox lock and automatic
+resume; a channel only exchanges the bounded command and its result. The
+microVM keeps its existing guest-vsock bytes and Edge request journal, while
+Docker keeps its guest request IDs and query proofs. Neither channel retries a
+command after a missing reply. A completed command timeout is returned as
+execution evidence; transport uncertainty remains UNKNOWN. Legacy results with
+no timeout evidence retain the missing field. This boundary does not add
+interactive sessions, streaming output, background jobs or policy/model state.

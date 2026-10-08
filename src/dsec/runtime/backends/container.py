@@ -11,6 +11,8 @@ import subprocess
 import time
 import uuid
 
+from dsec.contracts.execution import ShellRequest
+from dsec.runtime.sessions.channel import DockerCommandChannel
 from dsec.runtime.admission_guard import check_container_create
 from dsec.runtime.backends.docker_broker import run_docker
 
@@ -335,60 +337,16 @@ class LayeredContainer:
             raise ValueError("output_limit must be between 1 and 1048576")
         if self.status()["state"] != "RUNNING":
             raise ContainerBackendError("Container is not running")
-        if request_id is not None:
-            if not re.fullmatch(r"[0-9a-f]{32}", request_id):
-                raise ValueError("Invalid request ID")
-            try:
-                response = _run(["docker", "exec", self.name, "python3", "-B", "/dsec-agent.py",
-                                 "request-shell", request_id, str(timeout_ms),
-                                 str(output_limit), "--", command],
-                                timeout=timeout_ms / 1000 + 8, check=False)
-            except subprocess.TimeoutExpired as exc:
-                from dsec.sdk.sandbox_transport import RequestOutcomeUnknown
-                raise RequestOutcomeUnknown("Container request result unknown after Docker timeout",
-                                            request_id) from exc
-            try:
-                proof = json.loads(response.stdout)
-                if response.returncode or proof["request_id"] != request_id:
-                    raise ValueError("Invalid container request response")
-            except (ValueError, KeyError) as exc:
-                from dsec.sdk.sandbox_transport import RequestOutcomeUnknown
-                raise RequestOutcomeUnknown("Container request response unavailable: "
-                                            + response.stderr[-500:], request_id) from exc
-            if proof["state"] == "DONE" and proof["response"]["ok"]:
-                return proof["response"]["result"]
-            if proof["state"] == "CONFLICT":
-                raise ValueError("Container request ID used with different arguments")
-            from dsec.sdk.sandbox_transport import RequestOutcomeUnknown
-            raise RequestOutcomeUnknown("Container request state: " + proof["state"], request_id)
-        try:
-            result = _run(["docker", "exec", self.name, "python3", "-B", "/dsec-agent.py",
-                           "shell", command], timeout=timeout_ms / 1000, check=False)
-        except subprocess.TimeoutExpired as exc:
-            # docker exec can have executed a non-idempotent action before timeout.
-            from dsec.sdk.sandbox_transport import RequestOutcomeUnknown
-            raise RequestOutcomeUnknown("Container command outcome unknown after timeout") from exc
-        if result.stderr:
-            from dsec.sdk.sandbox_transport import RequestOutcomeUnknown
-            raise RequestOutcomeUnknown("Container execution failed with uncertain command outcome: "
-                                        + result.stderr[-500:])
-        output = result.stdout + result.stderr
-        return {"exit_code": result.returncode, "output": output[:output_limit],
-                "truncated": len(output) > output_limit}
+        return DockerCommandChannel(self.name, run=lambda *args, **kwargs: _run(*args, **kwargs)).execute(
+            ShellRequest(command, timeout_ms, output_limit, request_id))
 
     def query_request(self, request_id):
         if not re.fullmatch(r"[0-9a-f]{32}", request_id):
             raise ValueError("Invalid request ID")
         if self.status()["state"] != "RUNNING":
             raise ContainerBackendError("Container is not running")
-        result = _run(["docker", "exec", self.name, "python3", "-B", "/dsec-agent.py",
-                       "request-query", request_id], check=False)
-        if result.returncode:
-            raise ContainerBackendError("Container request query failed: " + result.stderr[-500:])
-        proof = json.loads(result.stdout)
-        if proof["request_id"] != request_id:
-            raise ContainerBackendError("Container request ID mismatch")
-        return proof
+        return DockerCommandChannel(self.name, run=lambda *args, **kwargs: _run(*args, **kwargs),
+            error=ContainerBackendError).query_request(request_id)
 
     def stop(self):
         _run(["docker", "stop", "--timeout", "5", self.name], timeout=12, check=False)

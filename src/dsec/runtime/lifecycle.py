@@ -7,6 +7,7 @@ from dsec.contracts.errors import SandboxError, ServiceBusy, CommandOutcomeUnkno
 from dsec.runtime.transitions import LifecycleController
 from dsec.runtime.pool import ReadyPool
 from dsec.runtime.provisioning import SandboxProvisioner
+from dsec.runtime.sessions.dispatcher import ShellDispatcher
 import math
 import os
 from pathlib import Path
@@ -311,41 +312,8 @@ class Sandbox:
 
     def execute(self, command, timeout_ms=5000, output_limit=65536,
                 execution_scope="agent"):
-        # Validate before creating side effects (including automatic resume).
-        if not isinstance(command, str) or "\0" in command or len(command.encode()) > 65536:
-            raise ValueError("Invalid command")
-        execution_command = guest_proxy_command(
-            command, getattr(self.manager, "egress_proxy_url", None),
-            getattr(self.manager, "egress_proxy_bypass_hosts", ()))
-        if len(execution_command.encode()) > 65536:
-            raise ValueError("Command exceeds guest limit after proxy environment")
-        if execution_scope not in ("agent", "verifier"):
-            raise ValueError("Unknown command execution scope")
-        max_timeout_ms = (self.manager.verifier_timeout_ms(self.environment_id)
-                          if execution_scope == "verifier" else
-                          self.manager.command_timeout_ms(self.environment_id))
-        if (not isinstance(timeout_ms, int) or isinstance(timeout_ms, bool) or
-                not 1 <= timeout_ms <= max_timeout_ms):
-            raise ValueError(f"{execution_scope} timeout_ms={timeout_ms!r} exceeds "
-                             f"allowed range 1..{max_timeout_ms}")
-        if (not isinstance(output_limit, int) or isinstance(output_limit, bool) or
-                not 1 <= output_limit <= 1048576):
-            raise ValueError("output_limit must be an integer in 1..1048576")
-        with self.lock:
-            if self.reserved:
-                raise SandboxError("Sandbox is reserved for warm checkout")
-            self._check()
-            if self.state == "PAUSED":
-                self._restore()
-            if self.state != "RUNNING":
-                raise SandboxError("Cannot execute in "+self.state)
-            try:
-                return self.vm.execute(execution_command, timeout_ms, output_limit)
-            except (OSError, EOFError, ValueError) as exc:
-                self._fail("command_transport_failed")
-                raise CommandOutcomeUnknown("Command not replayed; inspect snapshot/side effects") from exc
-            finally:
-                self._touch()
+        return self.manager.commands.execute(self, command, timeout_ms, output_limit,
+                                             execution_scope)
 
     def pause(self):
         return self.manager.lifecycle.pause(self)
@@ -410,6 +378,8 @@ class SandboxManager:
             snapshot_hash=lambda *args: _snapshot_hash(*args),
             hash_file=lambda path: sha(path),
             fsync_directory=lambda path: _fsync_directory(path))
+        self.commands = ShellDispatcher(
+            proxy_command=lambda *args: guest_proxy_command(*args))
         self.ready_pool = ReadyPool()
         self.provisioner = SandboxProvisioner(
             sandbox_factory=lambda *args, **kwargs: Sandbox(*args, **kwargs),
