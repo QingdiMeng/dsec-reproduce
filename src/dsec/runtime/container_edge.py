@@ -3,15 +3,17 @@
 This preserves the trusted-host Docker backend. It does not implement
 production VM containment or container memory snapshots.
 """
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 import fcntl
+import json
 import os
 from pathlib import Path
 import re
 import threading
 
 from dsec.contracts.requests import request_digest
+from dsec.contracts.resources import NodeDemand
 from dsec.contracts.sandbox import DSecContainerRunArgs, DSecTB2RunArgs, UnsupportedCapability
 from dsec.runtime.backends.container import (CatalogErofsBackend, CatalogLayeredBackend,
                                             FullErofsBackend, LayeredContainerBackend)
@@ -33,11 +35,12 @@ class ContainerEntry:
 
 
 class ContainerRuntime:
-    def __init__(self, configuration=None, *, admission_worker_socket=None):
+    def __init__(self, configuration=None, *, admission_worker_socket=None, node_admission=None):
         # A service instance keeps its deployment configuration; RPC callers
         # cannot supply host directories, Docker sockets or artifact paths.
         self.configuration = dict(os.environ if configuration is None else configuration)
         self.admission_worker_socket = admission_worker_socket
+        self.node_admission = node_admission
         self.backends = {}
         self.catalog_digests = {}
         self.handles = {}
@@ -61,7 +64,8 @@ class ContainerRuntime:
                 try:
                     fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     self.journal = ContainerLifecycleJournal(
-                        root, admission_worker_socket=self.admission_worker_socket)
+                        root, admission_worker_socket=self.admission_worker_socket,
+                        edge_node_admission=self.node_admission is not None)
                 except BaseException:
                     stream.close()
                     raise
@@ -111,7 +115,9 @@ class ContainerRuntime:
                 if key not in self.backends:
                     self.backends[key] = TB2ContainerBackend(spec.task_id, spec.image)
                 return self.backends[key]
-            return self._container_backend(spec)
+            backend = self._container_backend(spec)
+            backend.edge_node_admission = self.node_admission is not None
+            return backend
 
     def _key(self, kind, spec, sandbox_id):
         return ((kind, spec.task_id, spec.image, sandbox_id) if kind == "tb2" else
@@ -133,7 +139,9 @@ class ContainerRuntime:
         with self.lock:
             self.handles[self._key(kind, spec, sandbox.id)] = ContainerEntry(backend, sandbox)
 
-    def dispatch(self, operation, sandbox_id, args, request_id):
+    def dispatch(self, operation, sandbox_id, args, request_id, *, resource_demand=None):
+        if resource_demand is not None and self.node_admission is None:
+            raise UnsupportedCapability('Node admission is required for resource demand')
         if operation not in CONTAINER_OPERATIONS or not isinstance(args, dict):
             raise ValueError("Unknown container operation")
         if (operation in CONTAINER_MUTATING and (not isinstance(request_id, str) or
@@ -155,14 +163,25 @@ class ContainerRuntime:
                 raise ValueError("Create cannot target an existing sandbox")
             backend = self._backend(kind, spec)
             def create():
+                lease_id = None
+                if self.node_admission is not None:
+                    lease_id = self.node_admission.allocate('container',
+                        minimum=NodeDemand(spec.cpu_cores_limit, spec.memory_limit_mb, 1, 0),
+                        configured_limits={'memory_mb':spec.memory_limit_mb, 'cpu':spec.cpu_cores_limit})
+                    self.node_admission.bind(lease_id, request_id)
                 options = {"memory_mb": spec.memory_limit_mb, "cpus": spec.cpu_cores_limit,
                            "sandbox_id": request_id}
                 if kind == "container":
                     options["qos"] = spec.cpu_qos
                 made = backend.create(**options)
                 self._remember(kind, spec, backend, made)
+                if self.node_admission is not None:
+                    self.node_admission.created('container', made.id)
                 return {"id": made.id}
-            with self._operation(request_id):
+            context = (self.node_admission.request('container', request_id,
+                       spec.lifecycle_args(), resource_demand) if self.node_admission is not None
+                       else nullcontext())
+            with self._operation(request_id), context:
                 return journal.execute(request_id, "create", None, spec.lifecycle_args(), create)
         if not isinstance(sandbox_id, str) or not re.fullmatch(r"[a-f0-9]{32}", sandbox_id):
             raise ValueError("Invalid sandbox ID")
@@ -175,6 +194,10 @@ class ContainerRuntime:
                     result = self._entry(kind, spec, sandbox_id).sandbox.stop()
                 with self.lock:
                     self.handles.pop(self._key(kind, spec, sandbox_id), None)
+                if self.node_admission is not None:
+                    if not backend.prove_stopped(sandbox_id):
+                        raise RuntimeError('Container cleanup has not been proven')
+                    self.node_admission.stopped('container', sandbox_id)
                 return result
             with self._operation(sandbox_id):
                 return journal.execute(request_id, "stop", sandbox_id, spec.stop_args(), stop)
@@ -220,11 +243,43 @@ class ContainerRuntime:
                 if operation == "create" and backend.prove_running(sandbox_id):
                     return {"id": sandbox_id}
                 if operation == "stop" and backend.prove_stopped(sandbox_id):
+                    if self.node_admission is not None:
+                        self.node_admission.stopped('container', sandbox_id)
                     return {"id": sandbox_id, "backend": "container", "state": "STOPPED"}
                 return None
             return journal.recover(request_id, verify)
         except Exception as exc:
             return {**proof, "recovery_error": str(exc)}
+
+    def reconcile_node_leases(self):
+        if self.node_admission is None or not self.configuration.get('DSEC_CONTAINER_ROOT'):
+            return
+        journal = self._journal()
+        # Historical creates provide the spec needed to attest a backend. A
+        # Docker/network/storage error is not proof that an object disappeared.
+        for path in sorted(journal.root.glob('*.json')):
+            record = json.loads(path.read_text())
+            if record.get('operation') != 'create':
+                continue
+            args = record.get('args', {})
+            if set(args) == {'environment_id','storage','memory_mb','cpus','qos'}:
+                kind = 'container'
+                spec = DSecContainerRunArgs(environment_id=args['environment_id'],
+                    storage=args['storage'], memory_limit_mb=args['memory_mb'],
+                    cpu_cores_limit=args['cpus'], cpu_qos=args['qos'])
+            elif set(args) == {'task_id','image','memory_mb','cpus'}:
+                kind = 'tb2'
+                spec = DSecTB2RunArgs(task_id=args['task_id'], image=args['image'],
+                    memory_limit_mb=args['memory_mb'], cpu_cores_limit=args['cpus'])
+            else:
+                raise ValueError('Cannot migrate container node lease: unknown create schema')
+            spec.validate()
+            sid = record['request_id']
+            minimum = NodeDemand(spec.cpu_cores_limit, spec.memory_limit_mb, 1, 0)
+            self.node_admission.adopt_container(sid, minimum)
+            backend = self._backend(kind, spec)
+            if backend.prove_stopped(sid):
+                self.node_admission.stopped('container', sid)
 
     def _container_backend(self, args):
         key = (args.environment_id, args.storage)

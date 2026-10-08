@@ -4,6 +4,8 @@
 > refer to experiment files outside this repository. They are not runnable
 > instructions for the current release. Use the [documentation index](../README.md) for supported entry points.
 
+当前部署与 Edge 节点准入配置见[主机配置指南](DSEC_HOST_CONFIGURATION.md)；本文保留旧实验的服务验证记录。
+
 2026-09-29，已在 `xiaoxiaohu@192.168.0.110` 部署并启用用户级 `dsec-sandboxd.service`。用户原本已启用 Linger；没有修改其他用户服务。
 
 ## 路径与日常操作

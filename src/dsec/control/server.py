@@ -1,9 +1,12 @@
 """Bounded local RPC service; backend state belongs to runtime managers."""
+from contextlib import nullcontext
 import json
 import os
 import socketserver
 import threading
 from dsec.runtime.lifecycle import SandboxError, ServiceBusy
+from dsec.contracts.resources import NodeAdmissionBusy, NodeLeaseUncertain
+from dsec.contracts.sandbox import UnsupportedCapability
 from dsec.runtime.requests import MUTATING
 from dsec.runtime.resource_rpc import sandbox_resource_sample
 from dsec.runtime.admission_guard import AdmissionDenied, check_create
@@ -55,9 +58,15 @@ class Handler(socketserver.StreamRequestHandler):
             req=json.loads(line)
             request_id=req.get("request_id")
             op=req["operation"]; args=req.get("args",{})
-            if op=="create":
+            node = getattr(self.server, 'node_admission', None)
+            if req.get('resource_demand') is not None:
+                if node is None:
+                    raise UnsupportedCapability('Node admission must be configured for resource demand')
+                if op not in ('create','container_create'):
+                    raise ValueError('Node demand only applies to creation')
+            if op=="create" and node is None:
                 check_create(self.server.admission_worker_socket,request_id,args)
-            if op=="prewarm" and self.server.admission_worker_socket:
+            if op=="prewarm" and (self.server.admission_worker_socket or node is not None):
                 raise AdmissionDenied("Prewarm requires a scheduler-managed pool reservation")
             if op in CONTAINER_OPERATIONS:
                 # Container effects have their existing lifecycle/guest journals.
@@ -67,7 +76,8 @@ class Handler(socketserver.StreamRequestHandler):
                     self.server.manager.foreground_enter()
                 try:
                     value=self.server.container_runtime.dispatch(
-                        op,req.get("sandbox_id"),args,request_id)
+                        op,req.get("sandbox_id"),args,request_id,
+                        resource_demand=req.get('resource_demand'))
                     response={"request_id":request_id,"ok":True,"result":value}
                 finally:
                     if foreground:
@@ -75,20 +85,39 @@ class Handler(socketserver.StreamRequestHandler):
             elif op in MUTATING:
                 self.server.manager.foreground_enter()
                 try:
-                    cached=self.server.journal.begin(req)
-                    if cached is not None:
-                        response=cached
-                    else:
-                        admitted=True
-                        try:
-                            value=self._dispatch(op,req.get("sandbox_id"),args,request_id)
-                            response={"request_id":request_id,"ok":True,"result":value}
-                        except Exception as exc:
-                            response={"request_id":request_id,"ok":False,"error":{
-                                "type":type(exc).__name__,"message":str(exc)}}
-                        # A failed durable commit leaves PENDING; never tell the
-                        # client that the operation is known to have finished.
-                        self.server.journal.finish(request_id,response)
+                    context = (node.request('microvm', request_id, args,
+                               req.get('resource_demand')) if op == 'create' and node is not None
+                               else nullcontext())
+                    with context:
+                        cached=self.server.journal.begin(req)
+                        if cached is not None:
+                            response=cached
+                        else:
+                            admitted=True
+                            commit_response=True
+                            try:
+                                value=self._dispatch(op,req.get("sandbox_id"),args,request_id)
+                                response={"request_id":request_id,"ok":True,"result":value}
+                            except NodeAdmissionBusy as exc:
+                                # The node guard proved that allocation never
+                                # started. This identity may stay queued.
+                                self.server.journal.reject_before_effect(request_id)
+                                admitted=False
+                                commit_response=False
+                                response={"request_id":request_id,"ok":False,"error":{
+                                    "type":"NodeAdmissionBusy","message":str(exc),
+                                    "details":{"reasons":exc.reasons}}}
+                            except NodeLeaseUncertain as exc:
+                                # Preserve PENDING and report uncertainty now;
+                                # a caller must query, never repeat this effect.
+                                commit_response=False
+                                response={"request_id":request_id,"ok":False,"error":{
+                                    "type":"RequestOutcomeUnknown","message":str(exc)}}
+                            except Exception as exc:
+                                response={"request_id":request_id,"ok":False,"error":{
+                                    "type":type(exc).__name__,"message":str(exc)}}
+                            if commit_response:
+                                self.server.journal.finish(request_id,response)
                 finally:
                     self.server.manager.foreground_exit()
             else:
@@ -97,7 +126,10 @@ class Handler(socketserver.StreamRequestHandler):
         except Exception as exc:
             if admitted:
                 return  # Side effect may have happened; PENDING is authoritative.
-            response={"request_id":request_id,"ok":False,"error":{"type":type(exc).__name__,"message":str(exc)}}
+            error={"type":type(exc).__name__,"message":str(exc)}
+            if isinstance(exc, NodeAdmissionBusy):
+                error['details']={'reasons':exc.reasons}
+            response={"request_id":request_id,"ok":False,"error":error}
         try:
             self.wfile.write(json.dumps(response).encode()+b"\n")
         except (BrokenPipeError,ConnectionResetError):
@@ -111,12 +143,22 @@ class Handler(socketserver.StreamRequestHandler):
                         "rejected_requests":self.server.rejected_requests}
             return {"pid":os.getpid(),"recovery_events":manager.recovery_events,
                     "monitor_errors":manager.errors,"warm_pool":manager.warm_pool_status(),
-                    "protocol_features":["container-rpc-v1"],
+                    "protocol_features":["container-rpc-v1"] + (
+                        ["node-admission-v1"] if getattr(self.server, 'node_admission', None) else []),
                     "admission_worker_socket":self.server.admission_worker_socket,**counts}
+        if op=="node_status":
+            node = getattr(self.server, 'node_admission', None)
+            if node is None:
+                raise ValueError('Node admission is not configured')
+            return node.status()
         if op=="query_request":
             return self.server.journal.lookup(args["lookup_id"])
         if op=="create":
-            return manager.create(**args).status()
+            sandbox=manager.create(**args)
+            node=getattr(self.server, 'node_admission', None)
+            if node is not None:
+                node.created('microvm', sandbox.id)
+            return sandbox.status()
         if op=="prewarm":
             return manager.prewarm(**args)
         if op=="list":

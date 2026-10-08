@@ -1,6 +1,7 @@
 """Durable at-most-once admission and result lookup for sandboxd RPCs."""
 
 import json
+import os
 from pathlib import Path
 import re
 import threading
@@ -49,6 +50,20 @@ class RequestJournal:
                                "sandbox_id": request.get("sandbox_id"),
                                "digest": digest, "state": "PENDING"})
             return None
+
+    def reject_before_effect(self, request_id):
+        """Forget only a pending request whose resource guard proved non-admission."""
+        path = self._path(request_id)
+        with self.lock:
+            record = json.loads(path.read_text())
+            if record['state'] != 'PENDING' or record['operation'] != 'create':
+                raise RuntimeError('Only unallocated creates can be rejected')
+            path.unlink()
+            fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
 
     def finish(self, request_id, response):
         path = self._path(request_id)

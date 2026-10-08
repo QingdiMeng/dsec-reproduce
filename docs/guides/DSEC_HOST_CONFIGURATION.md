@@ -66,8 +66,9 @@ The container directory has one Edge owner lock. Existing
 `lifecycle-requests/*.json` retain their request IDs, operation names, digests
 and schema. An in-flight or uncommitted result stays UNKNOWN until a read-only
 attestation proves completion; a request is never repeated to obtain that proof.
-The configured scheduler admission socket applies to container creation as
-well as microVM creation. A conflicting old `.admission-worker.json` fails closed.
+Formal host deployments use the Edge node budget for both container and microVM
+creation. The legacy worker admission socket is incompatible with `--node-budget`;
+`dsec-host run sandbox` clears the inherited legacy socket environment setting.
 Closing a client or normally retiring the service does not stop live containers;
 release owned sandboxes through the SDK before removing their instance.
 
@@ -148,25 +149,64 @@ localhost. `scheduler.shared_services` uses the existing shared-service monitor
 configuration. API budgets apply to worker `policy_call` accounting; model calls
 made directly by an external trainer need corresponding client-side rate control.
 
-The existing `scheduler` schema remains unchanged. Internally, CPU, guest memory,
-disk, network and disk I/O reservations belong to a node ledger; `api_episode_slots`
-is a worker job quota, and inflight/RPM/TPM limits belong to a separate API quota.
-`reserved` and the existing Prometheus metrics are compatibility views of these
-owners. `scheduler_status.resource_scopes` exposes their budgets and reservations
-separately. Configure budgets at scheduler construction; replacing only its
-legacy `budget` attribute is rejected rather than changing reports without
-changing admission. Live partial budget replacement is not supported.
-Quota scope is currently one worker process. Multiple worker processes
-do not automatically share a provider-account limit; partition that limit between
-them. Explicitly sharing an API quota object only coordinates schedulers within
-one process, and restarting that process resets its rate window.
+The existing resource and API fields in `scheduler` retain their defaults.
+Edge reads only the physical `NodeBudget` fields from the common budget file;
+`api_episode_slots` is a worker job quota, and inflight/RPM/TPM limits belong to
+its separate API quota. `dsec-host` passes this file through `--node-budget`.
+A standalone sandbox daemon can use a physical-only budget JSON, including
+`network_interface` and optionally `disk_path`/`disk_device` for host sampling.
+Formal scheduled workers require the service's `node-admission-v1` capability.
 
-Queued API requests consume neither rate tokens nor concurrency until dispatched.
+Edge persists one lease per physical sandbox under
+`state_root/sandboxes/node-leases`, before VMM/container or host handle allocation.
+Direct SDK creates, multiple workers connected to this Edge, baseline forks and
+ready-pool checkout share this admission authority. Checkout transfers the ready
+VM's existing lease and admits only the reservation increase; it does not reserve
+another copy of its memory or disk. TTL cleanup releases the physical lease
+without waiting for a worker receipt. Cleanup failure or uncertain ownership
+retains the lease. Worker restart restores job slots without adding node leases.
+
+Virtual guest memory limits, physical admission estimates and measured PSS are
+separate quantities. The default active/create reservation is 1 CPU, 512 MiB
+memory, 1024 MiB disk and 1 Mbps network; this does not change a manifest's guest
+memory limit. Optional `scheduler.node_default_demand` and `node_ready_demand`
+accept the `NodeDemand` fields (`cpu`, `memory_mb`, `disk_mb`, `network_mbps`,
+`disk_io_mbps`) to configure these estimates. Each override must provide the
+first four fields; `disk_io_mbps` is optional. By default ready demand keeps the
+active memory/disk estimate, reduces CPU to at most 0.05 and sets network/disk-I/O
+to zero. Pool boot reserves the maximum of create and ready estimates; checkout
+must acquire the active increase. These defaults are provisional estimates,
+not a measured density claim or hard cgroup enforcement, and need real-host
+calibration. Whole-host pressure floors still apply, including external loads.
+
+The node scope is **one Edge instance**, not all independent instances on a host.
+Partition host budgets between independent Edge instances. `node_status` exposes
+the authoritative scope, budget, reservations, live lease identities and host
+sample; `scheduler_status.resource_scopes` derives its node view from Edge.
+Workers connected to the same Edge repeat that global node view: do not sum their
+physical reservation metrics. Job/API views remain worker-local. Multiple workers
+do not automatically share a provider-account limit; partition that limit between
+them. Sharing an API quota object coordinates schedulers within one process only;
+restarting that process resets its rate window. Live partial budget replacement
+is not supported.
+
+Only `NodeAdmissionBusy` proves that creation had no sandbox effects. A scheduled
+worker records its reasons and elapsed waiting time, and retries the same stable
+request ID. A direct SDK caller receives that error and chooses when to retry.
+UNKNOWN, transport failures and uncertain resource commits are not replayed.
+Existing request IDs, argument digests and lifecycle journals remain unchanged;
+resource hints are an optional create envelope and must also match on retries.
+
+For an upgrade, stop the old worker, restart Edge using the same owned instance
+roots and new budget, then restart the worker. Edge conservatively adopts existing
+VM/container records; missing registry entries or unavailable Docker do not prove
+absence. Preserve existing journals. Local fault tests cover lease recovery and cleanup invariants;
+real Linux/KVM/Docker upgrade acceptance remains pending.
+
+Queued API calls consume neither rate tokens nor concurrency until dispatched.
 Calls already attempted retain their RPM/estimated TPM reservation if cancelled
-or their result is unknown. API completion or cancellation never releases the
-sandbox's node lease: confirmed sandbox stop remains the release boundary.
-The ledger is still hosted by the worker and restored from its durable rollout
-records; transferring node admission authority to Edge is a pending refactor.
+or their result is unknown. API completion, cancellation or scoring never releases
+the sandbox's node lease: confirmed resource cleanup remains the release boundary.
 
 ## Commands and acceptance
 

@@ -11,9 +11,10 @@ from dsec.sdk.sandbox_transport import RequestOutcomeUnknown
 
 
 class ContainerLifecycleJournal:
-    def __init__(self, root, *, admission_worker_socket=None):
+    def __init__(self, root, *, admission_worker_socket=None, edge_node_admission=False):
         self.root = Path(root).resolve() / "lifecycle-requests"
         self.admission_worker_socket = admission_worker_socket
+        self.edge_node_admission = edge_node_admission
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
 
     def _path(self, request_id):
@@ -78,7 +79,7 @@ class ContainerLifecycleJournal:
                 if saved["state"] == "DONE":
                     return saved["response"]["result"]
                 raise RequestOutcomeUnknown("Container lifecycle result is unknown", request_id)
-            if operation == "create":
+            if operation == "create" and not self.edge_node_admission:
                 check_container_create(self.root.parent, request_id, args,
                                        worker_socket=self.admission_worker_socket)
             record = {"version": 1, "state": "PENDING", "request_id": request_id,
@@ -88,6 +89,18 @@ class ContainerLifecycleJournal:
             try:
                 result = effect()
             except BaseException as exc:
+                from dsec.contracts.resources import NodeAdmissionBusy
+                if isinstance(exc, NodeAdmissionBusy):
+                    # Edge's guard ran before backend allocation. This is the
+                    # only effect rejection that may reuse this request ID.
+                    path.unlink()
+                    import os
+                    fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+                    try:
+                        os.fsync(fd)
+                    finally:
+                        os.close(fd)
+                    raise
                 # The effect may have completed before a Docker/transport error.
                 record["state"] = "UNKNOWN"
                 try:

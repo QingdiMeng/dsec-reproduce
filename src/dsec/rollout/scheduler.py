@@ -22,15 +22,24 @@ _current_job = contextvars.ContextVar("dsec_scheduler_job", default=None)
 
 class WorkScheduler:
     def __init__(self, budget: ResourceBudget, sampler, *, sample_interval=1.0,
-                 dependency_ready=None, node_ledger=None, api_quota=None):
+                 dependency_ready=None, node_ledger=None, api_quota=None, node_status=None):
         self._budget = budget
         self.sampler = sampler
         self.sample_interval = sample_interval
-        self.node_ledger = node_ledger or NodeResourceLedger(NodeBudget.from_resource(budget), sampler)
-        if (self.node_ledger.budget != NodeBudget.from_resource(budget) or
-                self.node_ledger.sampler is not sampler):
-            raise ValueError("Shared node ledger budget/sampler mismatch")
-        self.condition = self.node_ledger.condition
+        self.node_status_reader = node_status
+        self.edge_node_snapshot = None
+        self.node_pending = {}
+        self.node_budget = NodeBudget.from_resource(budget)
+        if node_status is not None:
+            if node_ledger is not None:
+                raise ValueError('Edge authority cannot coexist with a worker node ledger')
+            self.node_ledger = None
+            self.condition = asyncio.Condition()
+        else:
+            self.node_ledger = node_ledger or NodeResourceLedger(self.node_budget, sampler)
+            if self.node_ledger.budget != self.node_budget or self.node_ledger.sampler is not sampler:
+                raise ValueError("Shared node ledger budget/sampler mismatch")
+            self.condition = self.node_ledger.condition
         self.episode_quota = EpisodeQuota(budget.api_episode_slots)
         self.api_quota = api_quota or APIQuota(APILimits.from_resource(budget))
         if self.api_quota.limits != APILimits.from_resource(budget):
@@ -61,8 +70,9 @@ class WorkScheduler:
     @property
     def reserved(self):
         """Legacy report view, not another reservation ledger."""
-        return Counter(**self.node_ledger.reserved,
-                       api_episode_slots=self.episode_quota.reserved)
+        node = (self.node_ledger.reserved if self.node_ledger is not None else
+                (self.edge_node_snapshot or {}).get('reserved', {}))
+        return Counter(**node, api_episode_slots=self.episode_quota.reserved)
 
     @property
     def api_window(self):
@@ -73,11 +83,15 @@ class WorkScheduler:
         return self.api_quota.condition
 
     def _demand_too_large(self, demand):
-        return (self.node_ledger.too_large(NodeDemand.from_resource(demand)) or
+        node = NodeDemand.from_resource(demand)
+        return (any(getattr(node, name) > getattr(self.node_budget, name)
+                    for name in ('cpu','memory_mb','disk_mb','network_mbps')) or
+                (self.node_budget.disk_io_mbps > 0 and node.disk_io_mbps > self.node_budget.disk_io_mbps) or
                 demand.api_episode_slots > self.episode_quota.capacity)
 
     def _blockers(self, demand, sample, requirements=()):
-        blockers = self.node_ledger.blockers(NodeDemand.from_resource(demand), sample)
+        blockers = (self.node_ledger.blockers(NodeDemand.from_resource(demand), sample)
+                    if self.node_ledger is not None else [])
         if not self.episode_quota.available(demand.api_episode_slots):
             # Preserve the established metric reason and old resource wire schema.
             blockers.append("api_episode_slots_budget")
@@ -88,11 +102,13 @@ class WorkScheduler:
 
     def _reserve(self, job_id, demand, wait_started, sample):
         # No await between these mutations. Roll back if the second owner refuses.
-        self.node_ledger.reserve(job_id, NodeDemand.from_resource(demand), sample)
+        if self.node_ledger is not None:
+            self.node_ledger.reserve(job_id, NodeDemand.from_resource(demand), sample)
         try:
             self.episode_quota.reserve(job_id, demand.api_episode_slots)
         except BaseException:
-            self.node_ledger.release(job_id)
+            if self.node_ledger is not None:
+                self.node_ledger.release(job_id)
             raise
         self.pending.remove(job_id)
         self.pending_reasons.pop(job_id, None)
@@ -121,7 +137,11 @@ class WorkScheduler:
 
     async def _monitor(self):
         while True:
-            sample = self.sampler.sample()
+            if self.node_status_reader is not None:
+                await self.refresh_node_status()
+                sample = HostSample(**self.edge_node_snapshot['sample'])
+            else:
+                sample = self.sampler.sample()
             self.samples.append({**asdict(sample), "active": len(self.active),
                                  "pending": len(self.pending),
                                  "reserved": dict(self.reserved)})
@@ -157,9 +177,9 @@ class WorkScheduler:
             self.condition.notify_all()
             try:
                 while True:
-                    if job_id in self.node_ledger.leases:
+                    if self.node_ledger is not None and job_id in self.node_ledger.leases:
                         raise ValueError("Duplicate node lease ID")
-                    sample = self.sampler.sample()
+                    sample = self.sampler.sample() if self.node_ledger is not None else None
                     now = time.monotonic()
                     blockers = self._blockers(demand, sample, requirements)
                     if not blockers:
@@ -200,11 +220,13 @@ class WorkScheduler:
         """
         if job_id in self.pending or job_id in self.active or job_id in self.completed:
             raise ValueError("Duplicate scheduler job ID")
-        self.node_ledger.restore(job_id, NodeDemand.from_resource(demand))
+        if self.node_ledger is not None:
+            self.node_ledger.restore(job_id, NodeDemand.from_resource(demand))
         try:
             self.episode_quota.restore(job_id, demand.api_episode_slots)
         except BaseException:
-            self.node_ledger.release(job_id)
+            if self.node_ledger is not None:
+                self.node_ledger.release(job_id)
             raise
         self.active[job_id] = {"demand": demand, "started": time.monotonic(),
                                "wait_seconds": None, "api_calls": 0, "api_tokens": 0,
@@ -214,10 +236,12 @@ class WorkScheduler:
         async with self.condition:
             detail = self.active[job_id]
             demand = detail["demand"]
-            if (self.node_ledger.leases.get(job_id) != NodeDemand.from_resource(demand) or
+            if ((self.node_ledger is not None and
+                 self.node_ledger.leases.get(job_id) != NodeDemand.from_resource(demand)) or
                     self.episode_quota.leases.get(job_id) != demand.api_episode_slots):
                 raise RuntimeError("Resource lease ownership mismatch")
-            self.node_ledger.release(job_id)
+            if self.node_ledger is not None:
+                self.node_ledger.release(job_id)
             self.episode_quota.release(job_id)
             self.active.pop(job_id)
             detail["duration_seconds"] = time.monotonic() - detail["started"]
@@ -254,6 +278,29 @@ class WorkScheduler:
         self.completed[job_id]["phase_seconds"] = phases
         self.completed[job_id]["valid_verdict"] = row.get("valid_verdict")
 
+    async def refresh_node_status(self):
+        if self.node_status_reader is None:
+            return
+        snapshot = await self.node_status_reader()
+        if snapshot.get('authority') != 'edge' or snapshot.get('budget') != asdict(self.node_budget):
+            raise RuntimeError('Edge node budget/authority disagrees with worker configuration')
+        self.edge_node_snapshot = snapshot
+
+    def record_node_wait(self, job_id, reasons, seconds=0):
+        if reasons:
+            self.node_pending[job_id] = list(reasons)
+        else:
+            self.node_pending.pop(job_id, None)
+        for reason in reasons:
+            self.blocked_seconds[reason] += seconds
+        if seconds and job_id in self.active:
+            detail = self.active[job_id]
+            detail['wait_seconds'] = (detail['wait_seconds'] or 0) + seconds
+            detail['node_wait_seconds'] = detail.get('node_wait_seconds', 0) + seconds
+            self.queue_wait_seconds_total += seconds
+            self.queue_wait_seconds_last = detail['wait_seconds']
+            self.queue_wait_seconds_max = max(self.queue_wait_seconds_max, detail['wait_seconds'])
+
     async def policy_call(self, policy, model, messages, request_kwargs):
         job_id = _current_job.get()
         completion, tokens = await self.api_quota.call(
@@ -278,15 +325,17 @@ class WorkScheduler:
             phase_totals.update(item.get("phase_seconds", {}))
         return {"budget": asdict(self.budget), "reserved": dict(self.reserved),
                 "resource_scopes": {
-                    "node": {"budget": asdict(self.node_ledger.budget),
-                             "reserved": dict(self.node_ledger.reserved),
-                             "lease_ids": list(self.node_ledger.leases)},
+                    "node": ({'authority':'worker', "budget": asdict(self.node_budget),
+                              "reserved": dict(self.node_ledger.reserved),
+                              "lease_ids": list(self.node_ledger.leases)}
+                             if self.node_ledger is not None else self.edge_node_snapshot),
                     "job": {"api_episode_slots": self.episode_quota.capacity,
                             "reserved_api_episode_slots": self.episode_quota.reserved},
                     "api": {"scope": "process", "limits": asdict(self.api_quota.limits),
                             "inflight": self.api_quota.inflight}},
                 "active": list(self.active),
-                "pending": list(self.pending), "pending_reasons": dict(self.pending_reasons),
+                "pending": list(self.pending) + list(self.node_pending),
+                "pending_reasons": {**self.pending_reasons, **self.node_pending},
                 "completed": dict(self.completed), "completed_total": self.completed_total,
                 "admitted_total": self.admitted_total,
                 "queue_wait_seconds_total": self.queue_wait_seconds_total,
@@ -315,7 +364,7 @@ class WorkScheduler:
         reserved = self.reserved
         gauges = {
             "dsec_scheduler_active": len(self.active),
-            "dsec_scheduler_pending": len(self.pending),
+            "dsec_scheduler_pending": len(self.pending) + len(self.node_pending),
             "dsec_scheduler_reserved_cpu": reserved["cpu"],
             "dsec_scheduler_reserved_memory_mb": reserved["memory_mb"],
             "dsec_scheduler_reserved_disk_mb": reserved["disk_mb"],
@@ -350,7 +399,8 @@ class WorkScheduler:
         for reason, seconds in sorted(self.blocked_seconds.items()):
             lines.append(f'dsec_scheduler_blocked_seconds_total{{reason="{reason}"}} {seconds}')
         lines.append("# TYPE dsec_scheduler_pending_reason gauge")
-        pending_counts = Counter(reason for reasons in self.pending_reasons.values()
+        pending_counts = Counter(reason for reasons in
+                                 {**self.pending_reasons, **self.node_pending}.values()
                                  for reason in reasons)
         for reason, count in sorted(pending_counts.items()):
             lines.append(f'dsec_scheduler_pending_reason{{reason="{reason}"}} {count}')

@@ -28,6 +28,7 @@ def main():
         parser.add_argument("--"+flag,required=True)
     parser.add_argument("--socket-mode", choices=("0600", "0660"), default="0600",
                         help="Unix control socket permissions; 0660 is for a trusted local service drain")
+    parser.add_argument("--node-budget", help="Edge-owned node budget JSON; incompatible with legacy worker admission")
     parser.add_argument("--admission-worker-socket", default=os.environ.get("DSEC_ADMISSION_WORKER_SOCKET"),
                         help="require a matching worker scheduler lease before microVM create")
     parser.add_argument("--egress-proxy-url",
@@ -95,6 +96,8 @@ def main():
     parser.add_argument("--warm-min-disk-gib", type=int, default=0)
     args=parser.parse_args()
     os.umask(0o077)
+    if args.node_budget and args.admission_worker_socket:
+        parser.error('Use Edge node admission or legacy worker admission, never both')
     if args.max_requests<1: parser.error("--max-requests must be positive")
     if args.snapshot_concurrency is not None and not 1 <= args.snapshot_concurrency <= args.capacity:
         parser.error("--snapshot-concurrency must be in 1..capacity")
@@ -426,56 +429,89 @@ def main():
                           microvm_environment_catalog else None}))
         return
     from dsec.runtime.registry import DurableManager, atomic_json, identity
-    manager=DurableManager(args.root,args.binary,args.kernel,args.template,
-                           capacity=args.capacity,e3=e3,tb2_templates=tb2_templates,
-                           tb2_layers=tb2_layers,
-                           tb2_layer_counts=tb2_layer_counts,
-                           tb2_layer_transports=tb2_layer_transports,
-                           tb2_layer_dax_indices=tb2_layer_dax_indices,
-                           generic_dax_binaries=generic_dax_binaries,
-                           microvm_environment_catalog=microvm_environment_catalog,
-                           overlaybd_root_store=overlaybd_root_store,
-                           tb2_resources=tb2_resources,
-                           tb2_free_page_reporting=args.tb2_free_page_reporting,
-                           tb2_network_tap=args.tb2_network_tap,
-                           tb2_network_slots=tb2_network_slots,
-                           tb2_network_manager=tb2_network_manager,
-                           tb2_verifier_artifacts=verifier_artifacts,
-                           tb2_verifier_dax_tasks=dax_tasks,
-                           tb2_verifier_dax_binary=args.tb2_verifier_dax_binary,
-                           snapshot_cache_policy=args.snapshot_cache_policy,
-                           snapshot_concurrency=args.snapshot_concurrency,
-                           snapshot_strategy=args.snapshot_strategy,
-                           snapshot_editor=args.snapshot_editor,
-                           warm_pool_specs=warm_pool_specs,
-                           warm_refill_workers=args.warm_refill_workers,
-                           warm_wait_ms=args.warm_wait_ms,
-                           warm_idle_quiet_seconds=args.warm_idle_quiet_seconds,
-                           warm_min_memory_mib=args.warm_min_memory_mib,
-                           warm_min_disk_gib=args.warm_min_disk_gib,
-                           egress_proxy_url=args.egress_proxy_url,
-                           egress_proxy_bypass_hosts=args.egress_proxy_bypass_host)
-    journal=RequestJournal(args.root)
+    node_admission=None
+    manager=None
+    server=None
+    container_runtime=None
     sock=Path(args.root).resolve()/"service.sock"
-    # Only the manager that holds the directory lock may replace this socket.
-    sock.unlink(missing_ok=True)
-    server=BoundedServer(str(sock),Handler,args.max_requests)
-    os.chmod(sock,int(args.socket_mode,8)); server.manager=manager; server.journal=journal
-    server.admission_worker_socket=args.admission_worker_socket
-    server.identity_reader=identity
-    server.container_runtime=ContainerRuntime(admission_worker_socket=args.admission_worker_socket)
-    def shutdown(*_):
-        threading.Thread(target=server.shutdown,daemon=True).start()
-    signal.signal(signal.SIGTERM,shutdown); signal.signal(signal.SIGINT,shutdown)
     try:
+        if args.node_budget:
+            from dataclasses import fields
+            from dsec.contracts.resources import NodeBudget, NodeDemand
+            from dsec.runtime.resources import ProcHostSampler
+            from dsec.runtime.node_admission import NodeAdmission
+            settings=json.loads(Path(args.node_budget).read_text())
+            budget=NodeBudget(**{field.name:settings[field.name] for field in fields(NodeBudget)
+                                if field.name in settings})
+            sampler=ProcHostSampler(settings.get('disk_path', args.root),
+                                    settings['network_interface'], settings.get('disk_device'))
+            node_admission=NodeAdmission(args.root, budget, sampler,
+                default_demand=NodeDemand(**settings['node_default_demand'])
+                               if 'node_default_demand' in settings else None,
+                ready_demand=NodeDemand(**settings['node_ready_demand'])
+                             if 'node_ready_demand' in settings else None)
+        manager=DurableManager(args.root,args.binary,args.kernel,args.template,
+                               capacity=args.capacity,e3=e3,tb2_templates=tb2_templates,
+                               tb2_layers=tb2_layers,
+                               tb2_layer_counts=tb2_layer_counts,
+                               tb2_layer_transports=tb2_layer_transports,
+                               tb2_layer_dax_indices=tb2_layer_dax_indices,
+                               generic_dax_binaries=generic_dax_binaries,
+                               microvm_environment_catalog=microvm_environment_catalog,
+                               overlaybd_root_store=overlaybd_root_store,
+                               tb2_resources=tb2_resources,
+                               tb2_free_page_reporting=args.tb2_free_page_reporting,
+                               tb2_network_tap=args.tb2_network_tap,
+                               tb2_network_slots=tb2_network_slots,
+                               tb2_network_manager=tb2_network_manager,
+                               tb2_verifier_artifacts=verifier_artifacts,
+                               tb2_verifier_dax_tasks=dax_tasks,
+                               tb2_verifier_dax_binary=args.tb2_verifier_dax_binary,
+                               snapshot_cache_policy=args.snapshot_cache_policy,
+                               snapshot_concurrency=args.snapshot_concurrency,
+                               snapshot_strategy=args.snapshot_strategy,
+                               snapshot_editor=args.snapshot_editor,
+                               warm_pool_specs=warm_pool_specs,
+                               warm_refill_workers=args.warm_refill_workers,
+                               warm_wait_ms=args.warm_wait_ms,
+                               warm_idle_quiet_seconds=args.warm_idle_quiet_seconds,
+                               warm_min_memory_mib=args.warm_min_memory_mib,
+                               warm_min_disk_gib=args.warm_min_disk_gib,
+                               egress_proxy_url=args.egress_proxy_url,
+                               egress_proxy_bypass_hosts=args.egress_proxy_bypass_host,
+                               node_admission=node_admission)
+        journal=RequestJournal(args.root)
+        sock=Path(args.root).resolve()/"service.sock"
+        # Only the manager that holds the directory lock may replace this socket.
+        sock.unlink(missing_ok=True)
+        server=BoundedServer(str(sock),Handler,args.max_requests)
+        os.chmod(sock,int(args.socket_mode,8)); server.manager=manager; server.journal=journal
+        server.admission_worker_socket=args.admission_worker_socket
+        server.identity_reader=identity
+        server.node_admission=node_admission
+        container_runtime=ContainerRuntime(admission_worker_socket=args.admission_worker_socket,
+                                                 node_admission=node_admission)
+        server.container_runtime=container_runtime
+        container_runtime.reconcile_node_leases()
+        if node_admission is not None:
+            node_admission.activate()
+        def shutdown(*_):
+            threading.Thread(target=server.shutdown,daemon=True).start()
+        signal.signal(signal.SIGTERM,shutdown); signal.signal(signal.SIGINT,shutdown)
         atomic_json(Path(args.root).resolve()/"daemon.json",identity(os.getpid()))
         print("READY "+str(sock),flush=True)
         server.serve_forever(poll_interval=.1)
     finally:
-        server.server_close(); sock.unlink(missing_ok=True)
-        server.container_runtime.close()
-        (Path(args.root).resolve()/"daemon.json").unlink(missing_ok=True)
-        manager.detach()
+        if server is not None:
+            server.server_close()
+            sock.unlink(missing_ok=True)
+        if container_runtime is not None:
+            container_runtime.close()
+        if manager is not None:
+            (Path(args.root).resolve()/"daemon.json").unlink(missing_ok=True)
+            manager.detach()
+        if node_admission is not None:
+            node_admission.close()
 
 if __name__=="__main__":
     main()

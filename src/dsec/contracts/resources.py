@@ -92,6 +92,10 @@ class NodeBudget:
     def __post_init__(self):
         NodeDemand(self.cpu, self.memory_mb, self.disk_mb,
                    self.network_mbps, self.disk_io_mbps)
+        for name in ('min_memory_free_mb','min_disk_free_mb','max_cpu_utilization','max_disk_busy'):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int,float)) or not math.isfinite(value):
+                raise ValueError('Invalid node threshold: ' + name)
         if (self.network_mbps <= 0 or self.min_memory_free_mb < 0 or
                 self.min_disk_free_mb < 0 or not 0 < self.max_cpu_utilization <= 1 or
                 not 0 < self.max_disk_busy <= 1):
@@ -121,3 +125,14 @@ class APILimits:
     def from_resource(cls, budget: ResourceBudget):
         return cls(budget.api_inflight, budget.api_rpm, budget.api_tpm,
                    budget.api_token_reserve)
+
+
+class NodeAdmissionBusy(RuntimeError):
+    """Physical resources were not admitted; no sandbox allocation was attempted."""
+    def __init__(self, reasons):
+        self.reasons = list(reasons)
+        super().__init__('Node admission waiting: ' + ', '.join(self.reasons))
+
+
+class NodeLeaseUncertain(RuntimeError):
+    """Do not replay a create after an uncertain resource journal commit."""

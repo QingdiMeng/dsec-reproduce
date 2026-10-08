@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import time
 import uuid
 
 from dsec.sdk.client import DSecClient, DSecMicroVMRunArgs, DSecContainerRunArgs
@@ -25,8 +26,7 @@ from dsec.contracts.evaluation import EvaluationContext, EvaluationFailure, Eval
 from dsec.compat.counter_evaluator import CounterEvaluator
 from dsec.compat.task_plugins import (LEGACY_EVALUATION_OPERATIONS,
                                       configured_evaluators, execution_command)
-from dsec.contracts.resources import ResourceBudget, ResourceDemand
-from dsec.runtime.resources import ProcHostSampler
+from dsec.contracts.resources import ResourceBudget, ResourceDemand, NodeDemand
 from dsec.rollout.scheduler import WorkScheduler
 from dsec.observability.elastic import ElasticResourceMonitor
 from dsec.observability.shared import SharedServiceMonitor
@@ -285,6 +285,7 @@ class RolloutWorker:
         if op == "scheduler_status":
             if self.scheduler is None:
                 raise ValueError("Scheduler is not configured")
+            await self.scheduler.refresh_node_status()
             report = self.scheduler.report()
             report.pop("samples", None)
             return report
@@ -577,6 +578,30 @@ class RolloutWorker:
                 "messages": messages, "pending": rollout.pending,
                 "dialogue_feedback_version": rollout.dialogue_feedback_version}
 
+    async def _create_on_edge(self, rollout, spec, request_id):
+        resources = NodeDemand.from_resource(rollout.resource_demand)
+        try:
+            while True:
+                try:
+                    method = (self.sandbox_client.run_container if rollout.profile.backend == 'container'
+                              else self.sandbox_client.run_microvm)
+                    return await method(spec, request_id=request_id, resource_demand=asdict(resources))
+                except ServiceError as exc:
+                    if exc.kind != 'NodeAdmissionBusy':
+                        raise
+                    reasons = exc.details.get('reasons') or ['node_admission']
+                    self.scheduler.record_node_wait(rollout.id, reasons)
+                    started = time.monotonic()
+                    try:
+                        await asyncio.sleep(self.scheduler.sample_interval)
+                    except asyncio.CancelledError as exc:
+                        exc.node_nonadmission = True
+                        raise
+                    finally:
+                        self.scheduler.record_node_wait(rollout.id, reasons, time.monotonic()-started)
+        finally:
+            self.scheduler.record_node_wait(rollout.id, [])
+
     async def _scheduled_create(self, task_id, requested_id, profile, ttl, spec, resources,
                                 baseline_rollout_id=None):
         defaults = {"cpu": 1.0, "memory_mb": 512, "disk_mb": 1024,
@@ -636,10 +661,27 @@ class RolloutWorker:
                 await self.scheduler.release(rollout_id)
                 raise
             try:
-                sandbox = (await self.sandbox_client.run_container(spec, request_id=create_request_id)
-                           if profile.backend == "container"
-                           else await self.sandbox_client.run_microvm(spec, request_id=create_request_id))
-            except BaseException:
+                if self.scheduler.node_status_reader is not None:
+                    sandbox = await self._create_on_edge(rollout, spec, create_request_id)
+                else:
+                    sandbox = (await self.sandbox_client.run_container(spec, request_id=create_request_id)
+                               if profile.backend == "container"
+                               else await self.sandbox_client.run_microvm(spec, request_id=create_request_id))
+            except BaseException as exc:
+                if getattr(exc, 'node_nonadmission', False):
+                    # Cancellation while sleeping after a proven rejection is
+                    # different from cancellation of an in-flight create RPC.
+                    rollout.state = 'FAILED'
+                    rollout.pending = None
+                    rollout.lease_held = False
+                    try:
+                        rollout.persist()
+                    except BaseException:
+                        rollout.state = 'UNKNOWN'
+                        rollout.lease_held = True
+                        raise
+                    await self.scheduler.release(rollout_id)
+                    raise
                 rollout.state = "UNKNOWN"
                 rollout.persist()
                 try:
@@ -1034,14 +1076,16 @@ async def serve(socket_path, sandbox_socket, state_dir=None,
         budget_keys = {field.name for field in fields(ResourceBudget)}
         budget = ResourceBudget(**{key: value for key, value in settings.items()
                                    if key in budget_keys})
-        sampler = ProcHostSampler(settings.get("disk_path", state_dir),
-                                  settings["network_interface"],
-                                  settings.get("disk_device"))
+        # Formal scheduled execution requires Edge-owned node leases. Never
+        # silently instantiate another physical ledger against an old server.
+        if 'node-admission-v1' not in client._features:
+            raise RuntimeError('Upgrade sandbox service and configure --node-budget before starting a scheduled worker')
         if settings.get("shared_services") is not None:
             shared_services = SharedServiceMonitor(settings["shared_services"])
         scheduler = WorkScheduler(
-            budget, sampler,
+            budget, None, node_status=client.node_status,
             dependency_ready=(shared_services.ready if shared_services is not None else None))
+        await scheduler.refresh_node_status()
     elif metrics_port is not None:
         raise ValueError("Metrics endpoint requires a scheduler budget")
     worker = RolloutWorker(client, state_dir=state_dir, scheduler=scheduler,

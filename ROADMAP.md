@@ -22,8 +22,9 @@ into registered evaluators and the optional TB2.1 application, and moved
 container lifecycle ownership from the compatibility client to runtime Edge.
 The SDK is transport-only. Node reservation mechanics, episode slots and API
 rate quotas are now separate modules with one derived compatibility report.
-The node ledger is still worker-hosted: Edge-owned durable admission, other
-responsibility boundaries and R3 real-host acceptance remain pending. This does not change the mechanism
+Edge now owns durable node admission for direct SDK calls and scheduled work;
+workers own only episode/API quotas. Lifecycle decomposition, session/storage
+boundaries and R3 real-host acceptance remain pending. This does not change the mechanism
 validation statuses below; moving a component does not establish a missing
 paper capability.
 

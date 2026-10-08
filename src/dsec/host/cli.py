@@ -22,7 +22,7 @@ from urllib.parse import urlsplit
 
 from dsec.runtime.requests import atomic_json
 from dsec.runtime.isolation.proxy import validate_proxy_bypass_hosts
-from dsec.runtime.scheduler import ResourceBudget
+from dsec.contracts.resources import ResourceBudget, NodeDemand
 
 
 PATH_OPTIONS = {
@@ -132,7 +132,7 @@ def load_config(path):
     cfg['worker'] = worker
     scheduler = cfg['scheduler']
     budget_keys = {f.name for f in fields(ResourceBudget)}
-    _keys(scheduler, budget_keys | {'network_interface', 'disk_device', 'shared_services'}, 'scheduler')
+    _keys(scheduler, budget_keys | {'network_interface', 'disk_device', 'shared_services', 'node_default_demand', 'node_ready_demand'}, 'scheduler')
     budget = {key: value for key, value in scheduler.items() if key in budget_keys}
     if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
            for value in budget.values()):
@@ -142,6 +142,9 @@ def load_config(path):
     if any(type(budget[key]) is not int for key in integers & budget.keys()):
         raise ValueError('Integer scheduler budgets cannot be fractional')
     ResourceBudget(**budget)
+    for name in ('node_default_demand','node_ready_demand'):
+        if name in scheduler:
+            NodeDemand(**scheduler[name])
     if not isinstance(scheduler.get('network_interface'), str) or not re.fullmatch(
             r'[A-Za-z0-9_.:-]{1,15}', scheduler['network_interface']):
         raise ValueError('Invalid scheduler network interface')
@@ -168,7 +171,7 @@ def load_config(path):
 
 def sandbox_arguments(cfg):
     root = Path(cfg['state_root'])
-    args = ['--root', str(root/'sandboxes'), '--admission-worker-socket', str(root/'worker/worker.sock')]
+    args = ['--root', str(root/'sandboxes'), '--node-budget', str(root/'worker/budget.json')]
     for key, value in cfg['sandbox'].items():
         flag = '--'+key.replace('_', '-')
         if key in BOOL_OPTIONS:
@@ -442,12 +445,13 @@ def run_service(cfg, role, validate_only=False):
     for key, variable in environment.items():
         if key in cfg['worker']:
             os.environ[variable] = cfg['worker'][key]
+    settings = {**cfg['scheduler'], 'disk_path':str(root)}
+    budget_file = root/'worker/budget.json'
+    atomic_json(budget_file, settings)
     if role == 'sandbox':
+        os.environ.pop('DSEC_ADMISSION_WORKER_SOCKET', None)
         command = [sys.executable, '-I', '-B', '-m', 'sandboxd', *sandbox_arguments(cfg)]
     else:
-        settings = {**cfg['scheduler'], 'disk_path':str(root)}
-        budget_file = root/'worker/budget.json'
-        atomic_json(budget_file, settings)
         from dsec.sdk.sandbox_transport import SandboxClient
         deadline = time.monotonic()+110
         while True:

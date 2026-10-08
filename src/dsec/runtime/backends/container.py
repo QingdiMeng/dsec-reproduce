@@ -138,9 +138,10 @@ class LayeredContainerBackend:
         environment_id = ({"erofs_overlay": "e1-real",
                            "e2_full_erofs": "e2-full"}.get(self.environment_id,
                                                               self.environment_id))
-        check_container_create(self.root, sandbox_id, {
-            "environment_id": environment_id, "storage": self.storage,
-            "memory_mb": memory_mb, "cpus": cpus, "qos": qos})
+        if not getattr(self, 'edge_node_admission', False):
+            check_container_create(self.root, sandbox_id, {
+                "environment_id": environment_id, "storage": self.storage,
+                "memory_mb": memory_mb, "cpus": cpus, "qos": qos})
         # losetup -f and the following attach are not atomic. Serialize the
         # layer setup across clients using this backend on one host.
         with (self.root / ".create.lock").open("a+") as lock:
@@ -237,8 +238,8 @@ class LayeredContainerBackend:
         except (IndexError, KeyError, TypeError, ValueError, ContainerBackendError, OSError):
             return False
 
-    def prove_stopped(self, sid):
-        """Only an absent Docker name and absent private directory prove cleanup."""
+    def prove_container_absent(self, sid):
+        """A daemon error is not proof that a container disappeared."""
         if not re.fullmatch(r"[a-f0-9]{32}", sid):
             return False
         try:
@@ -248,8 +249,10 @@ class LayeredContainerBackend:
             return False
         if result.returncode:
             return False
-        return (self.container_prefix + sid not in result.stdout.splitlines()
-                and not (self.root / sid).exists())
+        return self.container_prefix + sid not in result.stdout.splitlines()
+
+    def prove_stopped(self, sid):
+        return self.prove_container_absent(sid) and not (self.root / sid).exists()
 
 
 class LayeredContainer:
@@ -390,8 +393,8 @@ class LayeredContainer:
     def stop(self):
         _run(["docker", "stop", "--timeout", "5", self.name], timeout=12, check=False)
         _run(["docker", "rm", "-f", self.name], check=False)
-        if _run(["docker", "inspect", self.name], check=False).returncode == 0:
-            raise ContainerBackendError("Container still exists after stop")
+        if not self.manager.prove_container_absent(self.id):
+            raise ContainerBackendError("Container absence has not been proven after stop")
         self.manager.purge_private(self.id)
         return self.status()
 

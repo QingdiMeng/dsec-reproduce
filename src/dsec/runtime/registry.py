@@ -93,6 +93,8 @@ class DurableManager(SandboxManager):
                      if re.fullmatch(r"[0-9a-f]{12}", p.parent.name) and
                      (p.parent.name not in self.sandboxes or
                       self.sandboxes[p.parent.name].state != "STOPPED")})
+            if self.node_admission is not None:
+                self.node_admission.reconcile_microvms(self)
             self.thread.start()
             for thread in self.warm_threads:
                 thread.start()
@@ -137,7 +139,9 @@ class DurableManager(SandboxManager):
             "overlaybd_image":str(sb.overlaybd_image) if sb.overlaybd_image else None,
             "deadline_monotonic":sb.deadline,"deadline_wall":time.time()+sb.deadline-time.monotonic(),
             "boot_id":BOOT_ID,"snapshot":sb.snapshot.name if sb.snapshot else None,
-            "generation":sb.generation,"process":process,"inflight":sb.inflight})
+            "generation":sb.generation,"process":process,"inflight":sb.inflight,
+            "node_lease_id":sb.node_lease_id,
+            "resource_cleanup_complete":sb.resource_cleanup_complete})
 
     def _check_network_registry(self):
         """Fail closed before adopting VMMs if a live slot could be reused."""
@@ -308,6 +312,10 @@ class DurableManager(SandboxManager):
                 sb.baseline_closing=False
                 sb.baseline_sealed=value.get("baseline_sealed",False)
                 sb.fork_origin=value.get("fork_origin")
+                sb.node_lease_id=value.get('node_lease_id')
+                sb.resource_cleanup_complete=value.get('resource_cleanup_complete', False)
+                if not isinstance(sb.resource_cleanup_complete, bool):
+                    raise ValueError('Invalid persisted cleanup completion flag')
                 sb.reserved=value.get("reserved",False)
                 sb.warm_pool_hit=value.get("warm_pool_hit",False)
                 if sb.snapshot_mode not in ("full", "boot-diff", "incremental") or (

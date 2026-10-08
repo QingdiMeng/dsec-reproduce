@@ -5,8 +5,8 @@ import uuid
 import re
 
 class ServiceError(RuntimeError):
-    def __init__(self, kind, message):
-        super().__init__(message); self.kind=kind
+    def __init__(self, kind, message, details=None):
+        super().__init__(message); self.kind=kind; self.details=details or {}
 
 class RequestOutcomeUnknown(RuntimeError):
     def __init__(self, message, request_id=None):
@@ -16,11 +16,15 @@ class RequestOutcomeUnknown(RuntimeError):
 class SandboxClient:
     def __init__(self, socket_path):
         self.socket_path=str(socket_path)
-    def call(self, operation, sandbox_id=None, *, request_id=None, **args):
+    def call(self, operation, sandbox_id=None, *, request_id=None, resource_demand=None, **args):
         request_id=request_id or uuid.uuid4().hex
         if not isinstance(request_id,str) or not re.fullmatch(r"[0-9a-f]{32}",request_id):
             raise ValueError("request_id must be 32 lowercase hex characters")
         request={"request_id":request_id,"operation":operation,"sandbox_id":sandbox_id,"args":args}
+        if resource_demand is not None:
+            if operation not in ('create','container_create'):
+                raise ValueError('Resource demand only applies to sandbox creation')
+            request['resource_demand']=resource_demand
         data=json.dumps(request).encode()+b"\n"
         if len(data)>131072:
             raise ValueError("Request too large")
@@ -47,7 +51,7 @@ class SandboxClient:
         if not response["ok"]:
             if response["error"]["type"] == "RequestOutcomeUnknown":
                 raise RequestOutcomeUnknown(response["error"]["message"], request_id)
-            raise ServiceError(response["error"]["type"],response["error"]["message"])
+            raise ServiceError(response["error"]["type"],response["error"]["message"],response["error"].get("details"))
         return response["result"]
 
     def query_request(self, request_id):

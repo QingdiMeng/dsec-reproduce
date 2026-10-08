@@ -7,6 +7,7 @@ from pathlib import Path
 from dsec.contracts.sandbox import (UnsupportedCapability, DSecMicroVMRunArgs,
                                    DSecContainerRunArgs, DSecTB2RunArgs)
 from dsec.sdk.sandbox_transport import SandboxClient, ServiceError
+from dsec.contracts.resources import NodeDemand
 from dsec.sdk.scheduled import ScheduledDSecClient, ScheduledOutcomeUnknown
 
 
@@ -98,8 +99,21 @@ class DSecClient:
         if "container-rpc-v1" not in self._features:
             raise UnsupportedCapability("Upgrade sandbox service for container-rpc-v1")
 
+    def _node_hint(self, demand):
+        if demand is None:
+            return None
+        if 'node-admission-v1' not in self._features:
+            raise UnsupportedCapability('Upgrade sandbox service for node-admission-v1')
+        return asdict(demand if isinstance(demand, NodeDemand) else NodeDemand(**demand))
+
+    async def node_status(self):
+        self._require_open()
+        if 'node-admission-v1' not in self._features:
+            raise UnsupportedCapability('Upgrade sandbox service for node-admission-v1')
+        return await asyncio.to_thread(self._transport.call, 'node_status')
+
     async def run_microvm(self, args: DSecMicroVMRunArgs | None = None, *, timeout: float | None = None,
-                          request_id: str | None = None):
+                          request_id: str | None = None, resource_demand=None):
         self._require_open()
         if args is None:
             args = DSecMicroVMRunArgs()
@@ -109,7 +123,7 @@ class DSecClient:
         if timeout is not None:
             raise UnsupportedCapability("per-create timeout is not supported by the local service")
         result = await asyncio.to_thread(self._transport.call, "create",
-                                         request_id=request_id, **service_args)
+                                         request_id=request_id, resource_demand=self._node_hint(resource_demand), **service_args)
         return DSecSandbox(self._transport, result["id"])
 
     async def lookup_request(self, request_id: str):
@@ -117,23 +131,23 @@ class DSecClient:
         return await asyncio.to_thread(self._transport.query_request, request_id)
 
     async def run_container(self, args: DSecContainerRunArgs | None = None,
-                            *, request_id: str | None = None):
+                            *, request_id: str | None = None, resource_demand=None):
         self._require_container_service()
         args = DSecContainerRunArgs() if args is None else args
         if not isinstance(args, DSecContainerRunArgs):
             raise TypeError("run_container requires DSecContainerRunArgs")
         args.validate()
         result = await asyncio.to_thread(self._transport.call, "container_create",
-            request_id=request_id, spec=asdict(args))
+            request_id=request_id, resource_demand=self._node_hint(resource_demand), spec=asdict(args))
         return DSecContainerSandbox(self._transport, result["id"], args)
 
-    async def run_tb2(self, args: DSecTB2RunArgs, *, request_id: str | None = None):
+    async def run_tb2(self, args: DSecTB2RunArgs, *, request_id: str | None = None, resource_demand=None):
         self._require_container_service()
         if not isinstance(args, DSecTB2RunArgs):
             raise TypeError("run_tb2 requires DSecTB2RunArgs")
         args.validate()
         result = await asyncio.to_thread(self._transport.call, "container_create",
-            request_id=request_id, kind="tb2", spec=asdict(args))
+            request_id=request_id, resource_demand=self._node_hint(resource_demand), kind="tb2", spec=asdict(args))
         return DSecTB2Sandbox(self._transport, result["id"], args)
 
     async def attach_container(self, sandbox_id: str, args: DSecContainerRunArgs):

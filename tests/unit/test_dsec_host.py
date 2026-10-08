@@ -35,8 +35,8 @@ class HostConfigurationTests(unittest.TestCase):
         self.assertEqual(cfg['worker']['tb2_tasks_dir'], str(self.root/'tasks'))
         args = dsec_host.sandbox_arguments(cfg)
         self.assertEqual(args[args.index('--root')+1], str(self.root/'state/sandboxes'))
-        self.assertEqual(args[args.index('--admission-worker-socket')+1],
-                         str(self.root/'state/worker/worker.sock'))
+        self.assertEqual(args[args.index('--node-budget')+1],
+                         str(self.root/'state/worker/budget.json'))
 
     def test_proxy_bypass_host_reaches_daemon_arguments(self):
         self.data['sandbox']['egress_proxy_bypass_host'] = ['archive.ubuntu.com', 'security.ubuntu.com']

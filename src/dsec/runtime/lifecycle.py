@@ -3,6 +3,7 @@ import errno
 from collections import deque
 import hashlib
 import json
+from dsec.contracts.resources import NodeAdmissionBusy
 import math
 import os
 from pathlib import Path
@@ -142,6 +143,8 @@ class Sandbox:
                  verifier_storage=None, reserved=False, storage="local",
                  environment_spec=None):
         self.manager = manager
+        self.node_lease_id = None
+        self.resource_cleanup_complete = False
         self.id = uuid.uuid4().hex[:12]
         self.directory = manager.root/self.id
         self.directory.mkdir(mode=0o700)
@@ -294,6 +297,8 @@ class Sandbox:
                     "state":"READY" if self.reserved and self.state == "RUNNING" else self.state,
                     "reason":self.reason,
                     "generation":self.generation, "has_snapshot":self.snapshot is not None,
+                    "node_lease_id":getattr(self, 'node_lease_id', None),
+                    "resource_cleanup_complete":getattr(self, 'resource_cleanup_complete', False),
                     "baseline_sealed":self.baseline_sealed, "fork_origin":self.fork_origin,
                     "fork_readers":self.fork_readers,
                     "snapshot_cache_policy":self.manager.snapshot_cache_policy,
@@ -656,12 +661,16 @@ class Sandbox:
             self._restore()
 
     def _stop(self, reason):
-        if self.state == "STOPPED":
+        if self.state == "STOPPED" and getattr(self, 'resource_cleanup_complete', False):
+            if getattr(self.manager, 'node_admission', None) is not None:
+                self.manager.node_admission.stopped('microvm', self.id)
             return
         self.baseline_closing = True
         while self.fork_readers:
             self.fork_condition.wait()
-        if self.state == "STOPPED":
+        if self.state == "STOPPED" and getattr(self, 'resource_cleanup_complete', False):
+            if getattr(self.manager, 'node_admission', None) is not None:
+                self.manager.node_admission.stopped('microvm', self.id)
             return
         self.vm.stop()
         if self.overlaybd_store and self.overlaybd_device_id is not None:
@@ -689,6 +698,10 @@ class Sandbox:
         self._event("STOPPED", reason)
         if self.overlaybd_store and getattr(self.overlaybd_store, "shared_layers", None):
             self.overlaybd_store.shared_layers.release(self.id)
+        self.resource_cleanup_complete = True
+        self._persist()
+        if getattr(self.manager, 'node_admission', None) is not None:
+            self.manager.node_admission.stopped('microvm', self.id)
         self.manager.warm_wakeup.set()
 
     def stop(self):
@@ -710,7 +723,7 @@ class SandboxManager:
                  warm_pool_specs=None, warm_refill_workers=None, warm_wait_ms=0,
                  warm_idle_quiet_seconds=0, warm_min_memory_mib=0,
                  warm_min_disk_gib=0, microvm_environment_catalog=None,
-                 egress_proxy_url=None, egress_proxy_bypass_hosts=()):
+                 egress_proxy_url=None, egress_proxy_bypass_hosts=(), node_admission=None):
         if not isinstance(capacity, int) or capacity < 1 or not math.isfinite(poll_seconds) or poll_seconds <= 0:
             raise ValueError("Invalid manager limits")
         if snapshot_cache_policy not in ("retain", "evict"):
@@ -730,6 +743,8 @@ class SandboxManager:
         self.egress_proxy_url = validate_proxy_url(egress_proxy_url)
         self.egress_proxy_bypass_hosts = validate_proxy_bypass_hosts(egress_proxy_bypass_hosts)
         self.binary, self.kernel, self.template = map(Path, (binary,kernel,template))
+        self.node_admission = node_admission
+        self.warm_node_waits = {}
         self.e3 = e3
         self.microvm_environment_catalog = microvm_environment_catalog
         self.tb2_templates = tb2_templates or {}
@@ -860,7 +875,8 @@ class SandboxManager:
                               "preparing": sum(sb.state == "CREATING" for sb in reserved),
                               "refill_workers_active": self.warm_inflight[(environment_id, storage)],
                               "waiting_requests": len(self.warm_waiters[(environment_id, storage)]),
-                              "deficit": max(0, target-ready)})
+                              "deficit": max(0, target-ready),
+                              "node_wait_reasons":self.warm_node_waits.get((environment_id, storage), [])})
             return {"pools": pools, "hits": self.warm_hits, "misses": self.warm_misses,
                     "foreground_active": self.foreground_active,
                     "refill_errors": self.warm_refill_errors}
@@ -914,6 +930,12 @@ class SandboxManager:
                 continue
             try:
                 self._create_cold(3600, choice[0], "baseline", choice[1], reserved=True)
+                with self.lock:
+                    self.warm_node_waits.pop(choice, None)
+            except NodeAdmissionBusy as exc:
+                with self.lock:
+                    self.warm_node_waits[choice] = exc.reasons
+                self.shutdown.wait(1)
             except SandboxError as exc:
                 if "capacity reached" not in str(exc):
                     with self.lock:
@@ -949,6 +971,10 @@ class SandboxManager:
     def create(self, idle_ttl_seconds=300, environment_id="default", memory_profile="baseline",
                verifier_storage=None, storage="local", baseline_id=None):
         if baseline_id is not None:
+            # Admit before fork anchor publication can modify the source.
+            if getattr(self, 'node_admission', None) is not None:
+                self.node_admission.allocate('microvm')
+                self.node_admission.local.source_effects = True
             from dsec.runtime.fork import fork_baseline
             return fork_baseline(self, baseline_id, idle_ttl_seconds, environment_id,
                                  memory_profile, verifier_storage, storage)
@@ -1002,6 +1028,12 @@ class SandboxManager:
                                 if selected is not sb:
                                     sb.lock.release()
                     if selected is not None:
+                        try:
+                            if getattr(self, 'node_admission', None) is not None:
+                                self.node_admission.checkout(selected)
+                        except BaseException:
+                            selected.lock.release()
+                            raise
                         original = (selected.reserved, selected.warm_pool_hit,
                                     selected.ttl, selected.deadline,
                                     selected.last_create_phases)
@@ -1112,6 +1144,9 @@ class SandboxManager:
             if self.closed:
                 raise SandboxError("Manager closed")
             if sum(s.state != "STOPPED" for s in self.sandboxes.values()) >= self.capacity:
+                if (getattr(self, 'node_admission', None) is not None and
+                        not getattr(self.node_admission.local, 'source_effects', False)):
+                    raise NodeAdmissionBusy(['sandbox_capacity'])
                 raise SandboxError("Sandbox capacity reached")
             network_slot = None
             if environment_id in self.tb2_templates and self.tb2_network_manager:
@@ -1119,6 +1154,9 @@ class SandboxManager:
                             if s.state != "STOPPED"}
                 network_slot = self.tb2_network_manager.allocate(occupied)
                 if network_slot is None:
+                    if (getattr(self, 'node_admission', None) is not None and
+                            not getattr(self.node_admission.local, 'source_effects', False)):
+                        raise NodeAdmissionBusy(['network_slots'])
                     raise SandboxError("TB2 network namespace capacity reached")
             elif environment_id in self.tb2_templates and self.tb2_network_slots:
                 occupied = {s.network_slot for s in self.sandboxes.values()
@@ -1126,10 +1164,29 @@ class SandboxManager:
                 network_slot = next((name for name in self.tb2_network_slots
                                      if name not in occupied), None)
                 if network_slot is None:
+                    if (getattr(self, 'node_admission', None) is not None and
+                            not getattr(self.node_admission.local, 'source_effects', False)):
+                        raise NodeAdmissionBusy(['network_slots'])
                     raise SandboxError("TB2 network slot capacity reached")
-            sb = Sandbox(self, idle_ttl_seconds, environment_id, memory_profile,
-                         verifier_storage, reserved=reserved, storage=storage,
-                         environment_spec=environment_spec)
+            lease_id = None
+            if getattr(self, 'node_admission', None) is not None:
+                lease_id = self.node_admission.allocate('microvm', configured_limits={
+                    'environment_id':environment_id,
+                    'cpu_count':self.tb2_resources.get(environment_id, {}).get('cpus', 1),
+                    'memory_mb':(self.tb2_resources.get(environment_id, {}).get('memory_mb', 2048)
+                                 if environment_id in self.tb2_templates else
+                                 512 if environment_id == 'e3-mixed' else 256)})
+            try:
+                sb = Sandbox(self, idle_ttl_seconds, environment_id, memory_profile,
+                             verifier_storage, reserved=reserved, storage=storage,
+                             environment_spec=environment_spec)
+            except BaseException:
+                # Internal pool creation has no RPC request context to release
+                # an unbound intent. No host handles have been allocated yet.
+                if lease_id is not None:
+                    self.node_admission.release_unbound(lease_id)
+                raise
+            sb.node_lease_id = lease_id
             sb.network_slot = network_slot
             sb.network_mode = ("netns" if self.tb2_network_manager and network_slot else
                                "tap_pool" if network_slot else
@@ -1141,6 +1198,8 @@ class SandboxManager:
             # cannot observe or stop a half-built VM.
             sb.lock.acquire()
         try:
+            if getattr(self, 'node_admission', None) is not None:
+                self.node_admission.bind(lease_id, sb.id)
             sb._persist()
             advance("network_setup")
             network=None
@@ -1192,6 +1251,8 @@ class SandboxManager:
             sb._event("RUNNING"); sb._touch()
             advance("done")
             sb.last_create_phases = phases
+            if getattr(self, 'node_admission', None) is not None:
+                self.node_admission.created('microvm', sb.id, ready=sb.reserved)
             return sb
         except Exception as exc:
             advance("failed")
