@@ -11,6 +11,29 @@ import dsec_host
 from service_admin import matches_daemon
 
 
+class ConcurrentBudgetPublicationTests(unittest.TestCase):
+    def test_concurrent_service_writers_publish_complete_json_without_temp_collision(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import os
+        import threading
+        from dsec._persistence import atomic_json
+        barrier = threading.Barrier(2)
+        replace = os.replace
+        with tempfile.TemporaryDirectory() as tmp:
+            budget = Path(tmp)/'budget.json'
+            values = [{'writer':i, 'payload':'x'*65536} for i in range(2)]
+            def rendezvous(source, target):
+                barrier.wait(timeout=5)
+                replace(source, target)
+            with patch('dsec._persistence.os.replace', side_effect=rendezvous), \
+                    ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(atomic_json, budget, value) for value in values]
+                for future in futures:
+                    future.result(timeout=10)
+            self.assertIn(json.loads(budget.read_text()), values)
+            self.assertEqual(list(budget.parent.iterdir()), [budget])
+
+
 class HostConfigurationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

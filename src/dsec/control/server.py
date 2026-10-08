@@ -98,15 +98,17 @@ class Handler(socketserver.StreamRequestHandler):
                             try:
                                 value=self._dispatch(op,req.get("sandbox_id"),args,request_id)
                                 response={"request_id":request_id,"ok":True,"result":value}
-                            except NodeAdmissionBusy as exc:
-                                # The node guard proved that allocation never
-                                # started. This identity may stay queued.
-                                self.server.journal.reject_before_effect(request_id)
+                            except (NodeAdmissionBusy, ServiceBusy) as exc:
+                                # These errors prove rejection before effects:
+                                # budget admission or the sandbox operation
+                                # lock. Keep a stable request ID retryable.
+                                self.server.journal.reject_before_effect(request_id,operation=op)
                                 admitted=False
                                 commit_response=False
-                                response={"request_id":request_id,"ok":False,"error":{
-                                    "type":"NodeAdmissionBusy","message":str(exc),
-                                    "details":{"reasons":exc.reasons}}}
+                                error={"type":type(exc).__name__,"message":str(exc)}
+                                if isinstance(exc,NodeAdmissionBusy):
+                                    error['details']={'reasons':exc.reasons}
+                                response={"request_id":request_id,"ok":False,"error":error}
                             except NodeLeaseUncertain as exc:
                                 # Preserve PENDING and report uncertainty now;
                                 # a caller must query, never repeat this effect.
@@ -143,7 +145,7 @@ class Handler(socketserver.StreamRequestHandler):
                         "rejected_requests":self.server.rejected_requests}
             return {"pid":os.getpid(),"recovery_events":manager.recovery_events,
                     "monitor_errors":manager.errors,"warm_pool":manager.warm_pool_status(),
-                    "protocol_features":["container-rpc-v1"] + (
+                    "protocol_features":["container-rpc-v1", "busy-nonadmission-v1"] + (
                         ["node-admission-v1"] if getattr(self.server, 'node_admission', None) else []),
                     "admission_worker_socket":self.server.admission_worker_socket,**counts}
         if op=="node_status":

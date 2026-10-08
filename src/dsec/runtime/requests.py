@@ -51,13 +51,14 @@ class RequestJournal:
                                "digest": digest, "state": "PENDING"})
             return None
 
-    def reject_before_effect(self, request_id):
-        """Forget only a pending request whose resource guard proved non-admission."""
+    def reject_before_effect(self, request_id, *, operation='create'):
+        """Forget a pending intent after a guard proves no effects were admitted."""
         path = self._path(request_id)
         with self.lock:
             record = json.loads(path.read_text())
-            if record['state'] != 'PENDING' or record['operation'] != 'create':
-                raise RuntimeError('Only unallocated creates can be rejected')
+            if (operation not in MUTATING or record['state'] != 'PENDING' or
+                    record['operation'] != operation):
+                raise RuntimeError('Only matching pending non-admitted operations can be rejected')
             path.unlink()
             fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
             try:

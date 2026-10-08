@@ -103,6 +103,43 @@ class EdgeLeaseTests(unittest.IsolatedAsyncioTestCase):
         await worker.initialize()
         return worker
 
+    async def test_busy_before_execution_keeps_request_id_retryable_and_effect_runs_once(self):
+        vm = await self.client.run_microvm(request_id='a'*32)
+        sandbox = self.manager.sandboxes[vm.id]
+        result = dict(exit_code=0, output='once', timed_out=False, truncated=False)
+        with patch.object(MicroVM, 'execute', return_value=result) as effect:
+            sandbox.lock.acquire()
+            try:
+                with self.assertRaises(ServiceError) as refused:
+                    await asyncio.to_thread(self.client._transport.call, 'execute', vm.id,
+                        request_id='b'*32, command='write once', timeout_ms=5000, output_limit=65536)
+                self.assertEqual(refused.exception.kind, 'ServiceBusy')
+                self.assertEqual(self.server.journal.lookup('b'*32)['state'], 'NOT_FOUND')
+                effect.assert_not_called()
+                pending = asyncio.create_task(vm.run_shell('write once', request_id='b'*32))
+                await asyncio.sleep(.1)
+                self.assertFalse(pending.done())
+                effect.assert_not_called()
+            finally:
+                sandbox.lock.release()
+            self.assertEqual(await asyncio.wait_for(pending, 3), result)
+            self.assertEqual(await vm.run_shell('write once', request_id='b'*32), result)
+            effect.assert_called_once()
+            self.assertEqual(self.server.journal.lookup('b'*32)['state'], 'DONE')
+            with self.assertRaises(RuntimeError):
+                self.server.journal.reject_before_effect('b'*32,operation='execute')
+            self.assertEqual(self.server.journal.lookup('b'*32)['state'], 'DONE')
+        await vm.stop()
+
+    async def test_explicit_id_busy_against_legacy_service_is_not_retried(self):
+        from dsec.sdk.client import DSecSandbox
+        transport = unittest.mock.Mock()
+        transport.call.side_effect = ServiceError('ServiceBusy', 'legacy cached rejection')
+        vm = DSecSandbox(transport, '123456abcdef')
+        with self.assertRaises(ServiceError):
+            await vm.run_verifier_shell('write once', timeout_ms=5000, request_id='c'*32)
+        transport.call.assert_called_once()
+
     async def test_direct_vm_and_container_share_one_budget_and_retry_only_nonadmission(self):
         vm = await self.client.run_microvm(request_id='1'*32)
         container = await self.client.run_container(request_id='2'*32)

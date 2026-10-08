@@ -88,6 +88,9 @@ class ModuleBoundaryTests(unittest.TestCase):
             self.assertEqual(journal.lookup(request['request_id'])['state'], 'UNKNOWN')
             with self.assertRaises(RequestUncertain):
                 journal.begin(request)
+            with self.assertRaises(RuntimeError):
+                journal.reject_before_effect(request['request_id'],operation=request['operation'])
+            self.assertEqual(journal.lookup(request['request_id'])['state'], 'UNKNOWN')
 
     def test_compatibility_imports_share_implementation_and_patches(self):
         for legacy, canonical in ALIASES.items():

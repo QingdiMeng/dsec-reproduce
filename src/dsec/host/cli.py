@@ -512,7 +512,7 @@ async def smoke(cfg, out, *, restart_services=False):
         else:
             await asyncio.to_thread(subprocess.run, ['systemctl', '--user', 'restart', *names],
                                     check=True, capture_output=True, text=True, timeout=120)
-        await asyncio.to_thread(wait_ready, cfg, 30)
+        await asyncio.to_thread(wait_ready, cfg, 120)
     client = ScheduledDSecClient(Path(cfg['state_root'])/'worker/worker.sock')
     try:
         await client.open()

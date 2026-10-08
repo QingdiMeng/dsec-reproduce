@@ -90,7 +90,7 @@ async def verify(args):
         names = ['dsec-'+cfg['instance']+'-'+role+'.service' for role in ('sandbox', 'worker')]
         await asyncio.to_thread(subprocess.run, ['systemctl', '--user', 'restart', *names],
                                 check=True, capture_output=True, timeout=120)
-        await asyncio.to_thread(wait_ready, cfg, 30)
+        await asyncio.to_thread(wait_ready, cfg, 120)
 
     try:
         atomic_json(destination, report)

@@ -1,6 +1,6 @@
 # Roadmap: reproducing DSec as a usable elastic sandbox system
 
-Updated: 2026-10-06. Baseline: the `0.1.0.dev0` r5 installation candidate.
+Updated: 2026-10-08. Baseline: `0.1.0.dev0`, with modular R3 acceptance in progress.
 
 The goal is a general elastic sandbox system for agent workloads and RL, with
 reproducible evidence for the mechanisms described in the
@@ -37,7 +37,13 @@ TB2.1 task adapters, pinned suite/verifier rules, command normalization and
 cache manifests now live in the optional application. Generic catalog loading
 and Miles policy sessions do not require it; legacy CLI/import/operation names
 remain compatibility bridges. R2 local responsibility separation is complete;
-R3 real-host upgrade and application acceptance remain pending.
+R3 has passed real old-to-new VM/container adoption, restart recovery, shared
+node admission, ready checkout, prepared-state forks, a TB2.1 official verifier
+and a four-step native MBPP/verl GRPO integration with nonzero gradient.
+Installed Linux regression: 322 passed and one expected release-boundary skip.
+Real 3FS-source acceptance after restoring the offline service remains pending;
+R3 is not completely closed. See the
+[installation acceptance](docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md).
 Interactive sessions and complete aether/chronus remain later capabilities. This does not change the mechanism
 validation statuses below; moving a component does not establish a missing
 paper capability.

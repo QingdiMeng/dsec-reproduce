@@ -62,6 +62,16 @@ Edge uses it for runtime operations and the worker's existing resource monitor
 uses it for observation. Other legacy E1/E2 artifact variables, if used, must
 also be supplied to the sandbox service rather than the training process.
 
+Set `worker.container_agent` to the standalone installed implementation:
+
+```bash
+python -c 'import dsec.runtime.backends.container_agent as agent; print(agent.__file__)'
+```
+
+The legacy `container_runtime_agent` module is an import compatibility bridge.
+Binding that bridge alone into a tools image without the DSec package does not
+provide the standalone agent. Existing custom agents remain explicit paths.
+
 The container directory has one Edge owner lock. Existing
 `lifecycle-requests/*.json` retain their request IDs, operation names, digests
 and schema. An in-flight or uncommitted result stays UNKNOWN until a read-only
@@ -72,8 +82,11 @@ creation. The legacy worker admission socket is incompatible with `--node-budget
 Closing a client or normally retiring the service does not stop live containers;
 release owned sandboxes through the SDK before removing their instance.
 
-For this refactor, local RPC and journal fault tests use an instrumented backend.
-Real Docker service upgrades remain part of the Linux acceptance gate. The host
+R3 real-host acceptance preserved one old-client-created container through new
+Edge adoption and preserved another through service restart, including action
+deduplication, private writes and final lease release. See the
+[installation acceptance](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md).
+The host
 container backend retains its trusted single-host development/comparison scope;
 this change does not implement container containment inside a VM, container
 pause/memory offload or a general container inventory/TTL controller.
@@ -194,14 +207,24 @@ Only `NodeAdmissionBusy` proves that creation had no sandbox effects. A schedule
 worker records its reasons and elapsed waiting time, and retries the same stable
 request ID. A direct SDK caller receives that error and chooses when to retry.
 UNKNOWN, transport failures and uncertain resource commits are not replayed.
+For shell execution and stop, `busy-nonadmission-v1` additionally guarantees that
+`ServiceBusy` from operation-lock contention leaves no admitted journal intent
+or effects. The SDK may wait and retry with the same supplied request ID only
+when the service advertises that capability. Explicit-ID calls against older
+services keep their original behavior; UNKNOWN never becomes retryable.
 Existing request IDs, argument digests and lifecycle journals remain unchanged;
 resource hints are an optional create envelope and must also match on retries.
 
 For an upgrade, stop the old worker, restart Edge using the same owned instance
 roots and new budget, then restart the worker. Edge conservatively adopts existing
 VM/container records; missing registry entries or unavailable Docker do not prove
-absence. Preserve existing journals. Local fault tests cover lease recovery and cleanup invariants;
-real Linux/KVM/Docker upgrade acceptance remains pending.
+absence. Preserve existing journals. R3 verified a running and a paused old VM,
+and an old-client-created container, using their original durable records.
+Check directory ownership and permissions before upgrading: the host rejects
+unexpected shared access. For example, a legacy-created parent inheriting 0775
+requires an operator-reviewed permission correction; the service does not
+silently change arbitrary existing directories. Retain the distinct OverlayBD
+2710/group-search policy described above.
 
 Queued API calls consume neither rate tokens nor concurrency until dispatched.
 Calls already attempted retain their RPM/estimated TPM reservation if cancelled

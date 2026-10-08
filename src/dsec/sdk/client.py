@@ -12,10 +12,11 @@ from dsec.sdk.scheduled import ScheduledDSecClient, ScheduledOutcomeUnknown
 
 
 class DSecSandbox:
-    def __init__(self, transport: SandboxClient, sandbox_id: str):
+    def __init__(self, transport: SandboxClient, sandbox_id: str, *, retry_busy=False):
         self._transport = transport
         self.id = sandbox_id
         self.backend = "microvm"
+        self._retry_busy = retry_busy
 
     async def seal_baseline(self, *, allow_prepared_state=False, request_id=None):
         return await asyncio.to_thread(self._transport.call, "seal_baseline", self.id,
@@ -26,15 +27,17 @@ class DSecSandbox:
 
     async def _call_when_ready(self, operation: str, *, request_id: str | None = None,
                                **args):
-        # ServiceBusy proves non-admission. Never replace a caller's durable
-        # request ID behind its journal; unidentified calls may wait and retry.
+        # A current service guarantees ServiceBusy leaves no journal intent or
+        # effects. Wait with the same supplied ID. Older services may cache
+        # that rejection; preserve their explicit-ID behavior.
         for attempt in range(35):
             try:
                 return await asyncio.to_thread(
                     self._transport.call, operation, self.id,
                     request_id=request_id, **args)
             except ServiceError as exc:
-                if exc.kind != "ServiceBusy" or request_id is not None or attempt == 34:
+                if (exc.kind != "ServiceBusy" or attempt == 34 or
+                        (request_id is not None and not self._retry_busy)):
                     raise
                 await asyncio.sleep(min(0.05 * (2 ** attempt), 1.0))
 
@@ -124,7 +127,8 @@ class DSecClient:
             raise UnsupportedCapability("per-create timeout is not supported by the local service")
         result = await asyncio.to_thread(self._transport.call, "create",
                                          request_id=request_id, resource_demand=self._node_hint(resource_demand), **service_args)
-        return DSecSandbox(self._transport, result["id"])
+        return DSecSandbox(self._transport, result["id"],
+                           retry_busy='busy-nonadmission-v1' in self._features)
 
     async def lookup_request(self, request_id: str):
         self._require_open()
@@ -175,7 +179,8 @@ class DSecClient:
         status = await asyncio.to_thread(self._transport.call, "status", sandbox_id)
         if status["state"] not in ("RUNNING", "PAUSED"):
             raise RuntimeError(f"Cannot attach to sandbox in {status['state']}")
-        return DSecSandbox(self._transport, sandbox_id)
+        return DSecSandbox(self._transport, sandbox_id,
+                           retry_busy='busy-nonadmission-v1' in self._features)
 
 
 class DSecContainerSandbox:
