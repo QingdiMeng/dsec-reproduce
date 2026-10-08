@@ -11,6 +11,29 @@ import dsec_host
 from service_admin import matches_daemon
 
 
+class ConcurrentBudgetPublicationTests(unittest.TestCase):
+    def test_concurrent_service_writers_publish_complete_json_without_temp_collision(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import os
+        import threading
+        from dsec._persistence import atomic_json
+        barrier = threading.Barrier(2)
+        replace = os.replace
+        with tempfile.TemporaryDirectory() as tmp:
+            budget = Path(tmp)/'budget.json'
+            values = [{'writer':i, 'payload':'x'*65536} for i in range(2)]
+            def rendezvous(source, target):
+                barrier.wait(timeout=5)
+                replace(source, target)
+            with patch('dsec._persistence.os.replace', side_effect=rendezvous), \
+                    ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(atomic_json, budget, value) for value in values]
+                for future in futures:
+                    future.result(timeout=10)
+            self.assertIn(json.loads(budget.read_text()), values)
+            self.assertEqual(list(budget.parent.iterdir()), [budget])
+
+
 class HostConfigurationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -35,8 +58,8 @@ class HostConfigurationTests(unittest.TestCase):
         self.assertEqual(cfg['worker']['tb2_tasks_dir'], str(self.root/'tasks'))
         args = dsec_host.sandbox_arguments(cfg)
         self.assertEqual(args[args.index('--root')+1], str(self.root/'state/sandboxes'))
-        self.assertEqual(args[args.index('--admission-worker-socket')+1],
-                         str(self.root/'state/worker/worker.sock'))
+        self.assertEqual(args[args.index('--node-budget')+1],
+                         str(self.root/'state/worker/budget.json'))
 
     def test_proxy_bypass_host_reaches_daemon_arguments(self):
         self.data['sandbox']['egress_proxy_bypass_host'] = ['archive.ubuntu.com', 'security.ubuntu.com']
@@ -77,6 +100,28 @@ class HostConfigurationTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.load()
                 self.data = saved
+
+    def test_container_configuration_is_applied_to_edge_and_broker_to_both_services(self):
+        import os
+        self.data['worker'].update(container_root='containers', container_catalog='catalog.json',
+                                   container_agent='agent.py', docker_broker_socket='broker.sock')
+        cfg = self.load()
+        with patch.dict(os.environ, {}, clear=True), patch('os.umask'), patch('os.execv') as execute:
+            dsec_host.run_service(cfg, 'sandbox')
+            for variable, name in [('DSEC_CONTAINER_ROOT', 'containers'),
+                                   ('DSEC_ENVIRONMENT_CATALOG', 'catalog.json'),
+                                   ('DSEC_CONTAINER_AGENT', 'agent.py'),
+                                   ('DSEC_DOCKER_BROKER_SOCKET', 'broker.sock')]:
+                self.assertEqual(os.environ[variable], str(self.root / name))
+            self.assertIn('sandboxd', execute.call_args.args[1])
+        with patch.dict(os.environ, {}, clear=True), \
+                patch('os.umask'), \
+                patch('sandbox_client.SandboxClient.call', return_value={'pid':42}), \
+                patch('os.execv'):
+            dsec_host.run_service(cfg, 'worker')
+            self.assertEqual(os.environ['DSEC_DOCKER_BROKER_SOCKET'], str(self.root / 'broker.sock'))
+            self.assertNotIn('DSEC_CONTAINER_ROOT', os.environ)
+            self.assertNotIn('DSEC_ENVIRONMENT_CATALOG', os.environ)
 
     def test_unit_quotes_shell_arguments_and_disables_environment_expansion(self):
         self.config = self.root/"host $cash %name's.json"

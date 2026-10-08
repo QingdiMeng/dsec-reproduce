@@ -2,6 +2,7 @@
 
 import argparse
 from email.parser import BytesParser
+from fnmatch import fnmatchcase
 from pathlib import Path
 import tomllib
 from zipfile import ZipFile
@@ -14,14 +15,44 @@ def main() -> None:
     args = parser.parse_args()
     config = tomllib.loads(args.project.read_text())
     settings = config['tool']['setuptools']
-    allowed = {name + ".py" for name in settings["py-modules"]}
+    allowed = {name + ".py" for name in settings.get("py-modules", [])}
+    source_paths = {name: name for name in allowed}
     data = set()
     root = args.project.resolve().parent
-    for package in settings.get('packages', []):
-        directory = root/package.replace('.', '/')
-        allowed.update(str(path.relative_to(root)) for path in directory.rglob('*.py'))
+    packages = settings.get('packages', [])
+    mappings = settings.get('package-dir', {})
+    if isinstance(packages, dict):
+        discovery = packages['find']
+        found = []
+        # The optional applications use one source root with regular packages.
+        where, = discovery.get('where', ['.'])
+        mappings = dict(mappings, **{'': where})
+        for initializer in (root/where).rglob('__init__.py'):
+            package = '.'.join(initializer.parent.relative_to(root/where).parts)
+            if (package and any(fnmatchcase(package, pattern)
+                                for pattern in discovery.get('include', ['*'])) and
+                    not any(fnmatchcase(package, pattern)
+                            for pattern in discovery.get('exclude', []))):
+                found.append(package)
+        packages = sorted(found)
+    for package in packages:
+        parts = package.split('.')
+        prefix = next(('.'.join(parts[:n]) for n in range(len(parts), 0, -1)
+                       if '.'.join(parts[:n]) in mappings), '')
+        relative = (Path(mappings[prefix]).joinpath(*parts[len(prefix.split('.')):])
+                    if prefix else Path(mappings.get('', '')).joinpath(*parts))
+        directory = root / relative
+        installed = Path(*parts)
+        for path in directory.rglob('*.py'):
+            name = str(installed / path.relative_to(directory))
+            allowed.add(name)
+            source_paths[name] = str(path.relative_to(root))
         for pattern in settings.get('package-data', {}).get(package, []):
-            data.update(str(path.relative_to(root)) for path in directory.glob(pattern) if path.is_file())
+            for path in directory.glob(pattern):
+                if path.is_file():
+                    name = str(installed / path.relative_to(directory))
+                    data.add(name)
+                    source_paths[name] = str(path.relative_to(root))
     with ZipFile(args.wheel) as archive:
         names = set(archive.namelist())
         metadata_names = [name for name in names if name.endswith('.dist-info/METADATA')]
@@ -38,7 +69,7 @@ def main() -> None:
             if path not in names or archive.read(path) != (root/name).read_bytes():
                 raise SystemExit('Missing or changed license file: '+name)
         for name in sorted(allowed | data):
-            if name in names and archive.read(name) != (root/name).read_bytes():
+            if name in names and archive.read(name) != (root/source_paths[name]).read_bytes():
                 raise SystemExit('Wheel payload differs from project source: '+name)
     sources = {name for name in names if name.endswith(".py")}
     if sources != allowed:

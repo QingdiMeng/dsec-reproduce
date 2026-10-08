@@ -18,7 +18,7 @@ class NetnsPlanTests(unittest.TestCase):
         response = {'pid':42, 'namespace_attested':True, 'identity':{}}
         attached = SimpleNamespace(AttachedProcess=lambda *args, **kwargs:'attached')
         with patch.object(manager, 'ensure'), patch.object(manager, '_call', return_value=response) as call, \
-                patch.dict(sys.modules, {'durable_manager':attached}):
+                patch.dict(sys.modules, {'dsec.runtime.registry':attached}):
             self.assertEqual(launcher.start('/opt/dsec/firecracker-dax', '/tmp/api.sock', None, 'vmm.log'),
                              'attached')
             call.assert_called_once_with('launch', 'aaaaaaaaaaaa', 'vmm.log@dax39')

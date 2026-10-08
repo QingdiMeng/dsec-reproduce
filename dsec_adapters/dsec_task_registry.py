@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from .counter_dsec_environment import CounterDSecEnvironment
-from .tb2_dsec_environment import TB2DSecEnvironment
 
 
 EVALUATORS = {"tb2": "tests/test.sh", "counter": "counter-exact-value"}
@@ -18,7 +17,8 @@ def environment_kind(metadata: dict | None) -> str:
 
 def task_adapter(kind: str):
     if kind == "tb2":
-        return TB2DSecEnvironment.from_environment()
+        from dsec.compat.applications import require_tb21
+        return require_tb21("tb2_dsec_environment").TB2DSecEnvironment.from_environment()
     if kind == "counter":
         return CounterDSecEnvironment()
     raise ValueError("Unsupported DSec task environment")

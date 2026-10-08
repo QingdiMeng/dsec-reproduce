@@ -44,6 +44,53 @@ parent. The path must fit Linux's Unix-socket length limit. Each instance derive
 independent daemon sockets, worker sockets, rollout records and scheduler budget
 under `state_root/sandboxes` and `state_root/worker`.
 
+### Container runtime ownership
+
+The sandbox service owns container backends, artifact resolution and lifecycle
+journals. `DSecClient` is a transport-only SDK; its caller needs the service
+socket rather than local image paths or Docker access. `health` advertises
+`container-rpc-v1`. A new client refuses container calls against an older
+service; it does not fall back to managing host Docker itself. Upgrade the
+client and sandbox service from the same revision.
+
+For schema-1 compatibility, `worker.container_root`, `worker.container_catalog`
+and `worker.container_agent` remain configuration keys, but `dsec-host` applies
+them to the **sandbox service** as `DSEC_CONTAINER_ROOT`,
+`DSEC_ENVIRONMENT_CATALOG` and `DSEC_CONTAINER_AGENT`. Paths resolve from the
+configuration file. `worker.docker_broker_socket` is applied to both services:
+Edge uses it for runtime operations and the worker's existing resource monitor
+uses it for observation. Other legacy E1/E2 artifact variables, if used, must
+also be supplied to the sandbox service rather than the training process.
+
+Set `worker.container_agent` to the standalone installed implementation:
+
+```bash
+python -c 'import dsec.runtime.backends.container_agent as agent; print(agent.__file__)'
+```
+
+The legacy `container_runtime_agent` module is an import compatibility bridge.
+Binding that bridge alone into a tools image without the DSec package does not
+provide the standalone agent. Existing custom agents remain explicit paths.
+
+The container directory has one Edge owner lock. Existing
+`lifecycle-requests/*.json` retain their request IDs, operation names, digests
+and schema. An in-flight or uncommitted result stays UNKNOWN until a read-only
+attestation proves completion; a request is never repeated to obtain that proof.
+Formal host deployments use the Edge node budget for both container and microVM
+creation. The legacy worker admission socket is incompatible with `--node-budget`;
+`dsec-host run sandbox` clears the inherited legacy socket environment setting.
+Closing a client or normally retiring the service does not stop live containers;
+release owned sandboxes through the SDK before removing their instance.
+
+R3 real-host acceptance preserved one old-client-created container through new
+Edge adoption and preserved another through service restart, including action
+deduplication, private writes and final lease release. See the
+[installation acceptance](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md).
+The host
+container backend retains its trusted single-host development/comparison scope;
+this change does not implement container containment inside a VM, container
+pause/memory offload or a general container inventory/TTL controller.
+
 With OverlayBD enabled, `state_root` and its `sandboxes` directory use mode
 2710 and group `kvm`: the storage daemon can traverse them but cannot list or
 write the control directory. Worker records and control sockets remain private;
@@ -72,6 +119,21 @@ Recipes independently select local/3FS layers, DAX and file/OverlayBD roots;
 3FS is optional. OverlayBD needs `sandbox.overlaybd_ublk_socket` and
 `sandbox.overlaybd_global_config`. Hashes, layer layout and guest resource limits
 are validated by `run sandbox --validate-only` and before serving them.
+
+A 3FS deployment must provision matching server/client binaries and their
+dynamic libraries, the configured RDMA device, listener NIC/address, and a live
+`fuse.hf3fs` source mount readable by the runtime user. Keep a reproducible runtime
+dependency set: check the restored executables
+with `ldd` inside the intended runtime image before starting services, and pin
+required library packages in that image or an explicitly versioned library mount.
+Do not rely on packages installed only in an existing container's writable layer.
+Publishing to that store
+also needs a separately writable artifact directory; `allow_other` alone does
+not grant publication rights. Keep FUSE propagation scoped to the dedicated
+storage subtree and avoid overlapping recursive parent binds. Core installation
+does not provision or repair this external cluster. R3 exercised one real 3FS
+EROFS layer through two VMs, including private-write isolation and pause/restore;
+that functional check is not a distributed-storage or cold-read benchmark.
 
 For TB2.1 add `worker.tb2_tasks_dir`, `sandbox.tb2_manifest`, and the chosen
 `tb2_verifier_artifact_manifest`/`tb2_verifier_artifact_local`. The installed
@@ -114,6 +176,75 @@ from the guest before enabling it. Hostnames are validated and bounded to 32.
 localhost. `scheduler.shared_services` uses the existing shared-service monitor
 configuration. API budgets apply to worker `policy_call` accounting; model calls
 made directly by an external trainer need corresponding client-side rate control.
+
+The existing resource and API fields in `scheduler` retain their defaults.
+Edge reads only the physical `NodeBudget` fields from the common budget file;
+`api_episode_slots` is a worker job quota, and inflight/RPM/TPM limits belong to
+its separate API quota. `dsec-host` passes this file through `--node-budget`.
+A standalone sandbox daemon can use a physical-only budget JSON, including
+`network_interface` and optionally `disk_path`/`disk_device` for host sampling.
+Formal scheduled workers require the service's `node-admission-v1` capability.
+
+Edge persists one lease per physical sandbox under
+`state_root/sandboxes/node-leases`, before VMM/container or host handle allocation.
+Direct SDK creates, multiple workers connected to this Edge, baseline forks and
+ready-pool checkout share this admission authority. Checkout transfers the ready
+VM's existing lease and admits only the reservation increase; it does not reserve
+another copy of its memory or disk. TTL cleanup releases the physical lease
+without waiting for a worker receipt. Cleanup failure or uncertain ownership
+retains the lease. Worker restart restores job slots without adding node leases.
+
+Virtual guest memory limits, physical admission estimates and measured PSS are
+separate quantities. The default active/create reservation is 1 CPU, 512 MiB
+memory, 1024 MiB disk and 1 Mbps network; this does not change a manifest's guest
+memory limit. Optional `scheduler.node_default_demand` and `node_ready_demand`
+accept the `NodeDemand` fields (`cpu`, `memory_mb`, `disk_mb`, `network_mbps`,
+`disk_io_mbps`) to configure these estimates. Each override must provide the
+first four fields; `disk_io_mbps` is optional. By default ready demand keeps the
+active memory/disk estimate, reduces CPU to at most 0.05 and sets network/disk-I/O
+to zero. Pool boot reserves the maximum of create and ready estimates; checkout
+must acquire the active increase. These defaults are provisional estimates,
+not a measured density claim or hard cgroup enforcement, and need real-host
+calibration. Whole-host pressure floors still apply, including external loads.
+
+The node scope is **one Edge instance**, not all independent instances on a host.
+Partition host budgets between independent Edge instances. `node_status` exposes
+the authoritative scope, budget, reservations, live lease identities and host
+sample; `scheduler_status.resource_scopes` derives its node view from Edge.
+Workers connected to the same Edge repeat that global node view: do not sum their
+physical reservation metrics. Job/API views remain worker-local. Multiple workers
+do not automatically share a provider-account limit; partition that limit between
+them. Sharing an API quota object coordinates schedulers within one process only;
+restarting that process resets its rate window. Live partial budget replacement
+is not supported.
+
+Only `NodeAdmissionBusy` proves that creation had no sandbox effects. A scheduled
+worker records its reasons and elapsed waiting time, and retries the same stable
+request ID. A direct SDK caller receives that error and chooses when to retry.
+UNKNOWN, transport failures and uncertain resource commits are not replayed.
+For shell execution and stop, `busy-nonadmission-v1` additionally guarantees that
+`ServiceBusy` from operation-lock contention leaves no admitted journal intent
+or effects. The SDK may wait and retry with the same supplied request ID only
+when the service advertises that capability. Explicit-ID calls against older
+services keep their original behavior; UNKNOWN never becomes retryable.
+Existing request IDs, argument digests and lifecycle journals remain unchanged;
+resource hints are an optional create envelope and must also match on retries.
+
+For an upgrade, stop the old worker, restart Edge using the same owned instance
+roots and new budget, then restart the worker. Edge conservatively adopts existing
+VM/container records; missing registry entries or unavailable Docker do not prove
+absence. Preserve existing journals. R3 verified a running and a paused old VM,
+and an old-client-created container, using their original durable records.
+Check directory ownership and permissions before upgrading: the host rejects
+unexpected shared access. For example, a legacy-created parent inheriting 0775
+requires an operator-reviewed permission correction; the service does not
+silently change arbitrary existing directories. Retain the distinct OverlayBD
+2710/group-search policy described above.
+
+Queued API calls consume neither rate tokens nor concurrency until dispatched.
+Calls already attempted retain their RPM/estimated TPM reservation if cancelled
+or their result is unknown. API completion, cancellation or scoring never releases
+the sandbox's node lease: confirmed resource cleanup remains the release boundary.
 
 ## Commands and acceptance
 
@@ -183,3 +314,15 @@ v0.1 targets a trusted single-host runtime user. Private sockets, scoped helpers
 and leases do not isolate mutually hostile host users. Fresh-host helper
 provisioning, provenance and license review, whole-backend comparison and the
 remaining release gates are tracked in [release plan](../../ROADMAP.md).
+
+
+### Edge ownership during restart
+
+The durable Edge takes an exclusive lock on its instance directory before
+creation or recovery. A second owner is rejected. Graceful service `detach`
+persists the existing records, retires control threads and closes local process
+handles while preserving registered sandboxes for the next Edge. Old Python
+objects lose authority to execute, create or stop sandboxes after this handoff.
+Explicit Edge `close` instead stops sandboxes and releases ownership only after
+cleanup succeeds; failed cleanup retains ownership for a retry. This is one
+instance's directory ownership, not a global lock or budget across host instances.

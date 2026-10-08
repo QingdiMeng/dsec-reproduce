@@ -15,17 +15,25 @@ DOCS = (
     'docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md',
     'docs/guides/SERVICE_DEPLOYMENT.md', 'docs/architecture/SANDBOX_DAEMON.md',
     'docs/architecture/AGENT_ENVIRONMENT_CONTRACT.md', 'docs/guides/RL_FRAMEWORK_ADAPTERS.md',
+    'docs/architecture/MODULAR_REFACTOR_DESIGN.md',
     'docs/guides/ARTIFACT_PUBLICATION.md', 'docs/architecture/DOCKER_DSEC_BENCHMARK_PROTOCOL.md',
     'docs/reports/DSEC_VERITY_PILOT_REPORT.md',
     'docs/reports/DSEC_V01_GRPO_ACCEPTANCE.md',
     'docs/reports/MBPP_VERL_FIRST_USE.md',
 )
 TESTS = (
+    'tests/contracts/test_module_boundaries.py',
     'tests/unit/test_admission_guard.py',
     'tests/unit/test_agent_environment.py',
     'tests/unit/test_artifact_integrity.py',
     'tests/unit/test_artifact_publisher.py',
     'tests/unit/test_container_lifecycle_journal.py',
+    'tests/unit/test_container_edge.py',
+    'tests/unit/test_edge_assembly.py',
+    'tests/unit/test_command_sessions.py',
+    'tests/unit/test_runtime_storage.py',
+    'tests/unit/test_task_application_boundary.py',
+    'tests/unit/test_node_admission.py',
     'tests/unit/test_dsec_host.py',
     'tests/unit/test_egress_proxy.py',
     'tests/unit/test_elastic_resource_monitor.py',
@@ -53,6 +61,7 @@ TESTS = (
     'tests/unit/test_tb2_verifier_artifact.py',
     'tests/unit/test_work_journal.py',
     'tests/unit/test_work_scheduler.py',
+    'tests/unit/test_worker_evaluators.py',
     'tests/adapters/test_counter_dsec_environment.py',
     'tests/adapters/test_miles_dsec_agent_function.py',
     'tests/adapters/test_miles_dsec_generate.py',
@@ -67,6 +76,7 @@ TOOLS = (
     'tests/packaging/test_release_source.py', 'tools/check_docs.py',
     'tests/__init__.py', 'tests/unit/__init__.py', 'tests/adapters/__init__.py',
     'tests/packaging/__init__.py',
+    'tests/contracts/__init__.py', 'tests/contracts/v01_compatibility.json',
     'tools/build_smoke_guest.py', 'tools/verify_installed_task.py',
     'tools/verify_installed_fork.py', 'tools/fixtures/tb21-openssl.json',
 )
@@ -81,14 +91,23 @@ def source_files(root):
              *config['project']['license-files']}
     files.update(module+'.py' for module in settings['py-modules'])
     for package in settings['packages']:
-        directory = root/package.replace('.', '/')
+        parts = package.split('.')
+        mappings = settings.get('package-dir', {})
+        prefix = next(('.'.join(parts[:n]) for n in range(len(parts), 0, -1)
+                       if '.'.join(parts[:n]) in mappings), '')
+        relative = (Path(mappings[prefix]).joinpath(*parts[len(prefix.split('.')):])
+                    if prefix else Path(mappings.get('', '')).joinpath(*parts))
+        directory = root / relative
         files.update(str(p.relative_to(root)) for p in directory.rglob('*.py'))
         for pattern in settings.get('package-data', {}).get(package, []):
             files.update(str(p.relative_to(root)) for p in directory.glob(pattern) if p.is_file())
     for name, package_name in (("tb21", "dsec_tb21_case"), ("mbpp", "dsec_mbpp_case")):
         app = root/'apps'/name
         files.update('apps/'+name+'/'+filename for filename in ('pyproject.toml', 'README.md', 'LICENSE'))
+        app_config = tomllib.loads((app/'pyproject.toml').read_text())
+        files.update('apps/'+name+'/'+filename for filename in app_config['project']['license-files'])
         files.update(str(p.relative_to(root)) for p in (app/'src'/package_name).glob('*.py'))
+        files.update(str(p.relative_to(root)) for p in (app/'src'/package_name).glob('*.json'))
         files.add('apps/'+name+'/tests/test_case.py')
     return config, sorted(files)
 

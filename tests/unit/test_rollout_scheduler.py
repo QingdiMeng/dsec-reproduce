@@ -46,12 +46,13 @@ class Client:
         return Sandbox(self._transport)
 
 
-def scheduler():
-    budget = ResourceBudget(cpu=1, memory_mb=512, disk_mb=1024,
+def scheduler(**changes):
+    values = dict(cpu=1, memory_mb=512, disk_mb=1024,
                             network_mbps=2, api_episode_slots=1,
                             api_inflight=1, api_rpm=10, api_tpm=10000,
                             min_memory_free_mb=0, min_disk_free_mb=0)
-    return WorkScheduler(budget, Sampler(), sample_interval=.01)
+    values.update(changes)
+    return WorkScheduler(ResourceBudget(**values), Sampler(), sample_interval=.01)
 
 
 class RolloutSchedulerTests(unittest.IsolatedAsyncioTestCase):

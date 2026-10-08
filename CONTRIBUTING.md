@@ -29,6 +29,7 @@ Tests are grouped by execution requirements:
 | Directory | Purpose | Automatic discovery |
 | --- | --- | --- |
 | `tests/unit/` | Core scheduling, storage, lifecycle and recovery regressions | Yes; Linux-specific checks skip elsewhere |
+| `tests/contracts/` | Frozen v0.1 interfaces, legacy imports and module dependency boundaries | Yes |
 | `tests/adapters/` | Task, Miles message/reward and verifier guards | Yes; the legacy 3FS publisher check needs the experiment workspace |
 | `tests/packaging/` | Source export and opt-in bundle boundaries | Yes; the legacy bundle check needs the experiment workspace |
 | `tests/benchmarks/` | Comparison harness accounting and host-isolation guards | Explicit suite in the experiment workspace |
@@ -46,11 +47,13 @@ Use Python 3.11 or newer in a virtual environment:
 
 ```sh
 python -m pip install 'setuptools>=77' wheel build
+python -m pip install --no-deps -e . -e apps/tb21
 python -m build --wheel --no-isolation --outdir dist/core .
 python tools/check_wheel.py dist/core/*.whl
 python -m unittest discover -s tests/unit -t . -v
 python -m unittest discover -s tests/adapters -t . -v
 python -m unittest tests.packaging.test_release_source -v
+python -m unittest discover -s tests/contracts -t . -v
 python tools/check_docs.py
 python -m build --wheel --no-isolation --outdir dist/tb21 apps/tb21
 python -m pip install dist/core/*.whl dist/tb21/*.whl
@@ -63,6 +66,12 @@ file required by a release; do not include generated artifacts or experiment
 state. GitHub CI builds both wheels and runs selected regressions without
 provisioning KVM, Docker, GPU models or TB2.1 tasks. It is not a real sandbox
 or clean-host acceptance test.
+
+The portable TB2 verifier tests require the optional `apps/tb21` package;
+they use fixtures and do not download tasks. Core-only installations can import
+and construct the generic worker without this application. Test a new evaluator's
+normal result, invalid verdict, interruption and completed-record recovery;
+do not silently turn infrastructure failure into model reward zero.
 
 Changes to lifecycle, storage, privileges or recovery also need the relevant
 real Linux acceptance in an isolated instance. Record the exact revision,

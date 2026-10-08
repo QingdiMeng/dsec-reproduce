@@ -1,0 +1,150 @@
+{
+  "baseline_revision": "7f70524187e61e13f123c7999098858cf3411bd5",
+  "entry_points": {
+    "dsec-artifact-integrity": "artifact_integrity:main",
+    "dsec-artifact-publisher": "artifact_publisher:main",
+    "dsec-host": "dsec_host:main",
+    "dsec-prepare-image": "dsec_image.prepare:main",
+    "dsec-rollout-worker": "rollout_workerd:main",
+    "dsec-sandboxd": "sandboxd:main"
+  },
+  "mutating_operations": [
+    "create",
+    "execute",
+    "pause",
+    "prewarm",
+    "recover",
+    "resume",
+    "seal_baseline",
+    "stop"
+  ],
+  "requests": [
+    {
+      "digest": "2c3c3ef8ba9bee6c30efa82b183a44b54dfab5a8fa6e0e8045d29e6362fa4601",
+      "request": {
+        "args": {
+          "ttl_running_stop": 300
+        },
+        "operation": "create",
+        "sandbox_id": null
+      }
+    },
+    {
+      "digest": "f1511e499e696506f552f1c352c5d3262974d5be263535a7f333df9e1d7db373",
+      "request": {
+        "args": {
+          "command": "printf hello",
+          "timeout_ms": 30000
+        },
+        "operation": "execute",
+        "sandbox_id": "012345abcdef"
+      }
+    }
+  ],
+  "resources": {
+    "ResourceBudget": [
+      {
+        "default": null,
+        "name": "cpu",
+        "required": true
+      },
+      {
+        "default": null,
+        "name": "memory_mb",
+        "required": true
+      },
+      {
+        "default": null,
+        "name": "disk_mb",
+        "required": true
+      },
+      {
+        "default": null,
+        "name": "network_mbps",
+        "required": true
+      },
+      {
+        "default": null,
+        "name": "api_episode_slots",
+        "required": true
+      },
+      {
+        "default": null,
+        "name": "api_inflight",
+        "required": true
+      },
+      {
+        "default": null,
+        "name": "api_rpm",
+        "required": true
+      },
+      {
+        "default": null,
+        "name": "api_tpm",
+        "required": true
+      },
+      {
+        "default": 4096,
+        "name": "min_memory_free_mb",
+        "required": false
+      },
+      {
+        "default": 20480,
+        "name": "min_disk_free_mb",
+        "required": false
+      },
+      {
+        "default": 0.95,
+        "name": "max_cpu_utilization",
+        "required": false
+      },
+      {
+        "default": 2000,
+        "name": "api_token_reserve",
+        "required": false
+      },
+      {
+        "default": 0,
+        "name": "disk_io_mbps",
+        "required": false
+      },
+      {
+        "default": 0.95,
+        "name": "max_disk_busy",
+        "required": false
+      }
+    ],
+    "ResourceDemand": [
+      {
+        "default": null,
+        "name": "cpu",
+        "required": true
+      },
+      {
+        "default": null,
+        "name": "memory_mb",
+        "required": true
+      },
+      {
+        "default": null,
+        "name": "disk_mb",
+        "required": true
+      },
+      {
+        "default": null,
+        "name": "network_mbps",
+        "required": true
+      },
+      {
+        "default": 1,
+        "name": "api_episode_slots",
+        "required": false
+      },
+      {
+        "default": 0,
+        "name": "disk_io_mbps",
+        "required": false
+      }
+    ]
+  }
+}

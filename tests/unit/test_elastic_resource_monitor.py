@@ -14,7 +14,8 @@ from sandbox_client import ServiceError
 class Container:
     backend = "container"
     id = "a" * 32
-    _container = type("Inner", (), {"name": "dsec-e1-" + "a" * 32})()
+    async def status(self):
+        return {"state": "RUNNING", "container_name": "dsec-e1-" + self.id}
 
 
 class ResourceMonitorTests(unittest.IsolatedAsyncioTestCase):

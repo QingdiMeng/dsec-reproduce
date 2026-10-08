@@ -1,8 +1,8 @@
 # Terminal-Bench-2.1 application for DSec
 
 This optional application is installed separately from the DSec control plane.
-It contains preparation code, not tasks, images, model weights or an OpenEnv
-server. No command downloads anything implicitly. Supply a trusted checkout
+It contains task adapters, manifest validation, preparation code and a worker
+verifier plugin, not tasks, images, model weights or an OpenEnv server. No command downloads anything implicitly. Supply a trusted checkout
 and locally available images and tools explicitly.
 
 ```sh
@@ -39,6 +39,17 @@ Configure a dedicated `dsec-host` instance with the resulting catalog,
 disk and its manifest through the documented host options. Configure an
 instance-specific network helper for networked guests. TB2.1 scoring is the
 staged task's official `tests/test.sh`; verifier outputs are saved by the worker.
+Install this application in both the sandbox daemon's and worker's Python
+environments, using the same checkout as the core. The daemon delegates legacy
+`tb2_*` manifest validation to this application; the generic core needs no TB2
+installation. A missing application is reported before daemon resource creation. Configuring `worker.tb2_tasks_dir` registers
+`tb21-canonical-v1`; without that configuration the generic worker does not
+load the application. A missing application fails before worker state is
+allocated. The legacy `tb2_evaluate` request remains supported. The generic
+scheduled SDK can also call `evaluate("tb21-canonical-v1", timeout_s=12100)`;
+this evaluator accepts no verifier overrides and preserves the official
+binary reward and durable evidence requirements. See the
+[worker scoring contract](../../docs/architecture/AGENT_ENVIRONMENT_CONTRACT.md#worker-评分插件).
 
 ## Prepare a new image
 
@@ -83,3 +94,18 @@ Supply the task ID as trainer metadata. Model sampling, tokens, logprobs,
 training and any GPU integration patches belong to the trainer; installing
 this application starts no model or training process. Core installation alone
 does not install this package or prepare TB2.1 resources.
+
+## Compatibility and package boundary
+
+The historical `dsec_adapters.tb2_*` imports and `tb2_verifier_artifact` resolve
+to the implementations in `dsec_tb21_case`. Their task rules and diagnostic
+cache metadata are shipped only by this optional package. The core wheel does
+not include those JSON manifests. Install the application before using the old
+imports; the error names the installation command if it is absent.
+
+The generic Miles policy-session wrapper remains in `dsec_adapters.miles_session`.
+The historical `dsec_adapters.openenv_agent_function` aliases that wrapper and
+forwards explicit OpenEnv/TB APIs to this application. The normal DSec loop
+still runs through the DSec worker and requires no OpenEnv service. Retained
+Miles-derived code uses Apache-2.0 with its complete license text; the project's
+own code remains MIT.

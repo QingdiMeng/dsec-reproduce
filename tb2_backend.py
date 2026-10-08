@@ -92,7 +92,8 @@ class TB2ContainerBackend:
     def prove_stopped(self, sid):
         if not isinstance(sid, str) or not _ID.fullmatch(sid):
             return False
-        return _docker("inspect", self.container_prefix + sid, check=False).returncode != 0
+        result = _docker("container", "ls", "-a", "--format", "{{.Names}}", check=False)
+        return result.returncode == 0 and self.container_prefix + sid not in result.stdout.splitlines()
 
 
 class TB2Container:
@@ -108,6 +109,8 @@ class TB2Container:
     def status(self):
         result = _docker("inspect", self.name, check=False)
         if result.returncode:
+            if not self.manager.prove_stopped(self.id):
+                raise RuntimeError('Cannot prove TB2 container absence')
             return {"id": self.id, "state": "STOPPED", "backend": "tb2"}
         value = json.loads(result.stdout)[0]
         labels = value["Config"].get("Labels") or {}
@@ -129,6 +132,6 @@ class TB2Container:
     def stop(self):
         _docker("stop", "--timeout", "5", self.name, timeout=12, check=False)
         _docker("rm", "-f", self.name, check=False)
-        if _docker("inspect", self.name, check=False).returncode == 0:
-            raise RuntimeError("TB2 container still exists after stop")
+        if not self.manager.prove_stopped(self.id):
+            raise RuntimeError("TB2 container absence has not been proven after stop")
         return self.status()

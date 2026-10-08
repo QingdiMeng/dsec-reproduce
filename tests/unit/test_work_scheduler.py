@@ -4,6 +4,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from work_scheduler import HostSample, ProcHostSampler, ResourceBudget, ResourceDemand, WorkScheduler
+from dsec.contracts.resources import APILimits, NodeBudget, NodeDemand
+from dsec.runtime.resources import NodeResourceLedger
+from dsec.rollout.quotas import APIQuota
 
 
 class HostSamplerTests(unittest.TestCase):
@@ -234,6 +237,168 @@ class WorkSchedulerTests(unittest.IsolatedAsyncioTestCase):
         report = scheduler.report()
         self.assertEqual(report["api_429"], 1)
         self.assertGreater(report["api_cooldown_remaining_seconds"], 1)
+
+    async def test_episode_quota_blocks_without_charging_node_twice(self):
+        scheduler = WorkScheduler(budget(api_episode_slots=1), FakeSampler(), sample_interval=.01)
+        demand = ResourceDemand(.5, 512, 1000, 1)
+        await scheduler.acquire("one", demand)
+        queued = asyncio.create_task(scheduler.acquire("two", demand))
+        await asyncio.sleep(.03)
+        self.assertFalse(queued.done())
+        self.assertEqual(scheduler.pending_reasons["two"], ["api_episode_slots_budget"])
+        self.assertEqual(scheduler.node_ledger.reserved["memory_mb"], 512)
+        self.assertNotIn("api_episode_slots", scheduler.node_ledger.reserved)
+        self.assertEqual(scheduler.episode_quota.reserved, 1)
+        # Legacy reporting is a view: editing a snapshot cannot alter admission.
+        scheduler.reserved["memory_mb"] = 0
+        self.assertEqual(scheduler.report()["reserved"]["memory_mb"], 512)
+        queued.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await queued
+        self.assertEqual(scheduler.pending, [])
+        self.assertEqual(set(scheduler.node_ledger.leases), {"one"})
+        await scheduler.release("one")
+        self.assertEqual(scheduler.episode_quota.reserved, 0)
+        self.assertEqual(scheduler.node_ledger.reserved["memory_mb"], 0)
+
+    async def test_shared_node_ledger_enforces_one_physical_budget(self):
+        b, sampler = budget(memory_mb=1024), FakeSampler()
+        ledger = NodeResourceLedger(NodeBudget.from_resource(b), sampler)
+        first = WorkScheduler(b, sampler, node_ledger=ledger, sample_interval=.01)
+        second = WorkScheduler(b, sampler, node_ledger=ledger, sample_interval=.01)
+        demand = ResourceDemand(.5, 1024, 1000, 1)
+        await first.acquire("first", demand)
+        queued = asyncio.create_task(second.acquire("second", demand))
+        await asyncio.sleep(.03)
+        self.assertFalse(queued.done())
+        self.assertEqual(second.pending_reasons["second"], ["memory_mb_budget"])
+        self.assertEqual(second.episode_quota.reserved, 0)
+        self.assertEqual(first.report()["resource_scopes"]["node"],
+                         second.report()["resource_scopes"]["node"])
+        await first.release("first")
+        await asyncio.wait_for(queued, .2)
+        self.assertEqual(ledger.reserved["memory_mb"], 1024)
+        await second.release("second")
+        with self.assertRaises(ValueError):
+            WorkScheduler(budget(memory_mb=2048), sampler, node_ledger=ledger)
+        with self.assertRaises(AttributeError):
+            first.budget = budget(memory_mb=2048)
+        self.assertEqual(first.report()["budget"]["memory_mb"], 1024)
+
+    async def test_node_identity_conflict_does_not_release_another_owners_lease(self):
+        b, sampler = budget(), FakeSampler()
+        ledger = NodeResourceLedger(NodeBudget.from_resource(b), sampler)
+        first = WorkScheduler(b, sampler, node_ledger=ledger)
+        second = WorkScheduler(b, sampler, node_ledger=ledger)
+        demand = ResourceDemand(.5, 512, 1000, 1)
+        await first.acquire("same", demand)
+        with self.assertRaisesRegex(ValueError, "Duplicate node lease"):
+            await second.acquire("same", demand)
+        self.assertEqual(second.pending, [])
+        self.assertEqual(second.episode_quota.reserved, 0)
+        self.assertEqual(ledger.leases["same"], NodeDemand.from_resource(demand))
+        await first.release("same")
+
+    async def test_partial_admission_failure_rolls_back_only_new_node_lease(self):
+        scheduler = WorkScheduler(budget(), FakeSampler())
+        demand = ResourceDemand(.5, 512, 1000, 1)
+        await scheduler.acquire("live", demand)
+        with patch.object(scheduler.episode_quota, "reserve", side_effect=RuntimeError("quota fault")):
+            with self.assertRaisesRegex(RuntimeError, "quota fault"):
+                await scheduler.acquire("failed", demand)
+        self.assertEqual(scheduler.pending, [])
+        self.assertEqual(list(scheduler.node_ledger.leases), ["live"])
+        self.assertEqual(list(scheduler.episode_quota.leases), ["live"])
+        self.assertEqual(list(scheduler.active), ["live"])
+        await scheduler.release("live")
+
+    async def test_over_budget_unknown_recovery_keeps_both_owners_reserved(self):
+        scheduler = WorkScheduler(budget(memory_mb=512, api_episode_slots=1),
+                                  FakeSampler(), sample_interval=.01)
+        scheduler.restore("unknown", ResourceDemand(1, 1024, 1000, 1, 2))
+        self.assertEqual(scheduler.node_ledger.reserved["memory_mb"], 1024)
+        self.assertEqual(scheduler.episode_quota.reserved, 2)
+        queued = asyncio.create_task(scheduler.acquire("new", ResourceDemand(.5, 512, 1000, 1)))
+        await asyncio.sleep(.03)
+        self.assertEqual(scheduler.pending_reasons["new"],
+                         ["memory_mb_budget", "api_episode_slots_budget"])
+        await scheduler.release("unknown")
+        await asyncio.wait_for(queued, .2)
+        await scheduler.release("new")
+        self.assertEqual(scheduler.report()["reserved"]["api_episode_slots"], 0)
+
+    async def test_cancelled_api_waiter_uses_neither_concurrency_nor_rate_quota(self):
+        scheduler = WorkScheduler(budget(api_inflight=1, api_rpm=2),
+                                  FakeSampler(), sample_interval=.01)
+        entered, finish = asyncio.Event(), asyncio.Event()
+        async def create(**_):
+            entered.set()
+            await finish.wait()
+            return FakeCompletion()
+        policy = type("Policy", (), {"chat": type("Chat", (), {
+            "completions": type("Completions", (), {"create": staticmethod(create)})()})()})()
+        first = asyncio.create_task(scheduler.policy_call(policy, "model", [], {}))
+        await entered.wait()
+        waiting = asyncio.create_task(scheduler.policy_call(FakePolicy(), "model", [], {}))
+        await asyncio.sleep(.03)
+        self.assertFalse(waiting.done())
+        self.assertEqual(len(scheduler.api_window), 1)
+        waiting.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await waiting
+        self.assertEqual(scheduler.api_quota.inflight, 1)
+        finish.set()
+        await first
+        await asyncio.wait_for(scheduler.policy_call(FakePolicy(), "model", [], {}), .2)
+        self.assertEqual(scheduler.api_quota.inflight, 0)
+        self.assertEqual(scheduler.report()["api_calls"], 2)
+        self.assertEqual(len(scheduler.api_window), 2)
+        self.assertEqual(scheduler.node_ledger.reserved["memory_mb"], 0)
+
+    async def test_cancelled_attempt_keeps_rate_reservation_and_live_sandbox_lease(self):
+        scheduler = WorkScheduler(budget(), FakeSampler())
+        entered = asyncio.Event()
+        async def create(**_):
+            entered.set()
+            await asyncio.Event().wait()
+        policy = type("Policy", (), {"chat": type("Chat", (), {
+            "completions": type("Completions", (), {"create": staticmethod(create)})()})()})()
+        await scheduler.acquire("live", ResourceDemand(.5, 512, 1000, 1))
+        call = asyncio.create_task(scheduler.policy_call(policy, "model", [], {}))
+        await entered.wait()
+        call.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await call
+        self.assertEqual(scheduler.api_quota.inflight, 0)
+        self.assertEqual(len(scheduler.api_window), 1)
+        self.assertEqual(scheduler.node_ledger.reserved["memory_mb"], 512)
+        await scheduler.release("live")
+
+    async def test_explicit_shared_api_quota_limits_calls_across_schedulers(self):
+        b = budget(api_inflight=1)
+        quota = APIQuota(APILimits.from_resource(b))
+        first = WorkScheduler(b, FakeSampler(), api_quota=quota, sample_interval=.01)
+        second = WorkScheduler(b, FakeSampler(), api_quota=quota, sample_interval=.01)
+        entered, finish = asyncio.Event(), asyncio.Event()
+        async def create(**_):
+            entered.set()
+            await finish.wait()
+            return FakeCompletion()
+        policy = type("Policy", (), {"chat": type("Chat", (), {
+            "completions": type("Completions", (), {"create": staticmethod(create)})()})()})()
+        call = asyncio.create_task(first.policy_call(policy, "model", [], {}))
+        await entered.wait()
+        waiting = asyncio.create_task(second.policy_call(FakePolicy(), "model", [], {}))
+        await asyncio.sleep(.03)
+        self.assertFalse(waiting.done())
+        self.assertEqual(len(quota.window), 1)
+        self.assertGreater(second.blocked_seconds["api_inflight"], 0)
+        finish.set()
+        await asyncio.gather(call, waiting)
+        self.assertEqual(first.report()["api_calls"], 2)
+        self.assertEqual(second.report()["api_calls"], 2)
+        with self.assertRaises(ValueError):
+            WorkScheduler(budget(api_inflight=2), FakeSampler(), api_quota=quota)
 
     async def test_oversized_job_is_rejected_without_waiting(self):
         scheduler = WorkScheduler(budget(), FakeSampler())

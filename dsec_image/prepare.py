@@ -8,7 +8,7 @@ import re
 import shutil
 import subprocess
 
-from environment_catalog import MicroVMEnvironmentCatalog
+from dsec.storage.catalog import MicroVMEnvironmentCatalog
 from .boot import build
 from .layers import convert
 

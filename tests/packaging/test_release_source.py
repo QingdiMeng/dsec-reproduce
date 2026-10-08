@@ -28,6 +28,36 @@ class SourceReleaseTests(unittest.TestCase):
                              'docs/guides/QUICKSTART.md', 'apps/tb21/pyproject.toml',
                              'apps/mbpp/pyproject.toml', 'apps/mbpp/src/dsec_mbpp_case/reward.py'):
                     self.assertIn(name, manifest['files'])
+                for name in ('src/dsec/contracts/resources.py', 'src/dsec/storage/overlaybd.py',
+                             'src/dsec/sdk/sandbox_transport.py',
+                             'src/dsec/contracts/evaluation.py',
+                             'src/dsec/contracts/sandbox.py', 'src/dsec/sdk/client.py',
+                             'src/dsec/runtime/container_edge.py', 'src/dsec/control/server.py',
+                             'src/dsec/runtime/resources.py', 'src/dsec/rollout/scheduler.py',
+                             'src/dsec/rollout/quotas.py', 'src/dsec/runtime/node_admission.py',
+                             'tests/unit/test_node_admission.py',
+                             'src/dsec/runtime/transitions.py', 'src/dsec/contracts/errors.py',
+                             'src/dsec/runtime/edge.py', 'src/dsec/runtime/registry_store.py',
+                             'src/dsec/runtime/pool.py', 'src/dsec/runtime/provisioning.py',
+                             'tests/unit/test_edge_assembly.py',
+                             'src/dsec/contracts/execution.py',
+                             'src/dsec/runtime/sessions/channel.py',
+                             'src/dsec/runtime/sessions/dispatcher.py',
+                             'tests/unit/test_command_sessions.py',
+                             'src/dsec/contracts/storage.py',
+                             'src/dsec/storage/service.py', 'src/dsec/storage/snapshots.py',
+                             'tests/unit/test_runtime_storage.py',
+                             'tests/unit/test_task_application_boundary.py',
+                             'src/dsec/control/environments.py',
+                             'src/dsec/compat/applications.py',
+                             'apps/tb21/src/dsec_tb21_case/host_configuration.py',
+                             'apps/tb21/src/dsec_tb21_case/tb2_microvm_env.py',
+                             'apps/tb21/src/dsec_tb21_case/tb2_layered_uv_manifest.json',
+                             'apps/tb21/src/dsec_tb21_case/worker_evaluator.py',
+                             'tests/unit/test_worker_evaluators.py',
+                             'tests/unit/test_container_edge.py',
+                             'tests/contracts/v01_compatibility.json'):
+                    self.assertIn(name, manifest['files'])
                 self.assertFalse(any('miles_lora_nvme' in n or n.endswith('.ext4')
                                      for n in manifest['files']))
                 # Validate the exported tree, which has fewer files than the

@@ -78,7 +78,7 @@ async def verify(args):
             async def restart():
                 await asyncio.to_thread(subprocess.run, ['systemctl', '--user', 'restart', *names],
                                         check=True, capture_output=True, timeout=120)
-                await asyncio.to_thread(wait_ready, cfg, 30)
+                await asyncio.to_thread(wait_ready, cfg, 120)
             before = await asyncio.to_thread(daemon.call, 'status', environment.sandbox.sandbox_id)
             await restart()
             after = await asyncio.to_thread(daemon.call, 'status', environment.sandbox.sandbox_id)

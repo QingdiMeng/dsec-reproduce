@@ -1,6 +1,6 @@
 # Roadmap: reproducing DSec as a usable elastic sandbox system
 
-Updated: 2026-10-06. Baseline: the `0.1.0.dev0` r5 installation candidate.
+Updated: 2026-10-08. Baseline: `0.1.0.dev0`, with modular R3 functional acceptance complete.
 
 The goal is a general elastic sandbox system for agent workloads and RL, with
 reproducible evidence for the mechanisms described in the
@@ -14,6 +14,43 @@ of the paper's production platform or its performance results. Future version
 names below are planning targets, not released capabilities or calendar
 commitments. Follow the milestone order; move a date rather than weaken an
 acceptance gate.
+
+The [modular refactor design](docs/architecture/MODULAR_REFACTOR_DESIGN.md)
+was approved on 2026-10-08 against revision `7f70524`. R0 compatibility gates
+and R1 general-module migration are implemented. R2 has separated worker scoring
+into registered evaluators and the optional TB2.1 application, and moved
+container lifecycle ownership from the compatibility client to runtime Edge.
+The SDK is transport-only. Node reservation mechanics, episode slots and API
+rate quotas are now separate modules with one derived compatibility report.
+Edge now owns durable node admission for direct SDK calls and scheduled work;
+workers own only episode/API quotas. Existing pause/restore/cleanup transitions
+now live in a composed controller with Sandbox retaining the single state owner.
+Cold creation and ready-pool scheduling now use separate composed components;
+the durable registry owns directory locking and recovery, with a composed Edge
+service entry point. Bounded shell dispatch and guest/Docker command channels
+now share an explicit execution contract while retaining existing journals and
+wire protocols.
+Runtime storage now has a shared interface for catalog preparation, private
+disks, checkpoints, integrity and device cleanup over the existing file and
+OverlayBD components. Live identities/commit state remain Edge-owned.
+TB2.1 task adapters, pinned suite/verifier rules, command normalization and
+cache manifests now live in the optional application. Generic catalog loading
+and Miles policy sessions do not require it; legacy CLI/import/operation names
+remain compatibility bridges. R2 local responsibility separation is complete;
+R3 has passed real old-to-new VM/container adoption, restart recovery, shared
+node admission, ready checkout, prepared-state forks, a TB2.1 official verifier
+and a four-step native MBPP/verl GRPO integration with nonzero gradient.
+Installed Linux regression: 322 passed and one expected release-boundary skip.
+Real 3FS-source acceptance also passed after restoring a separate backup clone:
+two VMs opened the same 3FS-backed EROFS layer, preserved pause/restore state,
+isolated private writes and released their leases. The publication hash check
+warmed this object; this is functional evidence, not a cold-read or distributed
+performance result. Planned R3 functional gates are complete. Second-host
+installation and broader performance/fault campaigns remain separate gates. See the
+[installation acceptance](docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md).
+Interactive sessions and complete aether/chronus remain later capabilities. This does not change the mechanism
+validation statuses below; moving a component does not establish a missing
+paper capability.
 
 ## Current alignment with the paper
 
@@ -61,7 +98,7 @@ this milestone into another GPU optimization or performance exploration.
 
 | Work ID | Deliverable | Completion gate |
 | --- | --- | --- |
-| RM-001 | Public source release and contribution entry points | Publish the reviewed source and license notices, link quickstart/roadmap/support instructions, and identify the exact tested artifacts. Source preparation is complete; public publication remains pending. |
+| RM-001 | Public source release and contribution entry points | Public repository and development release exist, with license notices and quickstart/roadmap/support instructions. Modular R3 changes are locally committed and validated; review and publication of this revision remain pending. Keep the exact tested artifact identities in the acceptance report. |
 | RM-002 | CI for the release boundary | Linux source build, package-content checks, selected core/application regressions and documentation-link checks pass. Actual KVM checks run on a separately configured runner; ordinary CI must not imply that it exercised a VM. |
 | RM-003 | Clean-host installation acceptance | A second Linux host provisions the documented external dependencies and a fresh non-TB guest, then passes create/execute/evaluate/stop, restart recovery and cleanup. A new venv on the existing experiment host is not this gate. |
 

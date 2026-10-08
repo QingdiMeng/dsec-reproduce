@@ -31,7 +31,13 @@ dsec-prepare-image = "dsec_image.prepare:main"
 miles = ["openai>=1", "httpx>=0.27"]
 
 [tool.setuptools]
-packages = ["dsec_adapters", "dsec_image"]
+packages = [
+    "dsec", "dsec.contracts", "dsec.storage", "dsec.sdk",
+    "dsec.runtime", "dsec.runtime.isolation", "dsec.rollout", "dsec.observability",
+    "dsec.runtime.backends", "dsec.runtime.sessions", "dsec.control", "dsec.host", "dsec.compat",
+    "dsec_adapters", "dsec_image",
+]
+package-dir = {dsec = "src/dsec"}
 py-modules = [
     "admission_guard", "artifact_publisher", "artifact_integrity", "container_backend",
     "container_lifecycle_journal", "container_runtime_agent", "container_supervisord",
@@ -44,6 +50,3 @@ py-modules = [
     "service_admin", "shared_service_monitor", "tb2_backend",
     "tb2_verifier_artifact", "work_journal", "work_scheduler",
 ]
-
-[tool.setuptools.package-data]
-dsec_adapters = ["*.json"]

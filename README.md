@@ -29,6 +29,11 @@ OpenEnv is not a required service. A task plugin supplies the task instruction,
 environment and verifier; the trainer owns model sampling, tokens, logprobs
 and the RL algorithm.
 
+Core implementations are organized under [src/dsec](src/dsec/). Existing
+top-level imports and CLI names remain compatibility entry points. The
+[refactor design](docs/architecture/MODULAR_REFACTOR_DESIGN.md) distinguishes
+completed module migration from remaining runtime and application boundaries.
+
 ## Quick start
 
 Install the Python control plane on Linux with Python 3.11 or newer:
@@ -68,6 +73,13 @@ Installing the core does not download TB2.1. Install its application only when
 needed with `.venv/bin/python -m pip install ./apps/tb21`.
 
 ## Validation and limits
+
+The modular refactor passed installed Linux regression (322 tests passed, one
+expected release-boundary skip), old-to-new VM/container adoption, restart
+recovery, shared admission, representative TB2.1 verification, four-step native
+MBPP/verl GRPO and two-VM reads from a real 3FS-backed EROFS layer. See the
+[R3 acceptance](docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md). This reused the
+existing Linux host; a second clean-host installation remains open.
 
 The installed v0.1 candidate passed selected Linux regressions, representative
 TB2.1 scoring, short Qwen3.5-4B GRPO, real microVM restore and prepared-state

@@ -48,10 +48,25 @@ class FakeWorker:
                     "reward": {"value": 1.0, "expected_counter": args["expected_counter"],
                                "observed": str(args["expected_counter"]),
                                "verifier_exit_code": 0}}
+        if operation == "task_evaluate":
+            return {**view("COMPLETED"), "reward": {"value": 1.0}}
         raise AssertionError(operation)
 
 
 class ScheduledDSecTest(unittest.IsolatedAsyncioTestCase):
+    async def test_generic_evaluation_keeps_registered_identity_and_rpc_timeout(self):
+        worker = FakeWorker()
+        client = ScheduledDSecClient("unused.sock")
+        client._transport = worker
+        await client.open()
+        sandbox = await client.create(task_id="task-1", rollout_id=ROLL_ID, profile=PROFILE)
+        self.assertEqual(await sandbox.evaluate("custom-verifier-v1", {"target": 7},
+                                                timeout_s=300), {"value": 1.0})
+        operation, args = worker.calls[-1]
+        self.assertEqual(operation, "task_evaluate")
+        self.assertEqual(args, {"rollout_id": ROLL_ID, "evaluator": "custom-verifier-v1",
+                               "parameters": {"target": 7}, "timeout_s": 300})
+
     async def test_create_execute_pause_stop_go_through_worker(self):
         worker = FakeWorker()
         client = ScheduledDSecClient("unused.sock")
@@ -74,6 +89,22 @@ class ScheduledDSecTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(worker.calls[1][1]["rollout_id"], ROLL_ID)
         self.assertEqual(worker.calls[2][1]["action_id"], "action-0")
         self.assertEqual(worker.calls[2][1]["timeout_ms"], 12000)
+
+    async def test_lost_evaluation_reply_preserves_identity_without_retry(self):
+        worker = FakeWorker()
+        client = ScheduledDSecClient("unused.sock")
+        client._transport = worker
+        await client.open()
+        sandbox = await client.attach(ROLL_ID)
+        def lose_reply(operation, **args):
+            worker.calls.append((operation, args))
+            raise RolloutOutcomeUnknown("lost evaluation reply")
+        worker.call = lose_reply
+        with self.assertRaises(ScheduledOutcomeUnknown) as error:
+            await sandbox.evaluate("custom-verifier-v1", {"target": 7})
+        self.assertEqual(error.exception.rollout_id, ROLL_ID)
+        self.assertEqual(error.exception.operation, "task_evaluate")
+        self.assertEqual([op for op, _ in worker.calls].count("task_evaluate"), 1)
 
     async def test_lost_create_reply_preserves_rollout_id_for_attach(self):
         worker = FakeWorker()
