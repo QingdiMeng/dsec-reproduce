@@ -98,7 +98,7 @@ this milestone into another GPU optimization or performance exploration.
 
 | Work ID | Deliverable | Completion gate |
 | --- | --- | --- |
-| RM-001 | Public source release and contribution entry points | Publish the reviewed source and license notices, link quickstart/roadmap/support instructions, and identify the exact tested artifacts. Source preparation is complete; public publication remains pending. |
+| RM-001 | Public source release and contribution entry points | Public repository and development release exist, with license notices and quickstart/roadmap/support instructions. Modular R3 changes are locally committed and validated; review and publication of this revision remain pending. Keep the exact tested artifact identities in the acceptance report. |
 | RM-002 | CI for the release boundary | Linux source build, package-content checks, selected core/application regressions and documentation-link checks pass. Actual KVM checks run on a separately configured runner; ordinary CI must not imply that it exercised a VM. |
 | RM-003 | Clean-host installation acceptance | A second Linux host provisions the documented external dependencies and a fresh non-TB guest, then passes create/execute/evaluate/stop, restart recovery and cleanup. A new venv on the existing experiment host is not this gate. |
 

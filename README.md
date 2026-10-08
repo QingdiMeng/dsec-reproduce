@@ -74,6 +74,13 @@ needed with `.venv/bin/python -m pip install ./apps/tb21`.
 
 ## Validation and limits
 
+The modular refactor passed installed Linux regression (322 tests passed, one
+expected release-boundary skip), old-to-new VM/container adoption, restart
+recovery, shared admission, representative TB2.1 verification, four-step native
+MBPP/verl GRPO and two-VM reads from a real 3FS-backed EROFS layer. See the
+[R3 acceptance](docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md). This reused the
+existing Linux host; a second clean-host installation remains open.
+
 The installed v0.1 candidate passed selected Linux regressions, representative
 TB2.1 scoring, short Qwen3.5-4B GRPO, real microVM restore and prepared-state
 isolation checks. The optional MBPP/verl case completed 187 GRPO updates and
