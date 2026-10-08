@@ -11,7 +11,6 @@ import socketserver
 import subprocess
 import threading
 import tomllib
-from dsec.runtime.registry import DurableManager,atomic_json,identity
 from dsec.runtime.lifecycle import SandboxError
 from dsec.storage.digest import sha
 from dsec.runtime.isolation.network import NetnsNetworkManager
@@ -20,146 +19,10 @@ from dsec.runtime.requests import RequestJournal, MUTATING
 from dsec.runtime.resource_rpc import sandbox_resource_sample
 from dsec.runtime.admission_guard import AdmissionDenied, check_create
 
-class ServiceBusy(SandboxError):
-    pass
-
-class BoundedServer(socketserver.ThreadingMixIn,socketserver.UnixStreamServer):
-    daemon_threads=False
-    block_on_close=True
-    request_queue_size=16
-    def __init__(self,path,handler,max_requests):
-        self.request_queue_size=max(16,max_requests)
-        self.slots=threading.BoundedSemaphore(max_requests)
-        self.max_requests=max_requests
-        self.count_lock=threading.Lock(); self.active_requests=0; self.rejected_requests=0
-        super().__init__(path,handler)
-    def process_request(self,request,address):
-        if not self.slots.acquire(blocking=False):
-            with self.count_lock: self.rejected_requests+=1
-            try:
-                request.settimeout(1)
-                request.sendall(json.dumps({"request_id":None,"ok":False,"error":{
-                    "type":"ServiceBusy","message":"Request capacity reached; request not accepted"}}).encode()+b"\n")
-            except OSError: pass
-            self.shutdown_request(request)
-            return
-        with self.count_lock: self.active_requests+=1
-        try:
-            super().process_request(request,address)
-        except Exception:
-            self.slots.release()
-            with self.count_lock: self.active_requests-=1
-            raise
-    def process_request_thread(self,request,address):
-        try:
-            super().process_request_thread(request,address)
-        finally:
-            with self.count_lock: self.active_requests-=1
-            self.slots.release()
-
-class Handler(socketserver.StreamRequestHandler):
-    def handle(self):
-        self.request.settimeout(45)
-        request_id=None
-        admitted=False
-        try:
-            line=self.rfile.readline(131073)
-            if len(line)>131072 or not line.endswith(b"\n"):
-                raise ValueError("Invalid request frame")
-            req=json.loads(line)
-            request_id=req.get("request_id")
-            op=req["operation"]; args=req.get("args",{})
-            if op=="create":
-                check_create(self.server.admission_worker_socket,request_id,args)
-            if op=="prewarm" and self.server.admission_worker_socket:
-                raise AdmissionDenied("Prewarm requires a scheduler-managed pool reservation")
-            if op in MUTATING:
-                self.server.manager.foreground_enter()
-                try:
-                    cached=self.server.journal.begin(req)
-                    if cached is not None:
-                        response=cached
-                    else:
-                        admitted=True
-                        try:
-                            value=self._dispatch(op,req.get("sandbox_id"),args,request_id)
-                            response={"request_id":request_id,"ok":True,"result":value}
-                        except Exception as exc:
-                            response={"request_id":request_id,"ok":False,"error":{
-                                "type":type(exc).__name__,"message":str(exc)}}
-                        # A failed durable commit leaves PENDING; never tell the
-                        # client that the operation is known to have finished.
-                        self.server.journal.finish(request_id,response)
-                finally:
-                    self.server.manager.foreground_exit()
-            else:
-                value=self._dispatch(op,req.get("sandbox_id"),args,request_id)
-                response={"request_id":request_id,"ok":True,"result":value}
-        except Exception as exc:
-            if admitted:
-                return  # Side effect may have happened; PENDING is authoritative.
-            response={"request_id":request_id,"ok":False,"error":{"type":type(exc).__name__,"message":str(exc)}}
-        try:
-            self.wfile.write(json.dumps(response).encode()+b"\n")
-        except (BrokenPipeError,ConnectionResetError):
-            pass
-
-    def _dispatch(self,op,sandbox_id,args,request_id):
-        manager=self.server.manager
-        if op=="health":
-            with self.server.count_lock:
-                counts={"active_requests":self.server.active_requests,"max_requests":self.server.max_requests,
-                        "rejected_requests":self.server.rejected_requests}
-            return {"pid":os.getpid(),"recovery_events":manager.recovery_events,
-                    "monitor_errors":manager.errors,"warm_pool":manager.warm_pool_status(),
-                    "admission_worker_socket":self.server.admission_worker_socket,**counts}
-        if op=="query_request":
-            return self.server.journal.lookup(args["lookup_id"])
-        if op=="create":
-            return manager.create(**args).status()
-        if op=="prewarm":
-            return manager.prewarm(**args)
-        if op=="list":
-            with manager.lock: sandboxes=list(manager.sandboxes.values())
-            value=[]
-            for sb in sandboxes:
-                if not sb.lock.acquire(blocking=False):
-                    # A long guest command holds sb.lock. Expose its last
-                    # published state so read-only telemetry does not count a
-                    # running VM as zero while that command is executing.
-                    state="READY" if sb.reserved and sb.state=="RUNNING" else sb.state
-                    value.append({"id":sb.id,"busy":True,"state":state,
-                                  "rootfs_transport":manager.tb2_layer_transports.get(
-                                      sb.environment_id)})
-                else:
-                    try: value.append(sb.status())
-                    finally: sb.lock.release()
-            return value
-        if op=="resource_sample":
-            return sandbox_resource_sample(manager, sandbox_id, identity)
-        sb=manager.sandboxes.get(sandbox_id)
-        if sb is None:
-            raise SandboxError("Unknown sandbox")
-        if sb.reserved and op not in ("status", "stop"):
-            raise SandboxError("Sandbox is reserved for warm checkout")
-        if not sb.lock.acquire(blocking=False):
-            raise ServiceBusy("Sandbox has another active operation; request not accepted")
-        try:
-            if op=="status":
-                return sb.status()
-            if op in MUTATING:
-                sb.inflight={"request_id":request_id,"operation":op}
-                sb._persist()
-                try:
-                    value=getattr(sb,op)(**args)
-                    return sb.status() if value is None else value
-                finally:
-                    sb.inflight=None; sb._persist()
-            raise ValueError("Unknown operation")
-        finally:
-            sb.lock.release()
+from dsec.control.server import BoundedServer, Handler, ServiceBusy
 
 def main():
+    from dsec.runtime.container_edge import ContainerRuntime
     parser=argparse.ArgumentParser()
     for flag in ("root","binary","kernel","template"):
         parser.add_argument("--"+flag,required=True)
@@ -562,6 +425,7 @@ def main():
                           "catalog_sha256": microvm_environment_catalog.digest if
                           microvm_environment_catalog else None}))
         return
+    from dsec.runtime.registry import DurableManager, atomic_json, identity
     manager=DurableManager(args.root,args.binary,args.kernel,args.template,
                            capacity=args.capacity,e3=e3,tb2_templates=tb2_templates,
                            tb2_layers=tb2_layers,
@@ -598,6 +462,8 @@ def main():
     server=BoundedServer(str(sock),Handler,args.max_requests)
     os.chmod(sock,int(args.socket_mode,8)); server.manager=manager; server.journal=journal
     server.admission_worker_socket=args.admission_worker_socket
+    server.identity_reader=identity
+    server.container_runtime=ContainerRuntime(admission_worker_socket=args.admission_worker_socket)
     def shutdown(*_):
         threading.Thread(target=server.shutdown,daemon=True).start()
     signal.signal(signal.SIGTERM,shutdown); signal.signal(signal.SIGINT,shutdown)
@@ -607,6 +473,7 @@ def main():
         server.serve_forever(poll_interval=.1)
     finally:
         server.server_close(); sock.unlink(missing_ok=True)
+        server.container_runtime.close()
         (Path(args.root).resolve()/"daemon.json").unlink(missing_ok=True)
         manager.detach()
 

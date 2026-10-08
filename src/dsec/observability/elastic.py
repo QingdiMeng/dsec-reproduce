@@ -67,7 +67,10 @@ class ElasticResourceMonitor:
     @classmethod
     async def for_sandbox(cls, sandbox, *, interval_seconds=2.0):
         if sandbox.backend == "container":
-            name = sandbox._container.name
+            status = await sandbox.status()
+            name = status.get("container_name")
+            if status.get("state") != "RUNNING" or not isinstance(name, str):
+                raise ValueError("A running container identity is required for accounting")
             pid, container_id = await asyncio.to_thread(_container_identity,
                                                         name, sandbox.id)
             monitor = cls(backend="container", pid=pid, container_id=container_id,

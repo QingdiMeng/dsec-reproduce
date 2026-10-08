@@ -1,6 +1,6 @@
 # DSec 模块化重构设计
 
-状态：设计已确认，R0/R1 已实施；R2 评分插件节点已实施，其余 R2 与 R3 待完成。日期：2026-10-08。
+状态：设计已确认，R0/R1 已实施；R2 已完成评分插件与 SDK/容器 Edge 拆分，其余 R2 与 R3 待完成。日期：2026-10-08。
 代码基线：`7f70524187e61e13f123c7999098858cf3411bd5`。
 
 ## 1. 目标与范围
@@ -269,7 +269,7 @@ Linux 主机或真实 microVM 验收。Mac 上 Linux 专用检查仍须明确跳
 回归、契约检查与发行归档检查；跳过项涉及 Linux `/proc`/设备要求或缺失的历史实验
 工作区。当前记录不包含 Linux CI 结果或运行中服务升级验收。
 
-R2 仍需完成：旧 façade 的容器管理移入 Edge、worker/API 内 TB2 特例插件化、节点账本
+R1 节点结束时的 R2 剩余工作：旧 façade 的容器管理移入 Edge、worker/API 内 TB2 特例插件化、节点账本
 与作业/API 限额分离、生命周期管理器拆分，以及 session/storage 接口收敛。
 `compat.libdsec` 和现有 profile 验证规则是迁移期间的兼容边界，不是最终薄 SDK 或通用
 能力解析器。`service_admin.py` 暂保留原路径，保护其旧脚本身份检查；任务集成仍按现有
@@ -293,5 +293,32 @@ worker 持有评分身份、参数、结果提交与 UNKNOWN 状态；插件只�
 任务/参数约束。源码归档、文档链接及核心 wheel 边界检查通过。
 
 本节点尚未迁移 TB2 manifest/API 规则和 adapter；PATH 修复仍由兼容桥保留。
-薄 SDK/Edge 容器生命周期、节点资源账本和 session/storage 收敛继续属于 R2 剩余工作。
+本评分插件节点结束时，薄 SDK/Edge 容器生命周期、节点资源账本和 session/storage 收敛尚未完成。
 本地插件与发行回归不替代 R3 的真实 Linux/KVM、运行服务升级和短训练验收。
+
+### R2：薄 SDK 与容器 Edge 节点
+
+libdsec 风格参数提取至 `contracts.sandbox`；正式客户端成为 `sdk.client`。
+旧 façade 路径只转发同一模块。客户端不再持有 Docker 后端、制品目录或容器 journal，
+运行时通过同一 Unix socket 接收容器创建、状态、执行、查询和停止请求。
+运行参数的校验在客户端及 Edge 执行，制品/目录的解析只在 Edge 执行。
+
+容器 Edge 接管既有后端与生命周期 journal；请求记录仍用原 create/stop 摘要和 schema，
+没有套入第二份 microVM journal。实例目录独占锁阻止两个 Edge 同时管理同一根目录；
+执行/停止的互斥在副作用前生效，读取状态与请求不占用前台工作计数。
+容器停止后释放服务内的句柄缓存。关闭客户端或服务的 owner handle 不停止容器。
+
+结果提交失败和后端执行失败统一报告 UNKNOWN；原记录只能凭状态证明完成，不能重做副作用。
+SDK 对稳定 ID 请求取消隐式换号重试，以免 worker journal 与实际请求脱节。
+新客户端要求服务公布 `container-rpc-v1`，不向旧服务静默退回宿主 Docker。
+配置归属与升级边界见[安装配置](../guides/DSEC_HOST_CONFIGURATION.md#container-runtime-ownership)，
+[本地 RPC 故障回归](../../tests/unit/test_container_edge.py)不启动真实 Docker。
+
+本节点完整本地回归 236 项：229 通过、7 项因 Linux 条件跳过。
+独立核心 wheel 脱离源码目录通过 14 项 RPC/故障检查、6 个 CLI help、旧导入身份及
+可选应用缺失预检查；安装 TB2.1 应用后评分器注册通过。容器资源采样使用服务返回的
+身份，不再依赖客户端内部后端对象。源码归档、文档链接和 wheel 边界检查通过。
+
+尚需完成节点账本与作业/API 限额分离、生命周期管理器拆分、session/storage 接口收敛，
+以及剩余 TB2 manifest/API 和 adapter 规则迁移。容器 inventory/TTL、生产 VM 隔离仍是
+缺失能力；本节点不声称已提供这些机制。R3 真实 Linux/KVM、Docker 升级与短训练待验收。

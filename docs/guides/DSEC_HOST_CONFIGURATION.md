@@ -44,6 +44,39 @@ parent. The path must fit Linux's Unix-socket length limit. Each instance derive
 independent daemon sockets, worker sockets, rollout records and scheduler budget
 under `state_root/sandboxes` and `state_root/worker`.
 
+### Container runtime ownership
+
+The sandbox service owns container backends, artifact resolution and lifecycle
+journals. `DSecClient` is a transport-only SDK; its caller needs the service
+socket rather than local image paths or Docker access. `health` advertises
+`container-rpc-v1`. A new client refuses container calls against an older
+service; it does not fall back to managing host Docker itself. Upgrade the
+client and sandbox service from the same revision.
+
+For schema-1 compatibility, `worker.container_root`, `worker.container_catalog`
+and `worker.container_agent` remain configuration keys, but `dsec-host` applies
+them to the **sandbox service** as `DSEC_CONTAINER_ROOT`,
+`DSEC_ENVIRONMENT_CATALOG` and `DSEC_CONTAINER_AGENT`. Paths resolve from the
+configuration file. `worker.docker_broker_socket` is applied to both services:
+Edge uses it for runtime operations and the worker's existing resource monitor
+uses it for observation. Other legacy E1/E2 artifact variables, if used, must
+also be supplied to the sandbox service rather than the training process.
+
+The container directory has one Edge owner lock. Existing
+`lifecycle-requests/*.json` retain their request IDs, operation names, digests
+and schema. An in-flight or uncommitted result stays UNKNOWN until a read-only
+attestation proves completion; a request is never repeated to obtain that proof.
+The configured scheduler admission socket applies to container creation as
+well as microVM creation. A conflicting old `.admission-worker.json` fails closed.
+Closing a client or normally retiring the service does not stop live containers;
+release owned sandboxes through the SDK before removing their instance.
+
+For this refactor, local RPC and journal fault tests use an instrumented backend.
+Real Docker service upgrades remain part of the Linux acceptance gate. The host
+container backend retains its trusted single-host development/comparison scope;
+this change does not implement container containment inside a VM, container
+pause/memory offload or a general container inventory/TTL controller.
+
 With OverlayBD enabled, `state_root` and its `sandboxes` directory use mode
 2710 and group `kvm`: the storage daemon can traverse them but cannot list or
 write the control directory. Worker records and control sockets remain private;

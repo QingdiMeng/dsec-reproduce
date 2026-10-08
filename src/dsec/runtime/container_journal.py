@@ -11,8 +11,9 @@ from dsec.sdk.sandbox_transport import RequestOutcomeUnknown
 
 
 class ContainerLifecycleJournal:
-    def __init__(self, root):
+    def __init__(self, root, *, admission_worker_socket=None):
         self.root = Path(root).resolve() / "lifecycle-requests"
+        self.admission_worker_socket = admission_worker_socket
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
 
     def _path(self, request_id):
@@ -78,19 +79,29 @@ class ContainerLifecycleJournal:
                     return saved["response"]["result"]
                 raise RequestOutcomeUnknown("Container lifecycle result is unknown", request_id)
             if operation == "create":
-                check_container_create(self.root.parent, request_id, args)
+                check_container_create(self.root.parent, request_id, args,
+                                       worker_socket=self.admission_worker_socket)
             record = {"version": 1, "state": "PENDING", "request_id": request_id,
                       "operation": operation, "sandbox_id": sandbox_id,
                       "args": args, "digest": digest}
             atomic_json(path, record)
             try:
                 result = effect()
-            except BaseException:
+            except BaseException as exc:
                 # The effect may have completed before a Docker/transport error.
                 record["state"] = "UNKNOWN"
-                atomic_json(path, record)
+                try:
+                    atomic_json(path, record)
+                except Exception as commit_error:
+                    raise RequestOutcomeUnknown("Container failure commit is unknown", request_id) from commit_error
+                if isinstance(exc, Exception):
+                    raise RequestOutcomeUnknown(
+                        "Container effect outcome is unknown: " + str(exc), request_id) from exc
                 raise
             record["state"] = "DONE"
             record["response"] = {"request_id": request_id, "ok": True, "result": result}
-            atomic_json(path, record)
+            try:
+                atomic_json(path, record)
+            except Exception as exc:
+                raise RequestOutcomeUnknown("Container result commit is unknown", request_id) from exc
             return result

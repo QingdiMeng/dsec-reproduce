@@ -26,9 +26,9 @@ class SandboxClient:
             raise ValueError("Request too large")
         try:
             with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as sock:
-                timeout_ms = args.get("timeout_ms", 5000) if operation == "execute" else 5000
+                timeout_ms = args.get("timeout_ms", 5000) if operation in ("execute", "container_execute") else 5000
                 wait_s = max(60, timeout_ms / 1000 + 30) if isinstance(timeout_ms, (int, float)) else 60
-                if operation in ("create", "seal_baseline", "pause"):
+                if operation in ("create", "container_create", "seal_baseline", "pause"):
                     # A cold microVM create includes serialized host netns setup
                     # and root-disk preparation. A lost reply is not retryable.
                     wait_s = max(wait_s, 300)
@@ -45,6 +45,8 @@ class SandboxClient:
         if response.get("request_id")!=request_id:
             raise RequestOutcomeUnknown("Response ID mismatch",request_id)
         if not response["ok"]:
+            if response["error"]["type"] == "RequestOutcomeUnknown":
+                raise RequestOutcomeUnknown(response["error"]["message"], request_id)
             raise ServiceError(response["error"]["type"],response["error"]["message"])
         return response["result"]
 

@@ -56,7 +56,10 @@ def container_worker_socket(root):
         raise AdmissionDenied("Container admission configuration is invalid") from exc
 
 
-def check_container_create(root, request_id, args):
-    worker_socket = container_worker_socket(root)
+def check_container_create(root, request_id, args, *, worker_socket=None):
+    legacy_socket = container_worker_socket(root)
+    if worker_socket and legacy_socket and worker_socket != legacy_socket:
+        raise AdmissionDenied("Container admission configuration disagrees with Edge")
+    worker_socket = worker_socket or legacy_socket
     if worker_socket:
         _check(worker_socket, "container", request_id, args)

@@ -15,11 +15,11 @@ import re
 import signal
 import uuid
 
-from dsec.compat.libdsec import DSecClient, DSecMicroVMRunArgs, DSecContainerRunArgs
+from dsec.sdk.client import DSecClient, DSecMicroVMRunArgs, DSecContainerRunArgs
 from dsec.contracts.profiles import FrameworkProfile, MECHANISM_ROADMAP
 from dsec.sdk.sandbox_transport import RequestOutcomeUnknown, ServiceError
 from dsec.rollout.store import RolloutStore
-from dsec.compat.libdsec import DSecSandbox
+from dsec.sdk.client import DSecSandbox
 from dsec.contracts.requests import request_digest
 from dsec.contracts.evaluation import EvaluationContext, EvaluationFailure, EvaluationOutcome
 from dsec.compat.counter_evaluator import CounterEvaluator

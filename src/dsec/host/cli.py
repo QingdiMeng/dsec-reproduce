@@ -40,7 +40,7 @@ SCALAR_OPTIONS = {
 LIST_OPTIONS = {'warm_pool', 'tb2_task_verifier_artifact', 'tb2_verifier_dax_task',
                 'egress_proxy_bypass_host'}
 BOOL_OPTIONS = {'tb2_free_page_reporting'}
-WORKER_PATHS = {'tb2_tasks_dir', 'container_catalog', 'container_root', 'docker_broker_socket'}
+WORKER_PATHS = {'tb2_tasks_dir', 'container_catalog', 'container_root', 'container_agent', 'docker_broker_socket'}
 NETWORK_KEYS = {'helper', 'max_slots', 'dns', 'dax_binary'}
 
 
@@ -432,6 +432,16 @@ def run_service(cfg, role, validate_only=False):
     storage_access = 'overlaybd_ublk_socket' in cfg['sandbox']
     for path in (root, root/'sandboxes', root/'worker'):
         private_directory(path, storage_access=storage_access and path != root/'worker')
+    # Keep schema-1 configuration keys while applying backend configuration to
+    # the sandbox service, which now owns container runtime state.
+    environment = {'docker_broker_socket':'DSEC_DOCKER_BROKER_SOCKET'}
+    if role == 'sandbox':
+        environment.update(container_catalog='DSEC_ENVIRONMENT_CATALOG',
+                           container_root='DSEC_CONTAINER_ROOT',
+                           container_agent='DSEC_CONTAINER_AGENT')
+    for key, variable in environment.items():
+        if key in cfg['worker']:
+            os.environ[variable] = cfg['worker'][key]
     if role == 'sandbox':
         command = [sys.executable, '-I', '-B', '-m', 'sandboxd', *sandbox_arguments(cfg)]
     else:
@@ -448,12 +458,6 @@ def run_service(cfg, role, validate_only=False):
                 if time.monotonic() >= deadline:
                     raise TimeoutError('Sandbox service did not become ready')
                 time.sleep(.25)
-        environment = {'container_catalog':'DSEC_ENVIRONMENT_CATALOG',
-                       'container_root':'DSEC_CONTAINER_ROOT',
-                       'docker_broker_socket':'DSEC_DOCKER_BROKER_SOCKET'}
-        for key, variable in environment.items():
-            if key in cfg['worker']:
-                os.environ[variable] = cfg['worker'][key]
         # The verifier must use the same independent artifact pin as sandboxd,
         # rather than inheriting a manifest from a previous source deployment.
         canonical = cfg['sandbox'].get('tb2_verifier_artifact_manifest')

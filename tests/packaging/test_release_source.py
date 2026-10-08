@@ -31,8 +31,11 @@ class SourceReleaseTests(unittest.TestCase):
                 for name in ('src/dsec/contracts/resources.py', 'src/dsec/storage/overlaybd.py',
                              'src/dsec/sdk/sandbox_transport.py',
                              'src/dsec/contracts/evaluation.py',
+                             'src/dsec/contracts/sandbox.py', 'src/dsec/sdk/client.py',
+                             'src/dsec/runtime/container_edge.py', 'src/dsec/control/server.py',
                              'apps/tb21/src/dsec_tb21_case/worker_evaluator.py',
                              'tests/unit/test_worker_evaluators.py',
+                             'tests/unit/test_container_edge.py',
                              'tests/contracts/v01_compatibility.json'):
                     self.assertIn(name, manifest['files'])
                 self.assertFalse(any('miles_lora_nvme' in n or n.endswith('.ext4')

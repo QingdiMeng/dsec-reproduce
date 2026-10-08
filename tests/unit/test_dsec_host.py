@@ -78,6 +78,28 @@ class HostConfigurationTests(unittest.TestCase):
                     self.load()
                 self.data = saved
 
+    def test_container_configuration_is_applied_to_edge_and_broker_to_both_services(self):
+        import os
+        self.data['worker'].update(container_root='containers', container_catalog='catalog.json',
+                                   container_agent='agent.py', docker_broker_socket='broker.sock')
+        cfg = self.load()
+        with patch.dict(os.environ, {}, clear=True), patch('os.umask'), patch('os.execv') as execute:
+            dsec_host.run_service(cfg, 'sandbox')
+            for variable, name in [('DSEC_CONTAINER_ROOT', 'containers'),
+                                   ('DSEC_ENVIRONMENT_CATALOG', 'catalog.json'),
+                                   ('DSEC_CONTAINER_AGENT', 'agent.py'),
+                                   ('DSEC_DOCKER_BROKER_SOCKET', 'broker.sock')]:
+                self.assertEqual(os.environ[variable], str(self.root / name))
+            self.assertIn('sandboxd', execute.call_args.args[1])
+        with patch.dict(os.environ, {}, clear=True), \
+                patch('os.umask'), \
+                patch('sandbox_client.SandboxClient.call', return_value={'pid':42}), \
+                patch('os.execv'):
+            dsec_host.run_service(cfg, 'worker')
+            self.assertEqual(os.environ['DSEC_DOCKER_BROKER_SOCKET'], str(self.root / 'broker.sock'))
+            self.assertNotIn('DSEC_CONTAINER_ROOT', os.environ)
+            self.assertNotIn('DSEC_ENVIRONMENT_CATALOG', os.environ)
+
     def test_unit_quotes_shell_arguments_and_disables_environment_expansion(self):
         self.config = self.root/"host $cash %name's.json"
         self.data['service_group'] = 'kvm'

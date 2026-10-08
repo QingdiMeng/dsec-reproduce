@@ -28,6 +28,7 @@ TESTS = (
     'tests/unit/test_artifact_integrity.py',
     'tests/unit/test_artifact_publisher.py',
     'tests/unit/test_container_lifecycle_journal.py',
+    'tests/unit/test_container_edge.py',
     'tests/unit/test_dsec_host.py',
     'tests/unit/test_egress_proxy.py',
     'tests/unit/test_elastic_resource_monitor.py',

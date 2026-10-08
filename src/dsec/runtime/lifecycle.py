@@ -19,6 +19,11 @@ class SandboxError(RuntimeError):
     pass
 
 
+class ServiceBusy(SandboxError):
+    """The sandbox has an active operation; this request was not admitted."""
+    pass
+
+
 def _copy_sparse(source, destination):
     """Keep TB2's 10-GiB logical disk sparse across create/snapshot/restore."""
     subprocess.run(["cp", "--sparse=always", "--reflink=auto", "--",

@@ -18,6 +18,15 @@ DSec 管理沙箱资源。模型权重、KV cache、优化器、训练/推理显
 由外部训练框架与推理服务管理。沙箱准入可以依据节点的剩余资源和外部负载等待，
 不会为取得资源而修改模型服务配置或卸载模型。
 
+`DSecClient` 的正式实现位于 [sdk.client](../../src/dsec/sdk/client.py)，
+`libdsec_compat` 与 `dsec.compat.libdsec` 保留同一实现的模块别名。
+容器后端、制品校验和生命周期 journal 由
+[容器 Edge](../../src/dsec/runtime/container_edge.py)管理；客户端不读取宿主制品或启动 Docker。
+原 `run_container`、`attach_container`、执行/查询/停止调用经同一沙箱服务传输。
+评分与动作请求仍由 worker 记账，不因 RPC 路径迁移而改变已有请求摘要。
+明确的 `ServiceBusy` 表示未受理；SDK 不为带稳定 ID 的请求悄悄换号重试。
+调用方可在确认未受理后重新提交，UNKNOWN 仍必须先对账。
+
 ```text
 Trainer agent loop
     → AgentEnvironment: reset → step* → evaluate → stop
