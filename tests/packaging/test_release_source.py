@@ -33,6 +33,8 @@ class SourceReleaseTests(unittest.TestCase):
                              'src/dsec/contracts/evaluation.py',
                              'src/dsec/contracts/sandbox.py', 'src/dsec/sdk/client.py',
                              'src/dsec/runtime/container_edge.py', 'src/dsec/control/server.py',
+                             'src/dsec/runtime/resources.py', 'src/dsec/rollout/scheduler.py',
+                             'src/dsec/rollout/quotas.py',
                              'apps/tb21/src/dsec_tb21_case/worker_evaluator.py',
                              'tests/unit/test_worker_evaluators.py',
                              'tests/unit/test_container_edge.py',

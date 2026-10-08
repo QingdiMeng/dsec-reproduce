@@ -322,3 +322,37 @@ SDK 对稳定 ID 请求取消隐式换号重试，以免 worker journal 与实�
 尚需完成节点账本与作业/API 限额分离、生命周期管理器拆分、session/storage 接口收敛，
 以及剩余 TB2 manifest/API 和 adapter 规则迁移。容器 inventory/TTL、生产 VM 隔离仍是
 缺失能力；本节点不声称已提供这些机制。R3 真实 Linux/KVM、Docker 升级与短训练待验收。
+
+
+### R2：节点资源、作业配额与 API 限额分离节点
+
+`contracts.resources` 保留原 `ResourceDemand` / `ResourceBudget` 的字段和默认值，
+另提供节点需求、节点预算和 API 限额的显式投影。
+`runtime.resources.NodeResourceLedger` 只接收物理资源需求，持有按租约 ID 组织的
+预留；汇总由租约派生，返回副本。节点需求与节点预算均不含 API 字段。
+Linux `/proc` 采样归节点模块；采样语义不变。
+
+`rollout.scheduler.WorkScheduler` 负责队列、依赖、作业统计与组合准入，
+`rollout.quotas` 分别管理 episode 槽及外部 API 的 inflight/RPM/TPM。
+原 `work_scheduler` 和 `runtime.scheduler` 转发同一实现，旧资源摘要、worker journal、
+报表字段与指标名称保留。新 `resource_scopes` 给出分项视图，兼容 `reserved` 只汇总，
+不再执行第二次预留。节点和 episode 取得资源之间不 await；后者失败回滚本次节点租约。
+UNKNOWN 恢复即使超过当前预算也保留预留；评分完成和 API 结束均不释放节点资源。
+
+API 并发与速率额度改为调用前同时取得，解决旧实现先扣 RPM/TPM 后等待并发槽的问题。
+取消排队请求不占额度；已发起但取消或响应不确定的请求保留速率预留。
+一个进程内可显式共享节点账本或 API 限流器；预算不匹配直接拒绝。
+这不是跨进程的节点准入或全局 API 额度实现，重启后 API 窗口也不持久化。
+预算在构造时配置；直接替换旧调度器 budget 属性会报错，防止只改报表而账本仍按旧限额执行。
+原 prepared-fork 测试改为构造时传入两份沙盒的预算，测试内容仍覆盖真实 worker 的基线分叉流程。
+
+本节点完整本地回归 245 项：238 通过、7 项因 Linux 条件跳过。
+新核心 wheel 在独立 venv、源码目录之外通过 24 项调度/worker 恢复检查；
+未安装任务应用，两个服务入口 help 与三条调度器导入路径的模块身份检查通过。
+wheel 包含 119 个运行时 Python 模块，源码归档与文档链接检查通过。
+真实内核资源限制、KVM、存储及短 RL 不属于这些本地检查。
+
+本节点完成模块职责分离，**尚未完成 Edge 账本所有权迁移**：
+worker 的既有持久 rollout 记录仍负责恢复预留，服务端准入检查仍确认 worker 授权。
+后续迁移必须让 Edge 成为唯一持久节点租约入口，并删除旧节点预留路径，不能同时启用两份账本。
+生命周期管理器拆分、session/storage 接口及剩余任务规则迁移仍待完成；R3 真实宿主验收未执行。

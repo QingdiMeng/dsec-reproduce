@@ -27,7 +27,8 @@ ALIASES = {
     'shared_snapshot_layers': 'dsec.storage.layers',
     'sandbox_client': 'dsec.sdk.sandbox_transport',
     'rollout_client': 'dsec.sdk.rollout_transport',
-    'work_scheduler': 'dsec.runtime.scheduler',
+    'work_scheduler': 'dsec.rollout.scheduler',
+    'dsec.runtime.scheduler': 'dsec.rollout.scheduler',
     'request_journal': 'dsec.runtime.requests',
     'rollout_store': 'dsec.rollout.store',
     'work_journal': 'dsec.rollout.work_journal',
@@ -115,6 +116,20 @@ class ModuleBoundaryTests(unittest.TestCase):
         for old, new in (('durable_manager', 'dsec.runtime.registry'),
                          ('sandboxd', 'dsec.control.local_api')):
             self.assertIs(importlib.import_module(old), importlib.import_module(new))
+
+    def test_node_ledger_and_worker_quota_dependency_boundaries(self):
+        from dsec.contracts.resources import NodeBudget, NodeDemand
+        for cls in (NodeDemand, NodeBudget):
+            self.assertFalse(any(f.name.startswith('api_') for f in dataclasses.fields(cls)))
+        for filename, forbidden in (
+                ('runtime/resources.py', ('dsec.rollout', 'dsec.sdk', 'dsec_adapters')),
+                ('rollout/quotas.py', ('dsec.runtime', 'dsec.sdk', 'dsec_adapters'))):
+            path = ROOT / 'src' / 'dsec' / filename
+            for node in ast.walk(ast.parse(path.read_text())):
+                names = ([n.name for n in node.names] if isinstance(node, ast.Import)
+                         else [node.module or ''] if isinstance(node, ast.ImportFrom) else [])
+                for name in names:
+                    self.assertFalse(name.startswith(forbidden), f'{filename} imports {name}')
 
     def test_privileged_and_guest_agents_remain_standalone_sources(self):
         # These sources are embedded into a root-owned helper or guest image.

@@ -148,6 +148,26 @@ localhost. `scheduler.shared_services` uses the existing shared-service monitor
 configuration. API budgets apply to worker `policy_call` accounting; model calls
 made directly by an external trainer need corresponding client-side rate control.
 
+The existing `scheduler` schema remains unchanged. Internally, CPU, guest memory,
+disk, network and disk I/O reservations belong to a node ledger; `api_episode_slots`
+is a worker job quota, and inflight/RPM/TPM limits belong to a separate API quota.
+`reserved` and the existing Prometheus metrics are compatibility views of these
+owners. `scheduler_status.resource_scopes` exposes their budgets and reservations
+separately. Configure budgets at scheduler construction; replacing only its
+legacy `budget` attribute is rejected rather than changing reports without
+changing admission. Live partial budget replacement is not supported.
+Quota scope is currently one worker process. Multiple worker processes
+do not automatically share a provider-account limit; partition that limit between
+them. Explicitly sharing an API quota object only coordinates schedulers within
+one process, and restarting that process resets its rate window.
+
+Queued API requests consume neither rate tokens nor concurrency until dispatched.
+Calls already attempted retain their RPM/estimated TPM reservation if cancelled
+or their result is unknown. API completion or cancellation never releases the
+sandbox's node lease: confirmed sandbox stop remains the release boundary.
+The ledger is still hosted by the worker and restored from its durable rollout
+records; transferring node admission authority to Edge is a pending refactor.
+
 ## Commands and acceptance
 
 `init`, `validate`, `doctor`, `render`, `render-privileges`, `run`, `wait`, `status` and `smoke` are

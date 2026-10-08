@@ -25,7 +25,9 @@ from dsec.contracts.evaluation import EvaluationContext, EvaluationFailure, Eval
 from dsec.compat.counter_evaluator import CounterEvaluator
 from dsec.compat.task_plugins import (LEGACY_EVALUATION_OPERATIONS,
                                       configured_evaluators, execution_command)
-from dsec.runtime.scheduler import ProcHostSampler, ResourceBudget, ResourceDemand, WorkScheduler
+from dsec.contracts.resources import ResourceBudget, ResourceDemand
+from dsec.runtime.resources import ProcHostSampler
+from dsec.rollout.scheduler import WorkScheduler
 from dsec.observability.elastic import ElasticResourceMonitor
 from dsec.observability.shared import SharedServiceMonitor
 from dsec.rollout.environment import SHELL_FEEDBACK_VERSION, format_shell_observation

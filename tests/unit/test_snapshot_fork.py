@@ -164,10 +164,8 @@ class WorkerForkTests(unittest.IsolatedAsyncioTestCase):
                 sb.seal_baseline = seal
                 return sb
             client.run_microvm = create
-            budget = scheduler()
-            # Test two concurrent reservations without host pressure.
-            from dataclasses import replace
-            budget.budget = replace(budget.budget, cpu=2, memory_mb=1024, disk_mb=2048, api_episode_slots=2)
+            # Configure both resource and job owners before any admission.
+            budget = scheduler(cpu=2, memory_mb=1024, disk_mb=2048, api_episode_slots=2)
             worker = RolloutWorker(client, state_dir=Path(tmp), scheduler=budget)
             source_id, child_id = 'a'*32, 'b'*32
             source = await worker.dispatch({'operation':'create', 'args':{
