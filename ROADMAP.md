@@ -15,6 +15,13 @@ names below are planning targets, not released capabilities or calendar
 commitments. Follow the milestone order; move a date rather than weaken an
 acceptance gate.
 
+The [modular refactor design](docs/architecture/MODULAR_REFACTOR_DESIGN.md)
+was approved on 2026-10-08 against revision `7f70524`. R0 compatibility gates
+and R1 general-module migration are implemented; R2 responsibility separation
+and R3 real-host acceptance remain pending. This does not change the mechanism
+validation statuses below; moving a component does not establish a missing
+paper capability.
+
 ## Current alignment with the paper
 
 Here, **validated** means a named real execution has passed, **partial** means

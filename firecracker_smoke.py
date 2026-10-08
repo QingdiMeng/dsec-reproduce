@@ -1,5 +1,5 @@
 """Install pinned Firecracker locally and boot a trusted, networkless test VM twice."""
-import hashlib
+from dsec.storage.digest import sha
 import json
 import os
 from pathlib import Path
@@ -16,10 +16,6 @@ KERNEL_KEY = "firecracker-ci/20260923-6f82ac4cf331-0/x86_64/vmlinux-6.1.186"
 
 def run(args, **kwargs):
     return subprocess.run(args, check=True, **kwargs)
-
-def sha(path):
-    with path.open("rb") as source:
-        return hashlib.file_digest(source, "sha256").hexdigest()
 
 def download(url, path):
     if not path.exists():

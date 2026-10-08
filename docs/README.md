@@ -20,6 +20,7 @@ record the tested revision and configuration; they are not installation guides.
 
 | Document | Purpose |
 | --- | --- |
+| [Modular refactor design](architecture/MODULAR_REFACTOR_DESIGN.md) | Approved boundaries, paper alignment, migration progress and acceptance gates |
 | [Agent environment](architecture/AGENT_ENVIRONMENT_CONTRACT.md) | Task lifecycle, scoring boundary, durable actions and recovery |
 | [Sandbox daemon](architecture/SANDBOX_DAEMON.md) | Durable request handling and sandbox control plane |
 | [Comparison protocol](architecture/DOCKER_DSEC_BENCHMARK_PROTOCOL.md) | Matched workloads, cache conditions and complete backend accounting |

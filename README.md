@@ -29,6 +29,11 @@ OpenEnv is not a required service. A task plugin supplies the task instruction,
 environment and verifier; the trainer owns model sampling, tokens, logprobs
 and the RL algorithm.
 
+Core implementations are organized under [src/dsec](src/dsec/). Existing
+top-level imports and CLI names remain compatibility entry points. The
+[refactor design](docs/architecture/MODULAR_REFACTOR_DESIGN.md) distinguishes
+completed module migration from remaining runtime and application boundaries.
+
 ## Quick start
 
 Install the Python control plane on Linux with Python 3.11 or newer:

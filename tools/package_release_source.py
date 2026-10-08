@@ -15,12 +15,14 @@ DOCS = (
     'docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md',
     'docs/guides/SERVICE_DEPLOYMENT.md', 'docs/architecture/SANDBOX_DAEMON.md',
     'docs/architecture/AGENT_ENVIRONMENT_CONTRACT.md', 'docs/guides/RL_FRAMEWORK_ADAPTERS.md',
+    'docs/architecture/MODULAR_REFACTOR_DESIGN.md',
     'docs/guides/ARTIFACT_PUBLICATION.md', 'docs/architecture/DOCKER_DSEC_BENCHMARK_PROTOCOL.md',
     'docs/reports/DSEC_VERITY_PILOT_REPORT.md',
     'docs/reports/DSEC_V01_GRPO_ACCEPTANCE.md',
     'docs/reports/MBPP_VERL_FIRST_USE.md',
 )
 TESTS = (
+    'tests/contracts/test_module_boundaries.py',
     'tests/unit/test_admission_guard.py',
     'tests/unit/test_agent_environment.py',
     'tests/unit/test_artifact_integrity.py',
@@ -67,6 +69,7 @@ TOOLS = (
     'tests/packaging/test_release_source.py', 'tools/check_docs.py',
     'tests/__init__.py', 'tests/unit/__init__.py', 'tests/adapters/__init__.py',
     'tests/packaging/__init__.py',
+    'tests/contracts/__init__.py', 'tests/contracts/v01_compatibility.json',
     'tools/build_smoke_guest.py', 'tools/verify_installed_task.py',
     'tools/verify_installed_fork.py', 'tools/fixtures/tb21-openssl.json',
 )
@@ -81,7 +84,13 @@ def source_files(root):
              *config['project']['license-files']}
     files.update(module+'.py' for module in settings['py-modules'])
     for package in settings['packages']:
-        directory = root/package.replace('.', '/')
+        parts = package.split('.')
+        mappings = settings.get('package-dir', {})
+        prefix = next(('.'.join(parts[:n]) for n in range(len(parts), 0, -1)
+                       if '.'.join(parts[:n]) in mappings), '')
+        relative = (Path(mappings[prefix]).joinpath(*parts[len(prefix.split('.')):])
+                    if prefix else Path(mappings.get('', '')).joinpath(*parts))
+        directory = root / relative
         files.update(str(p.relative_to(root)) for p in directory.rglob('*.py'))
         for pattern in settings.get('package-data', {}).get(package, []):
             files.update(str(p.relative_to(root)) for p in directory.glob(pattern) if p.is_file())

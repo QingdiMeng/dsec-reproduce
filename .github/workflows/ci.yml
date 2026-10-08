@@ -62,3 +62,13 @@ jobs:
           dsec-mbpp-verify --help
           dsec-mbpp-train --help
           dsec-mbpp-compare --help
+          python -I - <<'PY'
+          import environment_catalog
+          import sandbox_client
+          from dsec.storage import catalog
+          from dsec.sdk import SandboxClient
+          from dsec.contracts import ResourceDemand
+          assert environment_catalog is catalog
+          assert sandbox_client.SandboxClient is SandboxClient
+          ResourceDemand(cpu=1, memory_mb=256, disk_mb=256, network_mbps=0)
+          PY

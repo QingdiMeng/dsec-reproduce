@@ -28,6 +28,10 @@ class SourceReleaseTests(unittest.TestCase):
                              'docs/guides/QUICKSTART.md', 'apps/tb21/pyproject.toml',
                              'apps/mbpp/pyproject.toml', 'apps/mbpp/src/dsec_mbpp_case/reward.py'):
                     self.assertIn(name, manifest['files'])
+                for name in ('src/dsec/contracts/resources.py', 'src/dsec/storage/overlaybd.py',
+                             'src/dsec/sdk/sandbox_transport.py',
+                             'tests/contracts/v01_compatibility.json'):
+                    self.assertIn(name, manifest['files'])
                 self.assertFalse(any('miles_lora_nvme' in n or n.endswith('.ext4')
                                      for n in manifest['files']))
                 # Validate the exported tree, which has fewer files than the
