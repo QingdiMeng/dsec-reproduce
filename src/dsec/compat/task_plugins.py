@@ -11,21 +11,32 @@ def execution_command(context, command):
     if (profile.backend == "microvm" and
             isinstance(profile.environment_id, str) and
             profile.environment_id.startswith("tb2-")):
-        return ("export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:"
-                "/usr/bin:/sbin:/bin; " + command)
+        from dsec.compat.applications import require_tb21
+        return require_tb21("commands").execution_command(command)
     return command
 
 
 def configured_evaluators(tb2_tasks_dir):
     if tb2_tasks_dir is None:
         return {}
-    try:
-        from dsec_tb21_case.worker_evaluator import TB21Evaluator
-    except ModuleNotFoundError as exc:
-        if exc.name in ("dsec_tb21_case", "dsec_tb21_case.worker_evaluator"):
-            raise RuntimeError(
-                "TB2.1 worker evaluation requires the optional application; "
-                "install ./apps/tb21 from the same checkout") from exc
-        raise
+    from dsec.compat.applications import require_tb21
+    TB21Evaluator = require_tb21("worker_evaluator").TB21Evaluator
     evaluator = TB21Evaluator(tb2_tasks_dir)
     return {evaluator.id: evaluator}
+
+
+def configure_worker_environment(sandbox, worker_root, atomic_json):
+    if (sandbox.get("tb2_verifier_artifact_manifest") or
+            sandbox.get("tb2_task_verifier_artifact")):
+        from dsec.compat.applications import require_tb21
+        require_tb21("worker_configuration").configure(sandbox, worker_root, atomic_json)
+    else:
+        # Clear legacy inherited pins even for a generic deployment.
+        import os
+        os.environ.pop("DSEC_TB2_CANONICAL_VERIFIER_MANIFEST", None)
+        os.environ.pop("DSEC_TB2_TASK_VERIFIER_MANIFESTS_FILE", None)
+
+
+def validate_verifier_dax(store, environment_id):
+    from dsec.compat.applications import require_tb21
+    require_tb21("verifier_artifact").validate_dax(store, environment_id)

@@ -1,6 +1,6 @@
 # DSec 模块化重构设计
 
-状态：设计已确认，R0/R1 已实施；R2 已完成评分插件、SDK/容器 Edge 拆分、Edge 节点租约迁移、生命周期状态转换拆分、创建/ready 池/registry 组合、执行通道拆分及 Storage 接口收敛，剩余任务规则迁移与 R3 待完成。日期：2026-10-08。
+状态：设计已确认，R0/R1 已实施；R2 本地职责收敛已完成，包括任务规则迁出；R3 真实宿主升级与应用验收待完成。日期：2026-10-08。
 代码基线：`7f70524187e61e13f123c7999098858cf3411bd5`。
 
 ## 1. 目标与范围
@@ -510,3 +510,39 @@ persist/load 及四处设备获取顺序；不宣称整个生命周期 AST 不�
 运行时 Python 模块，源码归档、文档链接及包边界检查通过。
 剩余任务 manifest/API/adapter 规则迁出仍属 R2，
 真实 Linux/KVM、Docker、3FS/ublk 与应用短验收仍属 R3。
+
+
+### R2：可选任务应用与兼容入口节点
+
+TB2.1 的任务 instruction/WORKDIR 适配器、canonical/offline verifier、缓存清单、
+固定 suite manifest 校验、verifier 工具盘及 DAX task pin、worker pin 环境配置和历史 PATH
+修复统一位于 `apps/tb21/src/dsec_tb21_case`。核心 wheel 不再包含 TB2 JSON 清单。
+旧 `dsec_adapters.tb2_*` 和 `tb2_verifier_artifact` 是可选应用的模块别名，保留实现身份、
+既有评分请求名与 command digest 字节；明确使用 TB2 功能却未安装应用时给出安装提示。
+
+`control.environments.MicroVMConfiguration` 收集启动配置，通用 catalog 解析留在核心；
+旧 `tb2_*` CLI 的 manifest 内容校验按需委托应用。实例 netns、TAP、EROFS、DAX、
+OverlayBD＋ublk、ready 调度和生命周期属于通用核心，不因应用迁移而更换机制。
+profile 的 verifier storage 校验只核对通用存储值，实际可用性由 Edge 配置的工具盘决定，
+不再要求环境 ID 使用 TB2 前缀。旧 registry 字段名、停止记录的历史恢复兼容判断及 CLI
+参数名保留，以免把模块整理变成破坏既有部署的数据迁移。
+
+Miles 的通用 policy session 包装移入 `dsec_adapters.miles_session`；OpenEnv TB 循环与
+prompt 留在可选应用。旧 `openenv_agent_function` 是 session 别名，显式访问 TB API 时
+转发应用实现。普通 DSec/Miles 使用自己的 worker，仍无需 OpenEnv 服务。
+两份保留的 Miles 派生源码都带 Apache-2.0 声明及完整许可证；自有源码仍为 MIT。
+
+10 项新回归检查无应用的通用 host/worker/Counter/Miles session、缺失插件诊断、别名与
+清单位置、历史 PATH 字节、独立 VM/agent/verifier 预算、manifest 漂移拒绝、原位层/ready
+配置和 DAX pin 校验。OpenAI client、VMM 和块设备使用替身；本地文件校验实际执行。
+完整 portable 回归 320 项：313 通过、7 项因平台/运行环境限制跳过，无失败或错误。
+包边界检查同时覆盖核心与可选应用，CI 增加只安装核心的源码目录外检查。
+实际 wheel 在两份独立 venv 验收：只安装核心 104 项全部通过；核心加 TB2.1 应用
+93 项中 92 通过、1 项跳过，分别通过 3/4 个 CLI help。14 项限定的 AST/内容对照
+确认迁移的任务函数、层/manifest/ready 校验块和三份清单保持原实现；不声称所有
+模块 AST 不变。核心不附带 OpenAI SDK，Miles session 测试使用 client 替身。
+
+R2 的本地职责整理至此完成。下一节点是 R3：在真实 Linux 实例验证既有配置/registry
+升级、SDK/worker/ready/fork 共用节点账本、EROFS/OverlayBD/ublk/3FS 路径及现有 TB2.1、
+MBPP 的短应用回归。本地替身回归不能替代这些验收，也不证明新的论文能力或性能数字。
+模型、GPU、KV cache、训练算法与 optimizer 继续属于外部 RL 框架。

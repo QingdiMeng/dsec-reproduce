@@ -8,8 +8,8 @@ version = "0.1.0.dev0"
 description = "Optional Terminal-Bench-2.1 application preparation for DSec"
 readme = "README.md"
 requires-python = ">=3.11"
-license = "MIT"
-license-files = ["LICENSE"]
+license = "MIT AND Apache-2.0"
+license-files = ["LICENSE", "licenses/miles-APACHE-2.0.txt"]
 dependencies = ["dsec-reproduce==0.1.0.dev0"]
 
 [project.scripts]
@@ -17,3 +17,6 @@ dsec-tb21 = "dsec_tb21_case.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+dsec_tb21_case = ["*.json"]

@@ -48,8 +48,7 @@ class FrameworkProfile:
                 re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,127}", self.environment_id)
                 and self.storage in ("local", "threefs_lazy") and self.memory == "baseline"
                 and (self.verifier_storage is None or
-                     (self.environment_id.startswith("tb2-") and
-                      self.verifier_storage in ("local", "threefs_lazy")))
+                     self.verifier_storage in ("local", "threefs_lazy"))
                 and self.cpu_qos == "default" and self.lifecycle == "full_snapshot_stop"):
             return self
         if (self.backend == "container" and self.environment in ("erofs_split", "erofs_layers")

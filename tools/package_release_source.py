@@ -32,6 +32,7 @@ TESTS = (
     'tests/unit/test_edge_assembly.py',
     'tests/unit/test_command_sessions.py',
     'tests/unit/test_runtime_storage.py',
+    'tests/unit/test_task_application_boundary.py',
     'tests/unit/test_node_admission.py',
     'tests/unit/test_dsec_host.py',
     'tests/unit/test_egress_proxy.py',
@@ -103,7 +104,10 @@ def source_files(root):
     for name, package_name in (("tb21", "dsec_tb21_case"), ("mbpp", "dsec_mbpp_case")):
         app = root/'apps'/name
         files.update('apps/'+name+'/'+filename for filename in ('pyproject.toml', 'README.md', 'LICENSE'))
+        app_config = tomllib.loads((app/'pyproject.toml').read_text())
+        files.update('apps/'+name+'/'+filename for filename in app_config['project']['license-files'])
         files.update(str(p.relative_to(root)) for p in (app/'src'/package_name).glob('*.py'))
+        files.update(str(p.relative_to(root)) for p in (app/'src'/package_name).glob('*.json'))
         files.add('apps/'+name+'/tests/test_case.py')
     return config, sorted(files)
 

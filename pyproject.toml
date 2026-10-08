@@ -50,6 +50,3 @@ py-modules = [
     "service_admin", "shared_service_monitor", "tb2_backend",
     "tb2_verifier_artifact", "work_journal", "work_scheduler",
 ]
-
-[tool.setuptools.package-data]
-dsec_adapters = ["*.json"]

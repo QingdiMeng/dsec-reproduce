@@ -32,7 +32,28 @@ jobs:
           python tools/check_wheel.py dist/core/*.whl
           python -m build --wheel --no-isolation --outdir dist/tb21 apps/tb21
           python -m build --wheel --no-isolation --outdir dist/mbpp apps/mbpp
-          python -m pip install dist/core/*.whl dist/tb21/*.whl dist/mbpp/*.whl
+          python tools/check_wheel.py dist/tb21/*.whl --project apps/tb21/pyproject.toml
+          python tools/check_wheel.py dist/mbpp/*.whl --project apps/mbpp/pyproject.toml
+          python -m pip install dist/core/*.whl
+      - name: Core-only installed boundary
+        working-directory: /tmp
+        run: |
+          dsec-sandboxd --help
+          dsec-rollout-worker --help
+          python -I - <<'PY'
+          import importlib.util
+          import sys
+          from dsec.rollout.worker import RolloutWorker
+          from dsec.control import local_api
+          from dsec_adapters.dsec_task_registry import task_adapter
+          assert importlib.util.find_spec('dsec_tb21_case') is None
+          assert importlib.util.find_spec('dsec_mbpp_case') is None
+          RolloutWorker(None)
+          assert task_adapter('counter').__class__.__name__ == 'CounterDSecEnvironment'
+          assert not any(name.startswith('dsec_tb21_case') for name in sys.modules)
+          PY
+      - name: Install optional applications
+        run: python -m pip install dist/tb21/*.whl dist/mbpp/*.whl
       - name: Documentation links
         run: python tools/check_docs.py
       - name: Core and source export regressions

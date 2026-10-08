@@ -33,7 +33,11 @@ wire protocols.
 Runtime storage now has a shared interface for catalog preparation, private
 disks, checkpoints, integrity and device cleanup over the existing file and
 OverlayBD components. Live identities/commit state remain Edge-owned.
-Remaining task-policy migration and R3 real-host acceptance remain pending.
+TB2.1 task adapters, pinned suite/verifier rules, command normalization and
+cache manifests now live in the optional application. Generic catalog loading
+and Miles policy sessions do not require it; legacy CLI/import/operation names
+remain compatibility bridges. R2 local responsibility separation is complete;
+R3 real-host upgrade and application acceptance remain pending.
 Interactive sessions and complete aether/chronus remain later capabilities. This does not change the mechanism
 validation statuses below; moving a component does not establish a missing
 paper capability.

@@ -346,12 +346,8 @@ class SandboxManager:
             raise ValueError("DAX verifier task is not configured")
         for task in self.tb2_verifier_dax_tasks:
             store = self.verifier_artifacts_for(task)
-            manifest = store.manifest if store is not None else {}
-            if (manifest.get("task_id") != task.removeprefix("tb2-") or
-                    manifest.get("dax_compact") is not True or
-                    manifest.get("size_bytes", 0) > 4 * 1024**3 or
-                    manifest.get("size_bytes", 0) % (2 * 1024**2)):
-                raise ValueError("DAX verifier requires a compact, task-pinned, 2 MiB aligned artifact")
+            from dsec.compat.task_plugins import validate_verifier_dax
+            validate_verifier_dax(store, task)
         if self.tb2_network_manager and (self.tb2_network_slots or self.tb2_network_tap):
             raise ValueError("Choose one TB2 network backend")
         self.snapshot_cache_policy = snapshot_cache_policy

@@ -182,6 +182,20 @@ class ModuleBoundaryTests(unittest.TestCase):
                         'dsec.rollout','dsec_adapters','tb2_','sandbox_sdk','durable_manager')),
                         f'{filename} imports {name}')
 
+    def test_task_implementation_and_data_are_only_in_optional_application(self):
+        for name in ('tb2_dsec_environment','tb2_microvm_env','tb2_task_runtime',
+                     'tb2_verifier_command','tb2_offline_verifier'):
+            source = (ROOT/'dsec_adapters'/f'{name}.py').read_text()
+            self.assertIn('sys.modules[__name__] = require_tb21', source)
+            self.assertFalse(any(isinstance(node, (ast.ClassDef, ast.FunctionDef))
+                                 for node in ast.walk(ast.parse(source))))
+        self.assertEqual(list((ROOT/'dsec_adapters').glob('tb2*.json')), [])
+        for filename in ('local_api.py','environments.py'):
+            source = (ROOT/'src/dsec/control'/filename).read_text()
+            self.assertNotIn('task_toml_sha256', source)
+            self.assertNotIn('tests/test.sh', source)
+            self.assertNotIn('VerifierArtifactStore', source)
+
     def test_privileged_and_guest_agents_remain_standalone_sources(self):
         # These sources are embedded into a root-owned helper or guest image.
         # They must not require an installed DSec Python package in that context.

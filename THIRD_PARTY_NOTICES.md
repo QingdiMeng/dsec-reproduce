@@ -9,7 +9,8 @@ this does not relicense the project's own code under Apache-2.0.
 
 ## Miles agent loop
 
-`dsec_adapters/openenv_agent_function.py` derives from
+`dsec_adapters/miles_session.py` and
+`apps/tb21/src/dsec_tb21_case/openenv_agent_function.py` derive from
 `examples/experimental/openenv/openenv_agent_function.py` in
 [radixark/miles](https://github.com/radixark/miles/tree/98942681e85ec38a312091771e04c1736ec583c3/examples/experimental/openenv).
 
@@ -20,7 +21,10 @@ this does not relicense the project's own code under Apache-2.0.
 - Local changes include optional standalone policy URL handling, an explicit
   policy-call hook, evaluator selection and verdict diagnostics. The DSec
   episode integration uses its own scheduled worker, not an OpenEnv service.
-- The legacy experiment module is an import alias to the packaged derivative.
+- The legacy `dsec_adapters.openenv_agent_function` module aliases the generic
+  Miles session implementation; task-specific OpenEnv attributes are forwarded
+  lazily to the optional TB2.1 application. The experiment compatibility modules
+  remain import aliases. Both packages retain the complete Apache-2.0 text.
 
 This records the reviewed reference version; it does not claim the derivative
 is byte-identical to upstream. Subsequent changes must preserve these notices.
