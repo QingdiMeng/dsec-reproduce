@@ -187,8 +187,8 @@ class RegistryRecords:
                         raise ValueError("Persisted microVM environment changed")
                     sb.environment_manifest_sha256=current_identity
                     sb.environment_catalog_sha256=manager.microvm_environment_catalog.digest
-                    resolved=manager.microvm_environment_catalog.resolve(sb.environment_id,
-                                                                       sb.storage)
+                    resolved=manager.disk_storage.prepare(manager.microvm_environment_catalog,
+                                                          sb.environment_id, sb.storage)
                     sb.layer_disks=tuple(layer["file"] for layer in resolved["layers"])
                     sb.kernel=resolved["kernel"]
                     if value.get("layer_disks") != [str(item) for item in sb.layer_disks]:

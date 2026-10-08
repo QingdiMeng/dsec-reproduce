@@ -1,7 +1,5 @@
 """Sandbox state and Edge composition; transitions are a separate component."""
-import errno
 from collections import deque
-import hashlib
 import json
 from dsec.contracts.errors import SandboxError, ServiceBusy, CommandOutcomeUnknown
 from dsec.runtime.transitions import LifecycleController
@@ -11,8 +9,6 @@ from dsec.runtime.sessions.dispatcher import ShellDispatcher
 import math
 import os
 from pathlib import Path
-import shutil
-import subprocess
 import threading
 import time
 import uuid
@@ -21,115 +17,16 @@ from dsec.runtime.backends.firecracker import MicroVM
 from dsec.runtime.isolation.proxy import guest_proxy_command, validate_proxy_url, validate_proxy_bypass_hosts
 
 
-def _copy_sparse(source, destination):
-    """Keep TB2's 10-GiB logical disk sparse across create/snapshot/restore."""
-    subprocess.run(["cp", "--sparse=always", "--reflink=auto", "--",
-                    str(source), str(destination)], check=True)
-
-
-def _fsync_directory(path):
-    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
-def _sparse_sha256(path):
-    """Hash allocated extents and their offsets without scanning sparse holes."""
-    digest = hashlib.sha256(b"dsec-sparse-sha256-v1\0")
-    fd = os.open(path, os.O_RDONLY)
-    try:
-        size = os.fstat(fd).st_size
-        digest.update(size.to_bytes(8, "big"))
-        cursor = 0
-        while cursor < size:
-            try:
-                start = os.lseek(fd, cursor, os.SEEK_DATA)
-            except OSError as exc:
-                if exc.errno == errno.ENXIO:
-                    break  # The remaining bytes are a hole.
-                raise
-            end = os.lseek(fd, start, os.SEEK_HOLE)
-            if not cursor <= start < end <= size:
-                raise OSError("Invalid sparse extent boundaries")
-            digest.update(start.to_bytes(8, "big"))
-            digest.update(end.to_bytes(8, "big"))
-            offset = start
-            while offset < end:
-                block = os.pread(fd, min(1024*1024, end-offset), offset)
-                if not block:
-                    raise EOFError("Sparse extent changed while hashing")
-                digest.update(block)
-                offset += len(block)
-            cursor = end
-        return digest.hexdigest()
-    finally:
-        os.close(fd)
-
-
-def _sparse_block_sha256(path):
-    """Content hash over fixed logical blocks, skipping all-hole blocks."""
-    block_size = 1024 * 1024
-    digest = hashlib.sha256(b"dsec-sparse-block-sha256-v2\0")
-    fd = os.open(path, os.O_RDONLY)
-    try:
-        size = os.fstat(fd).st_size
-        digest.update(size.to_bytes(8, "big"))
-        extents = []
-        cursor = 0
-        while cursor < size:
-            try:
-                start = os.lseek(fd, cursor, os.SEEK_DATA)
-            except OSError as exc:
-                if exc.errno == errno.ENXIO:
-                    break
-                if exc.errno in (errno.EINVAL, errno.ENOTSUP):
-                    extents = [(0, size)]  # Correct dense fallback.
-                    break
-                raise
-            try:
-                end = os.lseek(fd, start, os.SEEK_HOLE)
-            except OSError as exc:
-                if exc.errno in (errno.EINVAL, errno.ENOTSUP):
-                    extents = [(0, size)]
-                    break
-                raise
-            if not cursor <= start < end <= size:
-                raise OSError("Invalid sparse extent boundaries")
-            extents.append((start, end))
-            cursor = end
-        zero_digest = hashlib.sha256(bytes(block_size)).digest()
-        extent_index = 0
-        for offset in range(0, size, block_size):
-            end = min(size, offset + block_size)
-            while extent_index < len(extents) and extents[extent_index][1] <= offset:
-                extent_index += 1
-            has_data = (extent_index < len(extents) and extents[extent_index][0] < end)
-            if not has_data:
-                digest.update(zero_digest if end-offset == block_size
-                              else hashlib.sha256(bytes(end-offset)).digest())
-                continue
-            block = bytearray()
-            while len(block) < end-offset:
-                part = os.pread(fd, end-offset-len(block), offset+len(block))
-                if not part:
-                    raise EOFError("Snapshot file changed while hashing")
-                block.extend(part)
-            digest.update(hashlib.sha256(block).digest())
-        return digest.hexdigest()
-    finally:
-        os.close(fd)
+# Legacy hook names remain in the runtime module for fault-injection compatibility.
+from dsec.storage.snapshots import (_copy_sparse, _fsync_directory,
+    _sparse_sha256, _sparse_block_sha256, _snapshot_hash as _storage_snapshot_hash)
+from dsec.storage.service import RuntimeStorage
+from dsec.contracts.storage import DiskPaths
 
 
 def _snapshot_hash(path, algorithm):
-    if algorithm == "sha256":
-        return sha(path)
-    if algorithm == "sparse-sha256-v1":
-        return _sparse_sha256(path)
-    if algorithm == "sparse-block-sha256-v2":
-        return _sparse_block_sha256(path)
-    raise ValueError("Unsupported snapshot hash algorithm")
+    return _storage_snapshot_hash(path, algorithm, hash_file=sha,
+        sparse_hash=_sparse_sha256, sparse_block_hash=_sparse_block_sha256)
 
 
 class Sandbox:
@@ -306,6 +203,9 @@ class Sandbox:
         from dsec.runtime.fork import seal_baseline
         return seal_baseline(self, allow_prepared_state=allow_prepared_state)
 
+    def disk_paths(self):
+        return DiskPaths(self.directory, self.disk, self.work_disk)
+
     def _restore(self):
         self._require_owner()
         return self.manager.lifecycle.restore(self)
@@ -373,17 +273,19 @@ class SandboxManager:
             self.registry_lock = registry.owner_lock
         # Late binding keeps legacy module-level fault hooks working while
         # the transition component has no dependency on this compatibility host.
-        self.lifecycle = LifecycleController(
+        self.disk_storage = RuntimeStorage(
             copy_sparse=lambda *args: _copy_sparse(*args),
             snapshot_hash=lambda *args: _snapshot_hash(*args),
+            hash_file=lambda path: sha(path))
+        self.lifecycle = LifecycleController(
+            storage=self.disk_storage,
             hash_file=lambda path: sha(path),
             fsync_directory=lambda path: _fsync_directory(path))
         self.commands = ShellDispatcher(
             proxy_command=lambda *args: guest_proxy_command(*args))
         self.ready_pool = ReadyPool()
         self.provisioner = SandboxProvisioner(
-            sandbox_factory=lambda *args, **kwargs: Sandbox(*args, **kwargs),
-            copy_sparse=lambda *args: _copy_sparse(*args))
+            sandbox_factory=lambda *args, **kwargs: Sandbox(*args, **kwargs))
         self.warm_node_waits = {}
         self.e3 = e3
         self.microvm_environment_catalog = microvm_environment_catalog

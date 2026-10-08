@@ -1,6 +1,6 @@
 # DSec 模块化重构设计
 
-状态：设计已确认，R0/R1 已实施；R2 已完成评分插件、SDK/容器 Edge 拆分、Edge 节点租约迁移、生命周期状态转换拆分、创建/ready 池/registry 组合及执行通道拆分，其余 R2 与 R3 待完成。日期：2026-10-08。
+状态：设计已确认，R0/R1 已实施；R2 已完成评分插件、SDK/容器 Edge 拆分、Edge 节点租约迁移、生命周期状态转换拆分、创建/ready 池/registry 组合、执行通道拆分及 Storage 接口收敛，剩余任务规则迁移与 R3 待完成。日期：2026-10-08。
 代码基线：`7f70524187e61e13f123c7999098858cf3411bd5`。
 
 ## 1. 目标与范围
@@ -473,3 +473,40 @@ Docker 执行与 VMM 使用替身，不能替代真实内核和 guest 验收。
 此处完成执行接口职责收敛，不实现交互式 session、
 后台进程、流式 stdout/stderr 或完整 aether/chronus；这些按既有后续机制里程碑推进。
 统一 Storage 接口与剩余任务规则迁移仍属 R2；真实 Linux/KVM、Docker 与短 RL 验收仍属 R3。
+
+
+### R2：运行时 Storage 接口节点
+
+`contracts.storage.DiskStorage` 明确环境准备、私有写盘、磁盘检查点、恢复、验证与释放接口；
+`DiskPaths` 只表达目录/root/work 路径，既有设备 ID、daemon 身份和清理状态继续由 Sandbox
+持有并写入原 registry。`storage.service.RuntimeStorage` 组合现有 catalog、文件操作和
+OverlayBD RootStore，不持有第二份沙箱状态、租约、journal 或引用账本，也不导入 runtime。
+
+创建、恢复、分叉和 registry 的通用环境准备经过同一入口，仍由现有 catalog 校验
+local/3FS 来源、EROFS 顺序、内核、DAX 设备索引与 VMM 摘要。准备不复制远端数据。
+私有 ext4 和 OverlayBD＋ublk 保留各自机制，checkpoint/restack、稀疏复制、校验及回收
+通过同一存储服务。稀疏文件和快照哈希原语已移入 `storage.snapshots`；旧名称为兼容桥，
+文件操作与 hash fault hook 在 Edge 组装处晚绑定。
+
+运行时仍协调 guest sync/VMM pause/stop、快照发布与 registry commit，之后才释放节点租约。
+分叉读者等待、共享 CAS 引用和 prepared snapshot 发布语义未更换。
+设备创建返回的 ID/runtime 先赋给 Sandbox，再进行可能失败的 daemon 身份查询；
+身份查询失败保留清理句柄，避免新抽象把已经创建的块设备遗失。
+设备删除仍核对 daemon 身份，消失的设备仅清理私有 runtime，不能删除新 daemon 复用的 ID。
+
+12 项限定的 AST 对照相对于 `18342b8` 覆盖哈希/复制原语、snapshot manifest、registry
+persist/load 及四处设备获取顺序；不宣称整个生命周期 AST 不变。
+13 项新增存储回归覆盖本地 DAX pin、远端层不预读、私有盘隔离、root/work checkpoint
+完整性、OverlayBD 层集/内容校验、丢失 restack 回复不重试、daemon 换代与获取后失败清理。
+实际 ublk、3FS mount 和 VMM 有替身；本地文件与完整性检查实际执行。
+
+存储能力仅表达对应磁盘机制，runtime 仍核对隔离、quiescence 和配置兼容性。
+完整 `publish_diff`/`pack_diff` 仍未支持；本节点不添加虚假的发布成功路径或改变既有 SDK 能力表。
+容器只读层继续使用现有 catalog/guest 挂载组件，不由此宣称容器快照或内存卸载已完成。
+
+本节点完整本地回归 309 项：302 通过、7 项因环境条件跳过，无失败或错误。
+核心 wheel 在源码目录外的独立 venv 通过 101 项存储、快照、分叉、Edge、命令及容器 RPC
+回归；未安装任务应用，旧模块/文件原语身份与 3 个 CLI help 通过。wheel 包含 133 个
+运行时 Python 模块，源码归档、文档链接及包边界检查通过。
+剩余任务 manifest/API/adapter 规则迁出仍属 R2，
+真实 Linux/KVM、Docker、3FS/ublk 与应用短验收仍属 R3。

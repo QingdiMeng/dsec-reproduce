@@ -1,6 +1,5 @@
 """Cold creation, prepared-child allocation and prewarm through Edge ownership."""
 import math
-import shutil
 import time
 
 from dsec.contracts.errors import SandboxError
@@ -8,9 +7,8 @@ from dsec.contracts.resources import NodeAdmissionBusy
 
 
 class SandboxProvisioner:
-    def __init__(self, *, sandbox_factory, copy_sparse):
+    def __init__(self, *, sandbox_factory):
         self.sandbox_factory = sandbox_factory
-        self.copy_sparse = copy_sparse
 
     def create(self, manager, idle_ttl_seconds=300, environment_id="default", memory_profile="baseline",
                verifier_storage=None, storage="local", baseline_id=None):
@@ -30,7 +28,7 @@ class SandboxProvisioner:
         if manager.microvm_environment_catalog is not None and \
                 environment_id in manager.microvm_environment_catalog.entries:
             # Validate before allocating a warm slot or creating a VM.
-            manager.microvm_environment_catalog.resolve(environment_id, storage)
+            manager.disk_storage.prepare(manager.microvm_environment_catalog, environment_id, storage)
         if verifier_storage is not None:
             store = manager.verifier_artifacts_for(environment_id)
             if store is None or environment_id not in manager.tb2_templates:
@@ -70,7 +68,7 @@ class SandboxProvisioner:
 
         if not math.isfinite(idle_ttl_seconds) or idle_ttl_seconds <= 0:
             raise ValueError("TTL must be finite and positive")
-        environment_spec = (manager.microvm_environment_catalog.resolve(environment_id, storage)
+        environment_spec = (manager.disk_storage.prepare(manager.microvm_environment_catalog, environment_id, storage)
                             if manager.microvm_environment_catalog is not None and
                             environment_id in manager.microvm_environment_catalog.entries else None)
         if storage != "local" and environment_spec is None:
@@ -166,19 +164,15 @@ class SandboxProvisioner:
             source = (manager.e3["guest"] if sb.work_disk else
                       manager.tb2_templates.get(environment_id, manager.template))
             if sb.overlaybd_store:
-                sb.overlaybd_device_id, sb.overlaybd_runtime = sb.overlaybd_store.create(
-                    sb.overlaybd_image, sb.directory, sb.disk)
-                sb.overlaybd_daemon_socket_identity = sb.overlaybd_store.socket_identity()
+                sb.overlaybd_device_id, sb.overlaybd_runtime = manager.disk_storage.create_writable(
+                    sb.disk_paths(), source, store=sb.overlaybd_store, image=sb.overlaybd_image)
+                sb.overlaybd_daemon_socket_identity = manager.disk_storage.device_identity(sb.overlaybd_store)
                 sb._persist()
-            elif environment_id in manager.tb2_templates:
-                self.copy_sparse(source, sb.disk)
             else:
-                shutil.copy2(source, sb.disk)
-            if not sb.overlaybd_store:
-                sb.disk.chmod(0o600)
+                manager.disk_storage.create_writable(sb.disk_paths(), source,
+                    sparse=environment_id in manager.tb2_templates)
             if sb.work_disk:
-                shutil.copy2(manager.e3["work_template"], sb.work_disk)
-                sb.work_disk.chmod(0o600)
+                manager.disk_storage.copy_file(manager.e3["work_template"], sb.work_disk, mode=0o600)
                 advance("vm_boot")
                 sb.vm.boot(sb.kernel, sb.disk, memory_profile=sb.memory_profile,
                            data=manager.e3["data"], work=sb.work_disk)

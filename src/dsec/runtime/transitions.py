@@ -7,44 +7,30 @@ It does not replay commands, launch tasks or manage models.
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import time
 import uuid
 
 from dsec.contracts.errors import SandboxError
+from dsec.contracts.storage import DiskStorage
 
 
 class LifecycleController:
-    def __init__(self, *, copy_sparse, snapshot_hash, hash_file, fsync_directory):
-        self.copy_sparse = copy_sparse
-        self.snapshot_hash = snapshot_hash
+    def __init__(self, *, storage: DiskStorage, hash_file, fsync_directory):
+        self.storage = storage
         self.hash_file = hash_file
         self.fsync_directory = fsync_directory
 
     def overlaybd_service_matches(self, sandbox):
-        if not sandbox.overlaybd_store or sandbox.overlaybd_device_id is None:
-            return True
-        try:
-            return (sandbox.overlaybd_daemon_socket_identity ==
-                    sandbox.overlaybd_store.socket_identity())
-        except (OSError, RuntimeError, ValueError, IndexError):
-            return False
+        return sandbox.manager.disk_storage.service_matches(sandbox.overlaybd_store,
+            sandbox.overlaybd_device_id, sandbox.overlaybd_daemon_socket_identity)
 
     def release_overlaybd_device(self, sandbox):
         if not sandbox.overlaybd_store or sandbox.overlaybd_device_id is None:
             return
-        device_present = (Path(f"/sys/block/ublkb{sandbox.overlaybd_device_id}").exists() or
-                          Path(f"/dev/ublkb{sandbox.overlaybd_device_id}").exists())
-        if not device_present:
-            sandbox.overlaybd_store.delete(None, sandbox.overlaybd_runtime, sandbox.directory)
-        elif sandbox._overlaybd_service_matches():
-            sandbox.overlaybd_store.delete(sandbox.overlaybd_device_id,
-                                        sandbox.overlaybd_runtime, sandbox.directory)
-        else:
-            # A restarted daemon may reuse the numeric device id. Never send
-            # it a delete for a device owned by the old daemon.
-            raise SandboxError("Old ublk device still exists after daemon change")
+        sandbox.manager.disk_storage.release_device(sandbox.overlaybd_store,
+            sandbox.overlaybd_device_id, sandbox.overlaybd_runtime, sandbox.directory,
+            sandbox.overlaybd_daemon_socket_identity)
         sandbox.overlaybd_device_id = None
         sandbox.overlaybd_runtime = None
         sandbox.overlaybd_daemon_socket_identity = None
@@ -96,7 +82,7 @@ class LifecycleController:
                     or manifest.get("verifier_artifact_sha256") != sandbox.verifier_artifact_sha):
                 raise SandboxError("Snapshot environment/memory profile mismatch")
             if sandbox.environment_catalog_sha256 is not None:
-                spec = sandbox.manager.microvm_environment_catalog.resolve(
+                spec = sandbox.manager.disk_storage.prepare(sandbox.manager.microvm_environment_catalog,
                     sandbox.environment_id, sandbox.storage)
                 if (sandbox.manager.microvm_environment_catalog.digest !=
                         sandbox.environment_catalog_sha256 or
@@ -108,44 +94,24 @@ class LifecycleController:
             if manifest["binary_sha256"] != self.hash_file(Path(sandbox.vm.binary)):
                 raise SandboxError("VMM binary changed")
             overlaybd = sandbox.overlaybd_store is not None
-            if manifest.get("rootfs_block_backend", "file-ext4") != (
-                    "overlaybd-ublk" if overlaybd else "file-ext4"):
-                raise SandboxError("Snapshot block backend mismatch")
-            files = (("memory", "state", "disk-image.json") if overlaybd else
-                     ("memory", "state", "disk.ext4")) + (("work.ext4",) if sandbox.work_disk else ())
-            if overlaybd:
-                disk_layers = sandbox.overlaybd_store.disk_layers(
-                    sandbox.snapshot/"disk-image.json", sandbox.directory,
-                    sandbox.overlaybd_store.source_for(sandbox.environment_id))
-                expected_layers = {path.name for path in disk_layers}
-                if (len(expected_layers) != len(disk_layers) or
-                        set(manifest.get("disk_layers", {})) != expected_layers):
-                    raise SandboxError("Snapshot disk layer list mismatch")
-                for path in disk_layers:
-                    if self.hash_file(path) != manifest["disk_layers"][path.name]:
-                        raise SandboxError("Snapshot disk layer integrity mismatch: "+path.name)
-            for name in files:
-                algorithm = manifest.get("hash_algorithms", {}).get(name, "sha256")
-                if self.snapshot_hash(sandbox.snapshot/name, algorithm) != manifest["files"][name]:
-                    raise SandboxError("Snapshot integrity mismatch: "+name)
+            sandbox.manager.disk_storage.verify_checkpoint(sandbox.disk_paths(),
+                sandbox.snapshot, manifest, store=sandbox.overlaybd_store,
+                source_image=(sandbox.overlaybd_store.source_for(sandbox.environment_id)
+                              if overlaybd else None))
             if sandbox.work_disk and (manifest.get("shared_data_sha256") != sandbox.manager.e3["data_sha256"]
                                    or self.hash_file(sandbox.manager.e3["data"]) != manifest["shared_data_sha256"]):
                 raise SandboxError("E3 shared read-only data changed")
             if overlaybd:
                 sandbox.overlaybd_image = sandbox.snapshot/"disk-image.json"
-                sandbox.overlaybd_device_id, sandbox.overlaybd_runtime = sandbox.overlaybd_store.create(
-                    sandbox.overlaybd_image, sandbox.directory, sandbox.disk)
-                sandbox.overlaybd_daemon_socket_identity = sandbox.overlaybd_store.socket_identity()
+                sandbox.overlaybd_device_id, sandbox.overlaybd_runtime = sandbox.manager.disk_storage.restore_disk(
+                    sandbox.disk_paths(), sandbox.snapshot, store=sandbox.overlaybd_store)
+                sandbox.overlaybd_daemon_socket_identity = sandbox.manager.disk_storage.device_identity(sandbox.overlaybd_store)
                 sandbox._persist()
             else:
-                if sandbox.environment_id in sandbox.manager.tb2_templates:
-                    self.copy_sparse(sandbox.snapshot/"disk.ext4", sandbox.disk)
-                else:
-                    shutil.copy2(sandbox.snapshot/"disk.ext4", sandbox.disk)
-                sandbox.disk.chmod(0o600)
+                sandbox.manager.disk_storage.restore_disk(sandbox.disk_paths(), sandbox.snapshot,
+                    sparse=sandbox.environment_id in sandbox.manager.tb2_templates)
             if sandbox.work_disk:
-                shutil.copy2(sandbox.snapshot/"work.ext4", sandbox.work_disk)
-                sandbox.work_disk.chmod(0o600)
+                sandbox.manager.disk_storage.copy_file(sandbox.snapshot/"work.ext4", sandbox.work_disk, mode=0o600)
             sandbox.vm.restore(sandbox.snapshot/"state", sandbox.snapshot/"memory",
                             track_dirty_pages=sandbox.snapshot_mode == "incremental")
             if sandbox.work_disk:
@@ -201,22 +167,18 @@ class LifecycleController:
                     advance("memory_rebase")
                     if previous is None:
                         raise SandboxError("Incremental snapshot has no base memory")
-                    self.copy_sparse(previous/"memory", staging/"memory")
+                    sandbox.manager.disk_storage.copy_file(previous/"memory", staging/"memory", sparse=True)
                     subprocess.run([str(sandbox.manager.snapshot_editor), "edit-memory", "rebase",
                                     "--memory-path", str(staging/"memory"),
                                     "--diff-path", str(staging/"diff")], check=True)
                     (staging/"diff").unlink()
                     sandbox._snapshot_checkpoint("after_rebase")
                 advance("disk_copy")
-                if sandbox.overlaybd_store:
-                    latest_disk_layer = sandbox.overlaybd_store.snapshot(
-                        sandbox.overlaybd_device_id, sandbox.overlaybd_image, staging, target)
-                elif sandbox.environment_id in sandbox.manager.tb2_templates:
-                    self.copy_sparse(sandbox.disk, staging/"disk.ext4")
-                else:
-                    shutil.copy2(sandbox.disk, staging/"disk.ext4")
-                if sandbox.work_disk:
-                    shutil.copy2(sandbox.work_disk, staging/"work.ext4")
+                latest_disk_layer = sandbox.manager.disk_storage.checkpoint_disk(
+                    sandbox.disk_paths(), staging, target,
+                    sparse=sandbox.environment_id in sandbox.manager.tb2_templates,
+                    store=sandbox.overlaybd_store, image=sandbox.overlaybd_image,
+                    device_id=sandbox.overlaybd_device_id)
                 advance("snapshot_manifest")
                 names = (("state", "memory", "disk-image.json")
                          if sandbox.overlaybd_store else
@@ -255,7 +217,7 @@ class LifecycleController:
                             "latest_disk_layer":(latest_disk_layer.name if sandbox.overlaybd_store
                                                  else None),
                             "hash_algorithms":hash_algorithms,
-                            "files":{name:self.snapshot_hash(staging/name,
+                            "files":{name:self.storage.snapshot_hash(staging/name,
                                      hash_algorithms.get(name, "sha256")) for name in names}}
                 for name in manifest["files"]:
                     with (staging/name).open("rb") as stream:
@@ -280,7 +242,7 @@ class LifecycleController:
                 sandbox.last_pause_phases = phases
                 # Previous memory backing is no longer in use after vm.stop().
                 if previous is not None:
-                    shutil.rmtree(previous)
+                    sandbox.manager.disk_storage.remove_checkpoint(previous)
             except Exception as exc:
                 advance("failed")
                 sandbox.last_pause_phases = phases
@@ -290,12 +252,12 @@ class LifecycleController:
                 cleanup_error = None
                 if staging.exists():
                     try:
-                        shutil.rmtree(staging)
+                        sandbox.manager.disk_storage.remove_checkpoint(staging)
                     except Exception as error:
                         cleanup_error = error
                 if sandbox.snapshot != target and target.exists():
                     try:
-                        shutil.rmtree(target)
+                        sandbox.manager.disk_storage.remove_checkpoint(target)
                         self.fsync_directory(sandbox.directory)
                     except Exception as error:
                         cleanup_error = error
@@ -374,17 +336,13 @@ class LifecycleController:
             except Exception as exc:
                 sandbox._event("FAILED", "network_cleanup_failed: " + str(exc))
                 raise
-        sandbox.disk.unlink(missing_ok=True)
-        if sandbox.work_disk:
-            sandbox.work_disk.unlink(missing_ok=True)
+        sandbox.manager.disk_storage.release_writable(sandbox.disk_paths())
         if sandbox.snapshot is not None:
             if sandbox.snapshot.exists():
-                shutil.rmtree(sandbox.snapshot)
+                sandbox.manager.disk_storage.remove_checkpoint(sandbox.snapshot)
             sandbox.snapshot = None
         if sandbox.overlaybd_store:
-            layers = sandbox.directory/"disk-layers"
-            if layers.exists():
-                shutil.rmtree(layers)
+            sandbox.manager.disk_storage.release_layers(sandbox.directory)
             sandbox.overlaybd_image = sandbox.overlaybd_store.source_for(sandbox.environment_id)
         sandbox.vm.api_path.unlink(missing_ok=True); sandbox.vm.vsock.unlink(missing_ok=True)
         sandbox._event("STOPPED", reason)

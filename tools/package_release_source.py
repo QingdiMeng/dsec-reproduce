@@ -31,6 +31,7 @@ TESTS = (
     'tests/unit/test_container_edge.py',
     'tests/unit/test_edge_assembly.py',
     'tests/unit/test_command_sessions.py',
+    'tests/unit/test_runtime_storage.py',
     'tests/unit/test_node_admission.py',
     'tests/unit/test_dsec_host.py',
     'tests/unit/test_egress_proxy.py',

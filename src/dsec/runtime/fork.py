@@ -189,7 +189,7 @@ def _publish_prepared_snapshot(source):
 
 def fork_baseline(manager, baseline_id, ttl, environment_id, memory_profile,
                   verifier_storage, storage):
-    from dsec.runtime.lifecycle import SandboxError, _copy_sparse, _fsync_directory
+    from dsec.runtime.lifecycle import SandboxError, _fsync_directory
     if not isinstance(baseline_id, str) or not re.fullmatch(r"[0-9a-f]{12}", baseline_id):
         raise ValueError("Invalid baseline_id")
     if not math.isfinite(ttl) or ttl <= 0:
@@ -209,7 +209,7 @@ def fork_baseline(manager, baseline_id, ttl, environment_id, memory_profile,
                         source.verifier_storage, source.storage):
             raise SandboxError("Baseline environment/profile mismatch")
         if source.environment_catalog_sha256 is not None:
-            spec = manager.microvm_environment_catalog.resolve(environment_id, storage)
+            spec = manager.disk_storage.prepare(manager.microvm_environment_catalog, environment_id, storage)
             if (spec['environment_sha256'] != source.environment_manifest_sha256 or
                     tuple(x['file'] for x in spec['layers']) != source.layer_disks):
                 raise SandboxError("Baseline environment source changed")
@@ -227,14 +227,14 @@ def fork_baseline(manager, baseline_id, ttl, environment_id, memory_profile,
             # guest. Every branch PATCHes to its private device before resume.
             if source.overlaybd_device_id is None:
                 store = source.overlaybd_store
-                source.overlaybd_device_id, source.overlaybd_runtime = store.create(
-                    source.snapshot/'disk-image.json', source.directory, source.disk)
-                source.overlaybd_daemon_socket_identity = store.socket_identity()
+                source.overlaybd_device_id, source.overlaybd_runtime = manager.disk_storage.restore_disk(
+                    source.disk_paths(), source.snapshot, store=store)
+                source.overlaybd_daemon_socket_identity = manager.disk_storage.device_identity(store)
                 source._persist()
             elif not source._overlaybd_service_matches():
                 raise SandboxError('Prepared backing service identity changed')
         elif not source.disk.exists():
-            _copy_sparse(source.snapshot/'disk.ext4', source.disk)
+            manager.disk_storage.copy_file(source.snapshot/'disk.ext4', source.disk, sparse=True)
         anchor_ready = time.monotonic()
         source.fork_readers += 1
         snapshot = source.snapshot
@@ -265,14 +265,13 @@ def fork_baseline(manager, baseline_id, ttl, environment_id, memory_profile,
                     with child.overlaybd_image.open('rb') as stream:
                         os.fsync(stream.fileno())
                     _fsync_directory(child.directory)
-                    child.overlaybd_device_id, child.overlaybd_runtime = store.create(
-                        child.overlaybd_image, child.directory, child.disk)
-                    child.overlaybd_daemon_socket_identity = store.socket_identity()
+                    child.overlaybd_device_id, child.overlaybd_runtime = manager.disk_storage.create_writable(
+                        child.disk_paths(), snapshot/'disk.ext4', store=store, image=child.overlaybd_image)
+                    child.overlaybd_daemon_socket_identity = manager.disk_storage.device_identity(store)
                 else:
-                    _copy_sparse(snapshot/'disk.ext4', child.disk)
-                    child.disk.chmod(0o600)
+                    manager.disk_storage.copy_file(snapshot/'disk.ext4', child.disk, sparse=True, mode=0o600)
                 if source.work_disk:
-                    _copy_sparse(snapshot/'work.ext4', child.work_disk)
+                    manager.disk_storage.copy_file(snapshot/'work.ext4', child.work_disk, sparse=True)
                 child._persist()
                 prepared = time.monotonic()
                 child.vm.restore_fork(snapshot/'state', snapshot/'memory', child.disk,

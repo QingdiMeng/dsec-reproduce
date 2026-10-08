@@ -172,6 +172,16 @@ class ModuleBoundaryTests(unittest.TestCase):
                         'dsec.runtime.backends','tb2_','sandbox_sdk')),
                         f'{filename} imports {name}')
 
+    def test_storage_contract_and_runtime_operations_do_not_import_runtime_or_task_code(self):
+        for filename in ('contracts/storage.py','storage/service.py','storage/snapshots.py'):
+            for node in ast.walk(ast.parse((ROOT/'src/dsec'/filename).read_text())):
+                names = ([n.name for n in node.names] if isinstance(node, ast.Import)
+                         else [node.module or ''] if isinstance(node, ast.ImportFrom) else [])
+                for name in names:
+                    self.assertFalse(name.startswith(('dsec.runtime','dsec.sdk','dsec.control',
+                        'dsec.rollout','dsec_adapters','tb2_','sandbox_sdk','durable_manager')),
+                        f'{filename} imports {name}')
+
     def test_privileged_and_guest_agents_remain_standalone_sources(self):
         # These sources are embedded into a root-owned helper or guest image.
         # They must not require an installed DSec Python package in that context.
