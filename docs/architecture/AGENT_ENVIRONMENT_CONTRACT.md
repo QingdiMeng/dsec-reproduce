@@ -1,7 +1,8 @@
 # Agent 环境接口
 
 `AgentEnvironment` 是任务与训练框架之间的边界，定义在
-[agent_environment.py](../../agent_environment.py)。它不替代沙箱 SDK，也不依赖
+[dsec.rollout.environment](../../src/dsec/rollout/environment.py)，旧
+[agent_environment.py](../../agent_environment.py) 保留兼容入口。它不替代沙箱 SDK，也不依赖
 OpenEnv 服务。
 
 ## 职责
@@ -12,6 +13,10 @@ OpenEnv 服务。
 | `TaskEnvironmentAdapter` | instruction、环境与资源选择、动作执行、可信评分 |
 | `DSecAgentEnvironment` | 把任务生命周期接到持久 rollout worker |
 | worker / sandboxd | 调度、沙箱、动作日志、暂停恢复、资源回收 |
+
+DSec 管理沙箱资源。模型权重、KV cache、优化器、训练/推理显存和模型 offload
+由外部训练框架与推理服务管理。沙箱准入可以依据节点的剩余资源和外部负载等待，
+不会为取得资源而修改模型服务配置或卸载模型。
 
 ```text
 Trainer agent loop
