@@ -131,6 +131,21 @@ class ModuleBoundaryTests(unittest.TestCase):
                 for name in names:
                     self.assertFalse(name.startswith(forbidden), f'{filename} imports {name}')
 
+    def test_lifecycle_component_uses_shared_errors_without_registry_or_task_dependencies(self):
+        errors = importlib.import_module('dsec.contracts.errors')
+        legacy = importlib.import_module('sandbox_sdk')
+        for name in ('SandboxError', 'ServiceBusy', 'CommandOutcomeUnknown'):
+            self.assertIs(getattr(legacy, name), getattr(errors, name))
+        path = ROOT / 'src/dsec/runtime/transitions.py'
+        for node in ast.walk(ast.parse(path.read_text())):
+            names = ([n.name for n in node.names] if isinstance(node, ast.Import)
+                     else [node.module or ''] if isinstance(node, ast.ImportFrom) else [])
+            for name in names:
+                self.assertFalse(name.startswith(('dsec.runtime.lifecycle',
+                    'dsec.runtime.registry', 'dsec.control', 'dsec.rollout',
+                    'dsec.sdk', 'dsec_adapters', 'tb2_', 'sandbox_sdk')),
+                    f'Transition component imports {name}')
+
     def test_privileged_and_guest_agents_remain_standalone_sources(self):
         # These sources are embedded into a root-owned helper or guest image.
         # They must not require an installed DSec Python package in that context.

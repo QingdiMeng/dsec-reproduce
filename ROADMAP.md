@@ -23,8 +23,10 @@ container lifecycle ownership from the compatibility client to runtime Edge.
 The SDK is transport-only. Node reservation mechanics, episode slots and API
 rate quotas are now separate modules with one derived compatibility report.
 Edge now owns durable node admission for direct SDK calls and scheduled work;
-workers own only episode/API quotas. Lifecycle decomposition, session/storage
-boundaries and R3 real-host acceptance remain pending. This does not change the mechanism
+workers own only episode/API quotas. Existing pause/restore/cleanup transitions
+now live in a composed controller with Sandbox retaining the single state owner.
+Ready-pool/registry composition, session/storage boundaries and R3 real-host
+acceptance remain pending. This does not change the mechanism
 validation statuses below; moving a component does not establish a missing
 paper capability.
 

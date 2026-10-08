@@ -1,9 +1,11 @@
-"""Local Linux SDK for trusted microVM experiments, not a multi-tenant service."""
+"""Sandbox state and Edge composition; transitions are a separate component."""
 import errno
 from collections import deque
 import hashlib
 import json
 from dsec.contracts.resources import NodeAdmissionBusy
+from dsec.contracts.errors import SandboxError, ServiceBusy, CommandOutcomeUnknown
+from dsec.runtime.transitions import LifecycleController
 import math
 import os
 from pathlib import Path
@@ -16,13 +18,8 @@ from dsec.storage.digest import sha
 from dsec.runtime.backends.firecracker import MicroVM
 from dsec.runtime.isolation.proxy import guest_proxy_command, validate_proxy_url, validate_proxy_bypass_hosts
 
-class SandboxError(RuntimeError):
-    pass
 
 
-class ServiceBusy(SandboxError):
-    """The sandbox has an active operation; this request was not admitted."""
-    pass
 
 
 def _copy_sparse(source, destination):
@@ -135,8 +132,6 @@ def _snapshot_hash(path, algorithm):
         return _sparse_block_sha256(path)
     raise ValueError("Unsupported snapshot hash algorithm")
 
-class CommandOutcomeUnknown(SandboxError):
-    """Transport failed; the command may have had side effects. Never auto-replay."""
 
 class Sandbox:
     def __init__(self, manager, ttl, environment_id="default", memory_profile="baseline",
@@ -241,49 +236,16 @@ class Sandbox:
         self._persist()
 
     def _overlaybd_service_matches(self):
-        if not self.overlaybd_store or self.overlaybd_device_id is None:
-            return True
-        try:
-            return (self.overlaybd_daemon_socket_identity ==
-                    self.overlaybd_store.socket_identity())
-        except (OSError, RuntimeError, ValueError, IndexError):
-            return False
+        return self.manager.lifecycle.overlaybd_service_matches(self)
 
     def _release_overlaybd_device(self):
-        if not self.overlaybd_store or self.overlaybd_device_id is None:
-            return
-        device_present = (Path(f"/sys/block/ublkb{self.overlaybd_device_id}").exists() or
-                          Path(f"/dev/ublkb{self.overlaybd_device_id}").exists())
-        if not device_present:
-            self.overlaybd_store.delete(None, self.overlaybd_runtime, self.directory)
-        elif self._overlaybd_service_matches():
-            self.overlaybd_store.delete(self.overlaybd_device_id,
-                                        self.overlaybd_runtime, self.directory)
-        else:
-            # A restarted daemon may reuse the numeric device id. Never send
-            # it a delete for a device owned by the old daemon.
-            raise SandboxError("Old ublk device still exists after daemon change")
-        self.overlaybd_device_id = None
-        self.overlaybd_runtime = None
-        self.overlaybd_daemon_socket_identity = None
+        return self.manager.lifecycle.release_overlaybd_device(self)
 
     def _fail(self, reason):
-        self.vm.stop()
-        if self.overlaybd_store and self.overlaybd_device_id is not None:
-            try:
-                self._release_overlaybd_device()
-            except Exception as exc:
-                reason += "; ublk_cleanup_failed: " + str(exc)
-        self._event("FAILED", reason)
+        return self.manager.lifecycle.fail(self, reason)
 
     def _check(self):
-        if self.state in ("RUNNING", "PAUSED") and time.monotonic() >= self.deadline:
-            self._stop("idle_ttl_expired")
-        if self.state == "RUNNING" and not self._overlaybd_service_matches():
-            self._fail("ublk_service_identity_changed")
-        if self.state == "RUNNING" and (
-                self.vm.process is None or self.vm.process.poll() is not None):
-            self._fail("vmm_exited")
+        return self.manager.lifecycle.check(self)
 
     def status(self):
         with self.lock:
@@ -338,92 +300,7 @@ class Sandbox:
         return seal_baseline(self, allow_prepared_state=allow_prepared_state)
 
     def _restore(self):
-        if self.baseline_sealed:
-            raise SandboxError("Sealed baseline cannot execute or resume")
-        if self.snapshot is None:
-            raise SandboxError("No snapshot available")
-        try:
-            manifest = json.loads((self.snapshot/"manifest.json").read_text())
-            if (manifest.get("environment_id", "default") != self.environment_id
-                    or manifest.get("storage", "local") != self.storage
-                    or (manifest.get("environment_manifest_sha256") !=
-                        self.environment_manifest_sha256
-                        if manifest.get("environment_manifest_sha256") is not None else
-                        manifest.get("environment_catalog_sha256") !=
-                        self.environment_catalog_sha256)
-                    or manifest.get("guest_kernel", str(self.kernel)) != str(self.kernel)
-                    or manifest.get("layer_disks", [str(path) for path in self.layer_disks]) !=
-                    [str(path) for path in self.layer_disks]
-                    or manifest.get("memory_profile", "baseline") != self.memory_profile
-                    or manifest.get("free_page_reporting", self.memory_profile in (
-                        "damon_fpr", "dax_damon_fpr")) != self.free_page_reporting
-                    or manifest.get("snapshot_mode", self.snapshot_mode) != self.snapshot_mode
-                    or manifest.get("network_slot") != self.network_slot
-                    or manifest.get("network_mode") != self.network_mode
-                    or manifest.get("verifier_storage") != self.verifier_storage
-                    or manifest.get("verifier_dax", False) != self.verifier_dax
-                    or manifest.get("erofs_dax_layers", []) != list(self.erofs_dax_layers)
-                    or manifest.get("verifier_artifact_sha256") != self.verifier_artifact_sha):
-                raise SandboxError("Snapshot environment/memory profile mismatch")
-            if self.environment_catalog_sha256 is not None:
-                spec = self.manager.microvm_environment_catalog.resolve(
-                    self.environment_id, self.storage)
-                if (self.manager.microvm_environment_catalog.digest !=
-                        self.environment_catalog_sha256 or
-                        spec["environment_sha256"] != self.environment_manifest_sha256 or
-                        tuple(layer["file"] for layer in spec["layers"]) != self.layer_disks):
-                    raise SandboxError("Snapshot EROFS source identity changed")
-            if self.verifier_storage is not None:
-                self.manager.verifier_artifacts_for(self.environment_id).resolve(self.verifier_storage)
-            if manifest["binary_sha256"] != sha(Path(self.vm.binary)):
-                raise SandboxError("VMM binary changed")
-            overlaybd = self.overlaybd_store is not None
-            if manifest.get("rootfs_block_backend", "file-ext4") != (
-                    "overlaybd-ublk" if overlaybd else "file-ext4"):
-                raise SandboxError("Snapshot block backend mismatch")
-            files = (("memory", "state", "disk-image.json") if overlaybd else
-                     ("memory", "state", "disk.ext4")) + (("work.ext4",) if self.work_disk else ())
-            if overlaybd:
-                disk_layers = self.overlaybd_store.disk_layers(
-                    self.snapshot/"disk-image.json", self.directory,
-                    self.overlaybd_store.source_for(self.environment_id))
-                expected_layers = {path.name for path in disk_layers}
-                if (len(expected_layers) != len(disk_layers) or
-                        set(manifest.get("disk_layers", {})) != expected_layers):
-                    raise SandboxError("Snapshot disk layer list mismatch")
-                for path in disk_layers:
-                    if sha(path) != manifest["disk_layers"][path.name]:
-                        raise SandboxError("Snapshot disk layer integrity mismatch: "+path.name)
-            for name in files:
-                algorithm = manifest.get("hash_algorithms", {}).get(name, "sha256")
-                if _snapshot_hash(self.snapshot/name, algorithm) != manifest["files"][name]:
-                    raise SandboxError("Snapshot integrity mismatch: "+name)
-            if self.work_disk and (manifest.get("shared_data_sha256") != self.manager.e3["data_sha256"]
-                                   or sha(self.manager.e3["data"]) != manifest["shared_data_sha256"]):
-                raise SandboxError("E3 shared read-only data changed")
-            if overlaybd:
-                self.overlaybd_image = self.snapshot/"disk-image.json"
-                self.overlaybd_device_id, self.overlaybd_runtime = self.overlaybd_store.create(
-                    self.overlaybd_image, self.directory, self.disk)
-                self.overlaybd_daemon_socket_identity = self.overlaybd_store.socket_identity()
-                self._persist()
-            else:
-                if self.environment_id in self.manager.tb2_templates:
-                    _copy_sparse(self.snapshot/"disk.ext4", self.disk)
-                else:
-                    shutil.copy2(self.snapshot/"disk.ext4", self.disk)
-                self.disk.chmod(0o600)
-            if self.work_disk:
-                shutil.copy2(self.snapshot/"work.ext4", self.work_disk)
-                self.work_disk.chmod(0o600)
-            self.vm.restore(self.snapshot/"state", self.snapshot/"memory",
-                            track_dirty_pages=self.snapshot_mode == "incremental")
-            if self.work_disk:
-                self.memory_evidence = self.vm.memory_probe(self.memory_profile)
-            self._event("RUNNING"); self._touch()
-        except Exception as exc:
-            self._fail("restore_failed: "+str(exc))
-            raise
+        return self.manager.lifecycle.restore(self)
 
     def execute(self, command, timeout_ms=5000, output_limit=65536,
                 execution_scope="agent"):
@@ -464,245 +341,16 @@ class Sandbox:
                 self._touch()
 
     def pause(self):
-        """Snapshot + stop the VMM, releasing its runtime memory."""
-        with self.lock:
-            if self.reserved:
-                raise SandboxError("Sandbox is reserved for warm checkout")
-            self._check()
-            if self.state == "PAUSED":
-                return
-            if self.state != "RUNNING":
-                raise SandboxError("Cannot pause in "+self.state)
-            staging = self.directory/("pending-"+uuid.uuid4().hex[:8])
-            staging.mkdir(mode=0o700)
-            if self.overlaybd_store:
-                self.overlaybd_store.share_directory(staging)
-            previous = self.snapshot
-            target = self.directory/("snapshot-"+str(self.generation+1))
-            stage = "guest_sync"
-            stage_started = time.monotonic()
-            phases = {}
-            incremental_rebase = self.snapshot_mode == "incremental" and self.generation > 0
-            snapshot_type = ("Diff" if self.dirty_tracking_enabled and
-                             (self.generation == 0 or incremental_rebase) else "Full")
-
-            def advance(next_stage):
-                nonlocal stage, stage_started
-                now = time.monotonic()
-                phases[stage] = round(now-stage_started, 6)
-                stage, stage_started = next_stage, now
-
-            try:
-                if self.vm.execute("sync")["exit_code"] != 0:
-                    raise SandboxError("Guest sync failed")
-                advance("vm_pause")
-                self.vm.pause()
-                advance("snapshot_gate_wait")
-                with self.manager.snapshot_slots:
-                    advance("snapshot_create")
-                    self.vm.api("PUT", "/snapshot/create", {"snapshot_type":snapshot_type,
-                                "snapshot_path":str(staging/"state"),
-                                "mem_file_path":str(staging/("diff" if incremental_rebase else "memory"))},
-                                timeout=120)
-                self._snapshot_checkpoint("after_diff")
-                if incremental_rebase:
-                    advance("memory_rebase")
-                    if previous is None:
-                        raise SandboxError("Incremental snapshot has no base memory")
-                    _copy_sparse(previous/"memory", staging/"memory")
-                    subprocess.run([str(self.manager.snapshot_editor), "edit-memory", "rebase",
-                                    "--memory-path", str(staging/"memory"),
-                                    "--diff-path", str(staging/"diff")], check=True)
-                    (staging/"diff").unlink()
-                    self._snapshot_checkpoint("after_rebase")
-                advance("disk_copy")
-                if self.overlaybd_store:
-                    latest_disk_layer = self.overlaybd_store.snapshot(
-                        self.overlaybd_device_id, self.overlaybd_image, staging, target)
-                elif self.environment_id in self.manager.tb2_templates:
-                    _copy_sparse(self.disk, staging/"disk.ext4")
-                else:
-                    shutil.copy2(self.disk, staging/"disk.ext4")
-                if self.work_disk:
-                    shutil.copy2(self.work_disk, staging/"work.ext4")
-                advance("snapshot_manifest")
-                names = (("state", "memory", "disk-image.json")
-                         if self.overlaybd_store else
-                         (("state","memory","disk.ext4","work.ext4") if self.work_disk
-                          else ("state","memory","disk.ext4")))
-                if self.overlaybd_store:
-                    disk_layers = self.overlaybd_store.disk_layers(
-                        staging/"disk-image.json", self.directory,
-                        self.overlaybd_store.source_for(self.environment_id))
-                hash_algorithms = ({"memory":"sparse-block-sha256-v2",
-                                    **({} if self.overlaybd_store else
-                                       {"disk.ext4":"sparse-block-sha256-v2"})}
-                                   if self.environment_id in self.manager.tb2_templates else {})
-                manifest = {"id":self.id, "generation":self.generation+1,
-                            "snapshot_type":snapshot_type,
-                            "snapshot_mode":self.snapshot_mode,
-                            "rootfs_block_backend":"overlaybd-ublk" if self.overlaybd_store else "file-ext4",
-                            "disk_path":str(self.disk), "binary_sha256":sha(Path(self.vm.binary)),
-                            "environment_id":self.environment_id,
-                            "storage":self.storage,
-                            "environment_catalog_sha256":self.environment_catalog_sha256,
-                            "environment_manifest_sha256":self.environment_manifest_sha256,
-                            "guest_kernel":str(self.kernel),
-                            "layer_disks":[str(path) for path in self.layer_disks],
-                            "network_slot":self.network_slot,
-                            "network_mode":self.network_mode,
-                            "memory_profile":self.memory_profile,
-                            "free_page_reporting":self.free_page_reporting,
-                            "verifier_storage":self.verifier_storage,
-                            "verifier_dax":self.verifier_dax,
-                            "erofs_dax_layers":list(self.erofs_dax_layers),
-                            "verifier_artifact_sha256":self.verifier_artifact_sha,
-                            "shared_data_sha256":self.manager.e3["data_sha256"] if self.work_disk else None,
-                            "disk_layers":({path.name:sha(path) for path in disk_layers}
-                                           if self.overlaybd_store else None),
-                            "latest_disk_layer":(latest_disk_layer.name if self.overlaybd_store
-                                                 else None),
-                            "hash_algorithms":hash_algorithms,
-                            "files":{name:_snapshot_hash(staging/name,
-                                     hash_algorithms.get(name, "sha256")) for name in names}}
-                for name in manifest["files"]:
-                    with (staging/name).open("rb") as stream:
-                        os.fsync(stream.fileno())
-                with (staging/"manifest.json").open("w") as stream:
-                    json.dump(manifest, stream, indent=2); stream.flush(); os.fsync(stream.fileno())
-                _fsync_directory(staging)
-                advance("vm_stop_commit")
-                self.vm.stop()
-                if self.overlaybd_store:
-                    self._release_overlaybd_device()
-                self._snapshot_checkpoint("before_publish")
-                staging.rename(target)
-                _fsync_directory(self.directory)
-                self._snapshot_checkpoint("after_publish")
-                self.snapshot = target; self.generation += 1
-                if self.overlaybd_store:
-                    self.overlaybd_image = target/"disk-image.json"
-                self._event("PAUSED"); self._touch()
-                self._snapshot_checkpoint("after_registry")
-                advance("done")
-                self.last_pause_phases = phases
-                # Previous memory backing is no longer in use after vm.stop().
-                if previous is not None:
-                    shutil.rmtree(previous)
-            except Exception as exc:
-                advance("failed")
-                self.last_pause_phases = phases
-                # A real ENOSPC can also prevent _event/_persist from writing
-                # FAILED. Remove the unpublished snapshot first to reclaim
-                # space for the durable failure record.
-                cleanup_error = None
-                if staging.exists():
-                    try:
-                        shutil.rmtree(staging)
-                    except Exception as error:
-                        cleanup_error = error
-                if self.snapshot != target and target.exists():
-                    try:
-                        shutil.rmtree(target)
-                        _fsync_directory(self.directory)
-                    except Exception as error:
-                        cleanup_error = error
-                self._fail("snapshot_failed at "+stage+": "+str(exc))
-                if cleanup_error is not None:
-                    raise SandboxError("Failed to remove incomplete snapshot") from cleanup_error
-                raise
-            if self.overlaybd_store:
-                try:
-                    self.overlaybd_store.prune_unreferenced_layers(
-                        self.overlaybd_image, self.directory,
-                        self.overlaybd_store.source_for(self.environment_id))
-                except (OSError, ValueError) as exc:
-                    self.manager.errors.append({"id": self.id,
-                                                "component": "overlaybd_layer_gc",
-                                                "error": str(exc)})
-            # Cache advice is an optional local-storage optimization, never a
-            # reason to turn an already committed PAUSED snapshot into FAILED.
-            self.snapshot_cache_evicted = None
-            if self.manager.snapshot_cache_policy == "evict":
-                self.snapshot_cache_evicted = True
-                for path in (target/"memory", target/"state") + (
-                        (() if self.overlaybd_store else (target/"disk.ext4",))) + (
-                        (target/"work.ext4",) if self.work_disk else ()):
-                    try:
-                        with path.open("rb") as stream:
-                            os.posix_fadvise(stream.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
-                    except OSError:
-                        self.snapshot_cache_evicted = False
-                try:
-                    self._persist()
-                except OSError:
-                    # PAUSED was committed before the advisory status update.
-                    pass
+        return self.manager.lifecycle.pause(self)
 
     def resume(self):
-        with self.lock:
-            if self.reserved:
-                raise SandboxError("Sandbox is reserved for warm checkout")
-            self._check()
-            if self.state == "RUNNING":
-                return
-            if self.state != "PAUSED":
-                raise SandboxError("Cannot resume in "+self.state)
-            self._restore()
+        return self.manager.lifecycle.resume(self)
 
     def recover(self, *, allow_rollback=False):
-        """Explicitly discard post-snapshot changes; do not replay commands."""
-        with self.lock:
-            if self.reserved:
-                raise SandboxError("Sandbox is reserved for warm checkout")
-            self._check()
-            if self.state != "FAILED" or not allow_rollback:
-                raise SandboxError("Recovery requires FAILED and explicit allow_rollback=True")
-            self._restore()
+        return self.manager.lifecycle.recover(self, allow_rollback=allow_rollback)
 
     def _stop(self, reason):
-        if self.state == "STOPPED" and getattr(self, 'resource_cleanup_complete', False):
-            if getattr(self.manager, 'node_admission', None) is not None:
-                self.manager.node_admission.stopped('microvm', self.id)
-            return
-        self.baseline_closing = True
-        while self.fork_readers:
-            self.fork_condition.wait()
-        if self.state == "STOPPED" and getattr(self, 'resource_cleanup_complete', False):
-            if getattr(self.manager, 'node_admission', None) is not None:
-                self.manager.node_admission.stopped('microvm', self.id)
-            return
-        self.vm.stop()
-        if self.overlaybd_store and self.overlaybd_device_id is not None:
-            self._release_overlaybd_device()
-        if self.network_mode == "netns" and self.network_ready:
-            try:
-                self.manager.tb2_network_manager.release(self.id, self.network_slot)
-                self.network_ready = False
-            except Exception as exc:
-                self._event("FAILED", "network_cleanup_failed: " + str(exc))
-                raise
-        self.disk.unlink(missing_ok=True)
-        if self.work_disk:
-            self.work_disk.unlink(missing_ok=True)
-        if self.snapshot is not None:
-            if self.snapshot.exists():
-                shutil.rmtree(self.snapshot)
-            self.snapshot = None
-        if self.overlaybd_store:
-            layers = self.directory/"disk-layers"
-            if layers.exists():
-                shutil.rmtree(layers)
-            self.overlaybd_image = self.overlaybd_store.source_for(self.environment_id)
-        self.vm.api_path.unlink(missing_ok=True); self.vm.vsock.unlink(missing_ok=True)
-        self._event("STOPPED", reason)
-        if self.overlaybd_store and getattr(self.overlaybd_store, "shared_layers", None):
-            self.overlaybd_store.shared_layers.release(self.id)
-        self.resource_cleanup_complete = True
-        self._persist()
-        if getattr(self.manager, 'node_admission', None) is not None:
-            self.manager.node_admission.stopped('microvm', self.id)
-        self.manager.warm_wakeup.set()
+        return self.manager.lifecycle.stop(self, reason)
 
     def stop(self):
         with self.lock:
@@ -744,6 +392,13 @@ class SandboxManager:
         self.egress_proxy_bypass_hosts = validate_proxy_bypass_hosts(egress_proxy_bypass_hosts)
         self.binary, self.kernel, self.template = map(Path, (binary,kernel,template))
         self.node_admission = node_admission
+        # Late binding keeps legacy module-level fault hooks working while
+        # the transition component has no dependency on this compatibility host.
+        self.lifecycle = LifecycleController(
+            copy_sparse=lambda *args: _copy_sparse(*args),
+            snapshot_hash=lambda *args: _snapshot_hash(*args),
+            hash_file=lambda path: sha(path),
+            fsync_directory=lambda path: _fsync_directory(path))
         self.warm_node_waits = {}
         self.e3 = e3
         self.microvm_environment_catalog = microvm_environment_catalog
