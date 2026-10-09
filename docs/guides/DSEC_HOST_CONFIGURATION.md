@@ -326,3 +326,35 @@ objects lose authority to execute, create or stop sandboxes after this handoff.
 Explicit Edge `close` instead stops sandboxes and releases ownership only after
 cleanup succeeds; failed cleanup retains ownership for a retry. This is one
 instance's directory ownership, not a global lock or budget across host instances.
+
+### Native sessions/files/streaming: development opt-in
+
+This iteration's Python SDK and shared C agent have local UDS acceptance.
+Linux vsock, idle-session snapshots and layered-container deployment still
+require real-host acceptance. See the [native SDK contract](../architecture/AGENT_ENVIRONMENT_CONTRACT.md)
+for timeout, cancellation, binary files and reconnect semantics.
+
+Upgrade guest artifacts explicitly; changing the Python wheel cannot add a
+native listener to an already running old guest. Build a new microVM template
+with `tools/build_smoke_guest.py` and the updated `guest_agent.c`, keeping
+`guest_native.c` next to it. Keep the old template/catalog for existing guests;
+register the new immutable artifact as a separate environment for acceptance.
+
+For a new layered-container instance, build the same agent as a static Linux
+binary from the source distribution:
+
+```sh
+python tools/build_native_agent.py --source guest_native.c --out "$ARTIFACTS/native-agent-v1"
+export DSEC_NATIVE_AGENT="$ARTIFACTS/native-agent-v1"
+```
+
+Set this environment variable on Edge together with the normal
+`DSEC_CONTAINER_AGENT` pointing to the updated container agent. The backend
+mounts the native binary read-only; the container supervisor starts it after
+mounting the private guest root and stops it before unmounting. The private
+UDS is inside that instance directory. Native commands and file paths resolve
+inside the same guest root as the existing one-shot shell path.
+Absent this opt-in, old container startup and commands retain their existing
+behavior; calling a native API reports `UnsupportedCapability`.
+This does not upgrade legacy TB2 OpenEnv server images or install benchmarks,
+GPU trainers, Rust storage binaries, or system-wide services.

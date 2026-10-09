@@ -11,7 +11,7 @@ import subprocess
 import time
 import uuid
 
-from dsec.contracts.errors import SandboxError
+from dsec.contracts.errors import SandboxError, ServiceBusy
 from dsec.contracts.storage import DiskStorage
 
 
@@ -45,7 +45,8 @@ class LifecycleController:
         sandbox._event("FAILED", reason)
 
     def check(self, sandbox):
-        if sandbox.state in ("RUNNING", "PAUSED") and time.monotonic() >= sandbox.deadline:
+        if (sandbox.state in ("RUNNING", "PAUSED") and not getattr(sandbox, "native_inflight", {})
+                and time.monotonic() >= sandbox.deadline):
             sandbox._stop("idle_ttl_expired")
         if sandbox.state == "RUNNING" and not sandbox._overlaybd_service_matches():
             sandbox._fail("ublk_service_identity_changed")
@@ -124,6 +125,8 @@ class LifecycleController:
     def pause(self, sandbox):
         """Snapshot + stop the VMM, releasing its runtime memory."""
         with sandbox.lock:
+            if getattr(sandbox, "native_inflight", {}):
+                raise ServiceBusy("Native work is active; pause was not admitted")
             if sandbox.reserved:
                 raise SandboxError("Sandbox is reserved for warm checkout")
             sandbox._check()

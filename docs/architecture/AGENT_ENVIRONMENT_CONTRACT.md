@@ -181,5 +181,92 @@ microVM keeps its existing guest-vsock bytes and Edge request journal, while
 Docker keeps its guest request IDs and query proofs. Neither channel retries a
 command after a missing reply. A completed command timeout is returned as
 execution evidence; transport uncertainty remains UNKNOWN. Legacy results with
-no timeout evidence retain the missing field. This boundary does not add
-interactive sessions, streaming output, background jobs or policy/model state.
+no timeout evidence retain the missing field. The legacy command boundary
+remains unchanged. Native sessions, files and bounded streaming use an additional
+protocol described below. Neither path manages policy/model state.
+
+### Native sandbox SDK (local implementation, real-VM acceptance pending)
+
+The Python SDK and Edge call one shared C agent, through native vsock port 5001
+in a microVM or a private UDS in a layered container. Port 5000 retains the
+original command framing. `native-sessions-files-v1` and `native-stream-v1`
+are explicit capabilities; a new SDK cannot silently emulate them on an old
+guest. Agent upgrade is a separately built immutable artifact. The Rust
+OverlayBD/ublk path is unchanged.
+
+```python
+from dsec.sdk import DSecClient
+
+async with DSecClient(socket_path) as client:
+    sandbox = await client.attach(sandbox_id)
+    async with await sandbox.open_session() as session:
+        await session.run_shell("cd /workspace; export MODE=test")
+        result = await session.run_shell('pwd; printf "%s" "$MODE"')
+        await sandbox.write_file("/workspace/input.bin", b"\x00\xff")
+        assert await sandbox.read_file("/workspace/input.bin") == b"\x00\xff"
+        async for event in session.stream("printf started; sleep 1; printf done"):
+            if event["type"] in ("stdout", "stderr"):
+                print(event["type"], event["data"])  # bytes; decode incrementally if needed
+            else:
+                print(event["result"])
+```
+
+Each session has a persistent `/bin/sh`, cwd and environment. `run_shell` on
+the sandbox remains one-shot. Commands on one SDK session serialize; different
+sessions can run concurrently and share only the sandbox filesystem. A second
+handle contending for a busy session receives provable non-admission and the
+SDK waits with the same ID. A stream collector also waits on explicit guest
+non-admission, for at most 35 seconds; `queue_wait_ms` records that wait.
+Cancellation reports `cancel_requested=false` if that exact command is not
+currently admitted; it does not cancel a different command occupying the shell.
+There is no PTY or interactive stdin. Commands receive `/dev/null` stdin;
+detached child jobs are cleaned up after a command on Linux. Timeout, cancel,
+`exit`, or loss of the shell's control FD ends the session. A subsequent call
+reports `NativeSessionReset`, rather than silently creating another shell.
+
+Native results retain separate stdout/stderr plus `exit_code`, `timed_out`,
+`cancelled`, `truncated` and `session_reset`. An unknown exit code is `null`.
+Shell arguments still use the environment's command deadline and proxy policy.
+Output is bounded by the caller's limit, at most 1 MiB across both streams.
+
+File transfers use 64 KiB chunks and a 64 MiB file limit. A guest reserves at
+most 32 unfinished uploads and 64 MiB in aggregate. Writes stage in the target
+directory and publish with fsync/rename; a premature commit cannot replace the
+target. A rename whose durability cannot be confirmed is UNKNOWN. Atomic write
+replaces the named file, including a symlink, rather than following that
+symlink. Reads follow guest symlinks and require a regular file; they compare
+device/inode/size/mtime/ctime across chunks and reject a changing file instead
+of returning a mixed version. `abort_file_write(path, transfer_id)` explicitly
+cleans an unfinished upload. Save a stable write request ID as the transfer ID.
+
+Edge persists native intents in its existing request journal. Repeated IDs
+with identical arguments attach/retrieve the original result; conflicting
+arguments are rejected. Lost replies and failed commits remain UNKNOWN and
+are never replayed. Stable IDs also cover upload chunks. No guest-side second
+execution journal is introduced.
+
+`session.stream(..., request_id=operation_id)` starts bounded background
+collection at Edge. Subscribers read captured events using their returned byte
+`cursor`; `session.events(operation_id, cursor=cursor)` reattaches without
+resubmission. Detaching a subscriber does not cancel execution. The per-command
+event spool is at most 8 MiB; overflow drops further output events while draining
+the guest, and the final result sets `stream_truncated=true`. Final success is
+exposed only after the journal commit. `session.query(operation_id)` reads that
+same journal. `session.cancel(operation_id)` targets the exact active command,
+and does not kill a later command. Cancellation resets this session.
+
+MicroVM lifecycle admission uses the same durable registry: idle sessions can
+be included in VM snapshots; active native calls/streams reject pause before
+effects. An Edge restart with an interrupted native operation retires that VM
+and preserves UNKNOWN, consistent with the existing interrupted-command
+policy. Idle-session reattachment does not create a VM or shell. Edge graceful
+shutdown waits for bounded stream collectors before releasing ownership.
+Container memory snapshots remain unsupported. Old TB2 OpenEnv server images
+do not acquire native features implicitly; use a prepared microVM/layered
+container with the new agent.
+
+Local tests execute the compiled agent with real shells and exercise SDK →
+Edge → UDS, deduplication, commit faults, slow/detached subscribers and bounded
+output. Real vsock, idle-session snapshot restoration, native layered-container
+deployment and TB2.1/MBPP application regressions require the deferred Linux
+acceptance; the UDS tests do not establish those gates.

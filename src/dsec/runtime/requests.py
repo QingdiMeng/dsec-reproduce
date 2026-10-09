@@ -7,6 +7,7 @@ import re
 import threading
 
 from dsec._persistence import atomic_json
+from dsec.contracts.native import NATIVE_MUTATING
 from dsec.contracts.requests import (MUTATING, RequestConflict, RequestPending,
                                      RequestUncertain, request_digest)
 
@@ -45,10 +46,13 @@ class RequestJournal:
                 if saved["state"] == "PENDING":
                     raise RequestPending("Request is still executing; query its result")
                 raise RequestUncertain("Request outcome was not committed; do not replay")
-            atomic_json(path, {"version": 1, "request_id": request_id,
+            record = {"version": 1, "request_id": request_id,
                                "operation": request["operation"],
                                "sandbox_id": request.get("sandbox_id"),
-                               "digest": digest, "state": "PENDING"})
+                               "digest": digest, "state": "PENDING"}
+            if request["operation"] in NATIVE_MUTATING:
+                record["args"] = request.get("args", {})
+            atomic_json(path, record)
             return None
 
     def reject_before_effect(self, request_id, *, operation='create'):
@@ -56,7 +60,7 @@ class RequestJournal:
         path = self._path(request_id)
         with self.lock:
             record = json.loads(path.read_text())
-            if (operation not in MUTATING or record['state'] != 'PENDING' or
+            if (operation not in MUTATING | NATIVE_MUTATING or record['state'] != 'PENDING' or
                     record['operation'] != operation):
                 raise RuntimeError('Only matching pending non-admitted operations can be rejected')
             path.unlink()
@@ -65,6 +69,16 @@ class RequestJournal:
                 os.fsync(fd)
             finally:
                 os.close(fd)
+
+    def unknown(self, request_id):
+        """An admitted native action lost its reply; never admit it again."""
+        path = self._path(request_id)
+        with self.lock:
+            record = json.loads(path.read_text())
+            if record["state"] != "PENDING":
+                raise RuntimeError("Request journal is not pending")
+            record["state"] = "UNKNOWN"
+            atomic_json(path, record)
 
     def finish(self, request_id, response):
         path = self._path(request_id)
@@ -85,4 +99,5 @@ class RequestJournal:
             return {"state": record["state"], "request_id": request_id,
                     "operation": record["operation"],
                     "sandbox_id": record["sandbox_id"], "digest": record["digest"],
-                    "response": record.get("response")}
+                    "response": record.get("response"),
+                    **({"args": record["args"]} if "args" in record else {})}

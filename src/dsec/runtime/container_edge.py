@@ -339,5 +339,8 @@ class ContainerRuntime:
                         storage=args.storage, environment_id=args.environment_id,
                         catalog_sha256=item["catalog_sha256"])
                 self.catalog_digests[key] = item["catalog_sha256"]
+            native = self.configuration.get("DSEC_NATIVE_AGENT")
+            if native:
+                backend.native_agent = Path(native).resolve(strict=True)
             self.backends[key] = backend
         return self.backends[key]

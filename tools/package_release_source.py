@@ -31,6 +31,8 @@ TESTS = (
     'tests/unit/test_container_edge.py',
     'tests/unit/test_edge_assembly.py',
     'tests/unit/test_command_sessions.py',
+    'tests/unit/test_native_guest.py',
+    'tests/unit/test_native_sdk.py',
     'tests/unit/test_runtime_storage.py',
     'tests/unit/test_task_application_boundary.py',
     'tests/unit/test_node_admission.py',
@@ -78,6 +80,7 @@ TOOLS = (
     'tests/packaging/__init__.py',
     'tests/contracts/__init__.py', 'tests/contracts/v01_compatibility.json',
     'tools/build_smoke_guest.py', 'tools/verify_installed_task.py',
+    'tools/build_native_agent.py',
     'tools/verify_installed_fork.py', 'tools/fixtures/tb21-openssl.json',
 )
 SECRET = re.compile(rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|'
@@ -87,7 +90,7 @@ SECRET = re.compile(rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|'
 def source_files(root):
     config = tomllib.loads((root/'pyproject.toml').read_text())
     settings = config['tool']['setuptools']
-    files = {'pyproject.toml', 'guest_agent.c', '.gitignore', *DOCS, *TESTS, *TOOLS,
+    files = {'pyproject.toml', 'guest_agent.c', 'guest_native.c', '.gitignore', *DOCS, *TESTS, *TOOLS,
              *config['project']['license-files']}
     files.update(module+'.py' for module in settings['py-modules'])
     for package in settings['packages']:
@@ -98,7 +101,8 @@ def source_files(root):
         relative = (Path(mappings[prefix]).joinpath(*parts[len(prefix.split('.')):])
                     if prefix else Path(mappings.get('', '')).joinpath(*parts))
         directory = root / relative
-        files.update(str(p.relative_to(root)) for p in directory.rglob('*.py'))
+        files.update(str(p.relative_to(root)) for p in directory.rglob('*.py')
+                     if all(part.isidentifier() for part in p.relative_to(directory).with_suffix('').parts))
         for pattern in settings.get('package-data', {}).get(package, []):
             files.update(str(p.relative_to(root)) for p in directory.glob(pattern) if p.is_file())
     for name, package_name in (("tb21", "dsec_tb21_case"), ("mbpp", "dsec_mbpp_case")):
@@ -106,8 +110,10 @@ def source_files(root):
         files.update('apps/'+name+'/'+filename for filename in ('pyproject.toml', 'README.md', 'LICENSE'))
         app_config = tomllib.loads((app/'pyproject.toml').read_text())
         files.update('apps/'+name+'/'+filename for filename in app_config['project']['license-files'])
-        files.update(str(p.relative_to(root)) for p in (app/'src'/package_name).glob('*.py'))
-        files.update(str(p.relative_to(root)) for p in (app/'src'/package_name).glob('*.json'))
+        files.update(str(p.relative_to(root)) for p in (app/'src'/package_name).glob('*.py')
+                     if p.stem.isidentifier())
+        files.update(str(p.relative_to(root)) for p in (app/'src'/package_name).glob('*.json')
+                     if p.stem.isidentifier())
         files.add('apps/'+name+'/tests/test_case.py')
     return config, sorted(files)
 

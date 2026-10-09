@@ -11,6 +11,10 @@ from dsec.runtime.requests import MUTATING
 from dsec.runtime.resource_rpc import sandbox_resource_sample
 from dsec.runtime.admission_guard import AdmissionDenied, check_create
 from dsec.runtime.container_edge import CONTAINER_OPERATIONS, CONTAINER_MUTATING
+from dsec.contracts.native import NATIVE_FEATURE, NATIVE_MUTATING, STREAM_FEATURE
+from dsec.contracts.errors import CommandOutcomeUnknown
+from dsec.runtime.sessions.service import dispatch_native
+from dsec.runtime.sessions.jobs import NativeJobs
 
 class BoundedServer(socketserver.ThreadingMixIn,socketserver.UnixStreamServer):
     daemon_threads=False
@@ -21,7 +25,17 @@ class BoundedServer(socketserver.ThreadingMixIn,socketserver.UnixStreamServer):
         self.slots=threading.BoundedSemaphore(max_requests)
         self.max_requests=max_requests
         self.count_lock=threading.Lock(); self.active_requests=0; self.rejected_requests=0
+        self.native_jobs = None
         super().__init__(path,handler)
+    def stream_jobs(self):
+        with self.count_lock:
+            if self.native_jobs is None:
+                self.native_jobs = NativeJobs(self)
+            return self.native_jobs
+    def server_close(self):
+        super().server_close()
+        if self.native_jobs is not None:
+            self.native_jobs.close()
     def process_request(self,request,address):
         if not self.slots.acquire(blocking=False):
             with self.count_lock: self.rejected_requests+=1
@@ -82,7 +96,10 @@ class Handler(socketserver.StreamRequestHandler):
                 finally:
                     if foreground:
                         self.server.manager.foreground_exit()
-            elif op in MUTATING:
+            elif op == "native_stream":
+                value = self.server.stream_jobs().start(req)
+                response={"request_id":request_id,"ok":True,"result":value}
+            elif op in MUTATING | NATIVE_MUTATING:
                 self.server.manager.foreground_enter()
                 try:
                     context = (node.request('microvm', request_id, args,
@@ -115,6 +132,15 @@ class Handler(socketserver.StreamRequestHandler):
                                 commit_response=False
                                 response={"request_id":request_id,"ok":False,"error":{
                                     "type":"RequestOutcomeUnknown","message":str(exc)}}
+                            except CommandOutcomeUnknown as exc:
+                                if op not in NATIVE_MUTATING:
+                                    response={"request_id":request_id,"ok":False,"error":{
+                                        "type":type(exc).__name__,"message":str(exc)}}
+                                else:
+                                    self.server.journal.unknown(request_id)
+                                    commit_response=False
+                                    response={"request_id":request_id,"ok":False,"error":{
+                                        "type":"RequestOutcomeUnknown","message":str(exc)}}
                             except Exception as exc:
                                 response={"request_id":request_id,"ok":False,"error":{
                                     "type":type(exc).__name__,"message":str(exc)}}
@@ -145,7 +171,7 @@ class Handler(socketserver.StreamRequestHandler):
                         "rejected_requests":self.server.rejected_requests}
             return {"pid":os.getpid(),"recovery_events":manager.recovery_events,
                     "monitor_errors":manager.errors,"warm_pool":manager.warm_pool_status(),
-                    "protocol_features":["container-rpc-v1", "busy-nonadmission-v1"] + (
+                    "protocol_features":["container-rpc-v1", "busy-nonadmission-v1", NATIVE_FEATURE, STREAM_FEATURE] + (
                         ["node-admission-v1"] if getattr(self.server, 'node_admission', None) else []),
                     "admission_worker_socket":self.server.admission_worker_socket,**counts}
         if op=="node_status":
@@ -155,6 +181,12 @@ class Handler(socketserver.StreamRequestHandler):
             return node.status()
         if op=="query_request":
             return self.server.journal.lookup(args["lookup_id"])
+        if op=="native":
+            return dispatch_native(self.server,sandbox_id,args,request_id)
+        if op=="native_events":
+            return self.server.stream_jobs().events(sandbox_id,args["lookup_id"],args.get("cursor",0),args.get("session_id"))
+        if op=="native_cancel":
+            return self.server.stream_jobs().cancel(sandbox_id,args,request_id)
         if op=="create":
             sandbox=manager.create(**args)
             node=getattr(self.server, 'node_admission', None)
@@ -189,6 +221,9 @@ class Handler(socketserver.StreamRequestHandler):
         if not sb.lock.acquire(blocking=False):
             raise ServiceBusy("Sandbox has another active operation; request not accepted")
         try:
+            if (getattr(sb, "native_inflight", {}) and op in
+                    ("pause", "resume", "recover", "seal_baseline")):
+                raise ServiceBusy("Native work is active; lifecycle operation not admitted")
             if op=="status":
                 return sb.status()
             if op in MUTATING:

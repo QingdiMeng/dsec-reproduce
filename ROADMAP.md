@@ -1,6 +1,6 @@
 # Roadmap: reproducing DSec as a usable elastic sandbox system
 
-Updated: 2026-10-08. Baseline: `0.1.0.dev0`, with modular R3 functional acceptance complete.
+Updated: 2026-10-10. Baseline: `0.1.0.dev0`, with modular R3 functional acceptance complete.
 
 The goal is a general elastic sandbox system for agent workloads and RL, with
 reproducible evidence for the mechanisms described in the
@@ -48,7 +48,13 @@ warmed this object; this is functional evidence, not a cold-read or distributed
 performance result. Planned R3 functional gates are complete. Second-host
 installation and broader performance/fault campaigns remain separate gates. See the
 [installation acceptance](docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md).
-Interactive sessions and complete aether/chronus remain later capabilities. This does not change the mechanism
+Native shell sessions, binary files and bounded streaming now have a local
+SDK/Edge/shared-C-agent implementation. The iteration still requires Linux
+vsock, idle-session pause/restore, layered-container and application acceptance;
+the experiment host is intentionally not used during this development phase.
+HTTP forwarding, PTY/interactive stdin and in-flight-command snapshot restore
+remain outside this iteration. See the [native SDK contract](docs/architecture/AGENT_ENVIRONMENT_CONTRACT.md).
+Complete aether/chronus remain later capabilities. This does not change the mechanism
 validation statuses below; moving a component does not establish a missing
 paper capability.
 

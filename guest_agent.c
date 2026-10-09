@@ -18,6 +18,8 @@
 #include <unistd.h>
 #include <errno.h>
 
+#include "guest_native.c"
+
 #ifndef DSEC_MAX_TIMEOUT_MS
 #define DSEC_MAX_TIMEOUT_MS 30000
 #endif
@@ -103,6 +105,7 @@ int main(void) {
     prctl(PR_SET_CHILD_SUBREAPER, 1);
     unsigned long long token; unsigned long counter = 0;
     if (getrandom(&token, sizeof(token), 0) != sizeof(token)) return 1;
+    if (dsec_native_spawn()) { perror("native vsock"); return 1; }
     int server = socket(AF_VSOCK, SOCK_STREAM | SOCK_CLOEXEC, 0);
     struct sockaddr_vm addr = {.svm_family=AF_VSOCK, .svm_port=5000, .svm_cid=VMADDR_CID_ANY};
     if (server < 0 || bind(server, (void *)&addr, sizeof(addr)) || listen(server, 8)) { perror("vsock"); return 1; }

@@ -89,6 +89,7 @@ class RegistryRecords:
             "deadline_monotonic":sb.deadline,"deadline_wall":time.time()+sb.deadline-time.monotonic(),
             "boot_id":self.operations.boot_id,"snapshot":sb.snapshot.name if sb.snapshot else None,
             "generation":sb.generation,"process":process,"inflight":sb.inflight,
+            "native_inflight":getattr(sb, "native_inflight", {}),
             "node_lease_id":sb.node_lease_id,
             "resource_cleanup_complete":sb.resource_cleanup_complete})
 
@@ -320,6 +321,7 @@ class RegistryRecords:
                 sb.last_pause_phases=None
                 sb.last_create_phases=None
                 sb.generation=value["generation"]; sb.inflight=value["inflight"]
+                sb.native_inflight=value.get("native_inflight", {})
                 manager.sandboxes[sid]=sb
                 saved=value["process"]
                 if saved:
@@ -330,13 +332,15 @@ class RegistryRecords:
                                                       attester=attester)
                     except (OSError,RuntimeError,ValueError) as exc:
                         manager.recovery_events.append({"id":sid,"event":"not_attached","reason":str(exc)})
-                if sb.inflight:
+                if sb.inflight or sb.native_inflight:
                     # The in-flight request has an unknown outcome. Stop the
                     # possibly paused VMM before deleting unpublished files.
                     sb.vm.stop()
                     self.prune_uncommitted(manager, sb)
-                    sb._fail("interrupted_"+sb.inflight["operation"]+"_outcome_unknown")
+                    operation = sb.inflight["operation"] if sb.inflight else "native"
+                    sb._fail("interrupted_"+operation+"_outcome_unknown")
                     sb.inflight=None
+                    sb.native_inflight={}
                 elif overlaybd_service_changed:
                     sb._fail("ublk_service_identity_changed_during_daemon_restart")
                 elif sb.state == "RUNNING" and sb.vm.process is not None:

@@ -24,10 +24,13 @@ class SourceReleaseTests(unittest.TestCase):
                 for name, digest in manifest['files'].items():
                     self.assertEqual(hashlib.sha256(archive.extractfile(name).read()).hexdigest(), digest)
                     self.assertFalse(name.startswith(('experiments/', 'results/', '.runtime/')))
-                for name in ('LICENSE', 'licenses/miles-APACHE-2.0.txt', 'guest_agent.c',
+                for name in ('LICENSE', 'licenses/miles-APACHE-2.0.txt', 'guest_agent.c', 'guest_native.c',
+                             'tools/build_native_agent.py', 'src/dsec/sdk/native.py',
+                             'src/dsec/runtime/sessions/jobs.py',
                              'docs/guides/QUICKSTART.md', 'apps/tb21/pyproject.toml',
                              'apps/mbpp/pyproject.toml', 'apps/mbpp/src/dsec_mbpp_case/reward.py'):
                     self.assertIn(name, manifest['files'])
+                self.assertFalse(any(' ' in Path(name).name for name in manifest['files']))
                 for name in ('src/dsec/contracts/resources.py', 'src/dsec/storage/overlaybd.py',
                              'src/dsec/sdk/sandbox_transport.py',
                              'src/dsec/contracts/evaluation.py',
