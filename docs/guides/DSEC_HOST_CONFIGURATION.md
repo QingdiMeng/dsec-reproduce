@@ -329,10 +329,12 @@ instance's directory ownership, not a global lock or budget across host instance
 
 ### Native sessions/files/streaming: development opt-in
 
-This iteration's Python SDK and shared C agent have local UDS acceptance.
-Linux vsock, idle-session snapshots and layered-container deployment still
-require real-host acceptance. See the [native SDK contract](../architecture/AGENT_ENVIRONMENT_CONTRACT.md)
-for timeout, cancellation, binary files and reconnect semantics.
+This iteration's Python SDK and shared C agent passed local UDS and single-host
+Linux acceptance, including vsock, idle-session snapshots, layered containers
+and restart/crash recovery. Deployment remains an explicit opt-in for newly
+prepared artifacts. See the [native SDK contract](../architecture/AGENT_ENVIRONMENT_CONTRACT.md)
+for timeout, cancellation, binary files and reconnect semantics, and the
+[installation report](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md) for the tested scope.
 
 Upgrade guest artifacts explicitly; changing the Python wheel cannot add a
 native listener to an already running old guest. Build a new microVM template
@@ -354,7 +356,27 @@ mounts the native binary read-only; the container supervisor starts it after
 mounting the private guest root and stops it before unmounting. The private
 UDS is inside that instance directory. Native commands and file paths resolve
 inside the same guest root as the existing one-shot shell path.
+The complete host path `<DSEC_CONTAINER_ROOT>/<32-character-id>/native.sock`
+must fit Linux's 107-byte pathname limit. Edge rejects a longer path before
+creating a sandbox; shorten the configured root instead of retrying the call.
 Absent this opt-in, old container startup and commands retain their existing
 behavior; calling a native API reports `UnsupportedCapability`.
 This does not upgrade legacy TB2 OpenEnv server images or install benchmarks,
 GPU trainers, Rust storage binaries, or system-wide services.
+
+After deploying a new immutable guest, verify it through the installed SDK:
+
+```sh
+python -I tools/verify_native_sdk.py --socket "$STATE/sandboxes/service.sock" \
+  --environment python-native --out native-sdk-acceptance.json
+```
+
+For a prepared layered container, add `--backend container` and its environment
+ID. This tool creates at most two sandboxes, saves failure evidence, and stops
+them on exit. It checks session state, binary transfers, deduplication, overlap,
+stream reconnection, cancellation and timeout bounds; microVMs additionally
+check active-pause rejection and idle-session snapshot restore. Restart/crash
+acceptance requires a dedicated Edge instance and is a separate host procedure.
+Match the guest's network recipe to the service configuration: a boot artifact
+built with `--network` requires a configured guest NIC, even when a particular
+task or verifier itself needs no Internet access.

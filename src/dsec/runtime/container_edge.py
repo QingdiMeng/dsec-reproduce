@@ -304,6 +304,12 @@ class ContainerRuntime:
             missing = [name for name in required if not self.configuration.get(name)]
             if missing:
                 raise UnsupportedCapability("Container backend is not configured: " + ", ".join(missing))
+            if self.configuration.get("DSEC_NATIVE_AGENT"):
+                endpoint = Path(self.configuration[common[0]]).resolve() / ("0" * 32) / "native.sock"
+                if len(os.fsencode(endpoint)) >= 108:
+                    raise UnsupportedCapability(
+                        "Native container socket path exceeds Linux's 107-byte limit; "
+                        "shorten DSEC_CONTAINER_ROOT")
             if args.environment_id == "e1-real":
                 backend = LayeredContainerBackend(
                     artifacts=self.configuration[e1[0]], image=self.configuration[e1[1]],

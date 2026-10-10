@@ -48,10 +48,16 @@ warmed this object; this is functional evidence, not a cold-read or distributed
 performance result. Planned R3 functional gates are complete. Second-host
 installation and broader performance/fault campaigns remain separate gates. See the
 [installation acceptance](docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md).
-Native shell sessions, binary files and bounded streaming now have a local
-SDK/Edge/shared-C-agent implementation. The iteration still requires Linux
-vsock, idle-session pause/restore, layered-container and application acceptance;
-the experiment host is intentionally not used during this development phase.
+Native shell sessions, binary files and bounded streaming now have an
+SDK/Edge/shared-C-agent implementation with single-host Linux acceptance:
+real vsock, idle-session pause/restore, layered containers, idle/paused Edge
+reattachment and active-stream crash recovery with UNKNOWN/no replay.
+The old guest still executes legacy commands and rejects unsupported native
+calls. A TB2.1 task passed its official verifier, and 32 fixed-code MBPP
+episodes passed the existing adapter's reward and cleanup checks. A short
+Qwen3.5-2B/verl GRPO run completed four updates with nonzero gradients and
+validation; it is an integration gate, not a new model-quality benchmark. Native SDK
+adoption by trainer loops remains separate from preserving those adapters.
 HTTP forwarding, PTY/interactive stdin and in-flight-command snapshot restore
 remain outside this iteration. See the [native SDK contract](docs/architecture/AGENT_ENVIRONMENT_CONTRACT.md).
 Complete aether/chronus remain later capabilities. This does not change the mechanism

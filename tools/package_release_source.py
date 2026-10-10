@@ -81,6 +81,7 @@ TOOLS = (
     'tests/contracts/__init__.py', 'tests/contracts/v01_compatibility.json',
     'tools/build_smoke_guest.py', 'tools/verify_installed_task.py',
     'tools/build_native_agent.py',
+    'tools/verify_native_sdk.py',
     'tools/verify_installed_fork.py', 'tools/fixtures/tb21-openssl.json',
 )
 SECRET = re.compile(rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|'

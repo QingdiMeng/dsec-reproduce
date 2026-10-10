@@ -274,3 +274,71 @@ STOPPED；worker 的历史 FAILED 记录保留，但没有 pending 或 lease。
 全部 89 个任务评分通过或所有生产崩溃模式已经覆盖。成本结果未显示整体
 优于 Docker：启动全文校验 verifier 工具盘造成大量宿主文件驻留；此问题
 与 guest/VMM 匿名内存区别记录，不通过改变统计口径隐藏。
+
+## 原生会话、文件与流式 SDK 实机验收（2026-10-10）
+
+候选基于 `ccd61f0`，补充 Linux GCC 路径缓冲区修复、容器原生 socket
+路径长度部署校验与可复用验收入口
+`tools/verify_native_sdk.py`。两种 C agent 均以静态链接、`-Wall -Wextra
+-Werror` 编译通过。干净源码归档构建的核心 wheel 含 141 个运行模块，
+149 个条目。含 socket 路径校验的最终核心 wheel SHA-256 为
+`f75011957988275b89923b9ffab191e2c2c2ea09c72335ee9d67e4146b3e1089`。
+安装在独立 venv，未替换旧服务、旧 guest 或用户 Docker 网络。
+
+真实非联网 microVM 完成 10 项检查，四层 EROFS Python microVM 完成
+同样 10 项，分层容器完成其中 8 项。覆盖持久 cwd/env、不同会话隔离与
+重叠执行、160012 字节分块二进制文件、跨 sandbox 私有文件隔离、重复
+请求去重与冲突拒绝、stdout/stderr 流式重连、精确取消、连续输出限额
+与超时。microVM 还验证执行中暂停拒绝发生在副作用前，以及空闲会话
+随内存快照恢复后保留 cwd/env 和文件。容器不支持内存快照。
+
+另三项真实恢复检查验证：空闲 Edge 重启后采用原 VMM 与 shell；暂停
+状态重启后首次原生调用自动恢复；执行中 SIGKILL Edge 后请求为 UNKNOWN，
+原 VMM 停止，重复提交被拒绝。另一个真实分层容器在 Edge 重启后保留
+原容器 ID、shell cwd/env 和文件；重复命令没有再次写入。
+新 Edge 对旧 Python guest 的原生调用明确
+返回 UnsupportedCapability，随后旧单次 shell 仍可用。
+
+应用回归使用既有单次命令入口，不将训练器改造成原生会话使用者：
+
+- MBPP 固定代码 32 个 episode，正确/错误/超时/提前退出评分均符合预期，
+  所有收据保存，结束后节点租约为空。这不是模型 benchmark 成功率。
+- TB2.1 `openssl-selfsigned-cert`，任务修订
+  `7131e4375048a0e408a8fb404b5f499d726b695b`，官方 `tests/test.sh` 评分 1。
+  保留 CTRF、reward、testsh/verifier 日志，verifier 约 8.15 秒。
+  本次显式使用 file-ext4 引导盘、原六层 EROFS 与离线 verifier 工具盘；
+  未将它描述成新的 OverlayBD/3FS 组合验收。
+- Qwen3.5-2B + verl/SGLang，Non-Thinking、LoRA rank 8/alpha 16、GRPO
+  每题 8 个 rollout、response 上限 8192，完成四步训练与训练后验证。
+  前两步组内奖励相同，优势/梯度为 0；后两步梯度范数分别约 0.01263、
+  0.00001287，验证参数更新路径真实执行。64 个训练 episode、16 个验证
+  episode 都保存评分收据；其中 76 条进入 sandbox 后正常停止，4 条在
+  模型格式校验阶段得到 0 分，没有创建 sandbox。最终验证样本平均评分
+  0.5；仅两道验证
+  题，不能据此宣称模型能力提升或替代原有完整 MBPP 评测。
+
+首次 TB 部署沿用强制配置 eth0 的旧引导盘，却没有配置网卡，PID 1 因
+`ip: SIOCGIFFLAGS: No such device` 退出。保留失败记录后，使用现有
+`dsec_image.boot` 生成匹配的无网启动盘；任务层和官方 tests 没有改写。
+该失败提醒使用者将制品的网络 recipe 与宿主配置配对。
+
+额外容器重启检查暴露了较长部署目录使 native.sock 路径达到 111 字节
+的问题，原能力探测把操作系统的 AF_UNIX 路径错误误报成缺少 guest 功能。
+现在 opt-in 原生容器在创建 backend 前检查完整路径不超过 107 字节，
+ASCII 和 UTF-8 边界有回归覆盖；未启用原生功能的旧容器不受新增限制。
+
+最终 Linux 全套回归运行 323 项：322 通过、1 项预期的发布边界跳过。
+中途全套回归发现一次 SIGTERM 到达停止标志检查与阻塞 accept 之间的
+关闭竞争，导致原生 agent 未退出。保留失败记录后，将监听 accept 改为
+非阻塞、结合有界 poll，新增 12 次真实进程关闭检查，并回收那一个测试
+残留进程。连接 accept 后显式恢复阻塞模式，兼容 macOS 与 Linux 对 socket
+标志继承的差异；macOS 的 18 项原生回归也通过。测试 setup 失败时同样
+保证停止测试进程。修复后的 C agent 重新完成分层 microVM、容器和真实崩溃恢复
+验收。应用 GRPO/TB 回归发生在该关闭修复之前；该修复未改变应用使用的
+旧单次命令执行路径。本轮未重新跑完整模型 benchmark。
+证据保留在实验机 `/home/xiaoxiaohu/dsec-native-20261010/evidence/`。
+最终审计无本轮运行 VM、容器或节点租约；临时 Edge/worker 已停止，原有
+TB2.1/MBPP 服务及 Docker/Grafana/Prometheus 等五个容器保持运行。GPU
+回到约 1 MiB 占用，磁盘余量约 74.66 GiB。训练 checkpoint 和失败证据保留。
+本轮是单宿主功能验收，不证明全部 TB2.1 任务、生产多租户安全、并发
+性能、所有存储路径组合，或 DSec 论文的性能指标。

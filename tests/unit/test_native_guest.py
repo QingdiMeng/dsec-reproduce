@@ -36,6 +36,7 @@ class NativeGuestFixture(unittest.TestCase):
         self.socket = self.root / "agent.sock"
         self.process = subprocess.Popen([str(self.binary), "--unix", str(self.socket)],
                                         start_new_session=True)
+        self.addCleanup(self.ensure_stopped)
         for _ in range(100):
             if self.socket.exists() or self.process.poll() is not None:
                 break
@@ -50,8 +51,16 @@ class NativeGuestFixture(unittest.TestCase):
                 self.channel.call("close", session_id=sid)
             except (NativeSessionReset, OSError):
                 pass
-        os.killpg(self.process.pid, signal.SIGTERM)
-        self.process.wait(timeout=5)
+        try:
+            os.killpg(self.process.pid, signal.SIGTERM)
+            self.process.wait(timeout=5)
+        finally:
+            self.ensure_stopped()
+
+    def ensure_stopped(self):
+        if self.process.poll() is None:
+            os.killpg(self.process.pid, signal.SIGKILL)
+            self.process.wait(timeout=5)
         self.temp.cleanup()
 
     def session(self):
@@ -62,6 +71,23 @@ class NativeGuestFixture(unittest.TestCase):
 
 
 class NativeGuestTests(NativeGuestFixture):
+    def test_idle_sigterm_does_not_race_with_capability_child_exit(self):
+        for index in range(12):
+            endpoint = self.root / f'shutdown-{index}.sock'
+            process = subprocess.Popen([str(self.binary), '--unix', str(endpoint)])
+            try:
+                for _ in range(100):
+                    if endpoint.exists():
+                        break
+                    time.sleep(.01)
+                NativeChannel(endpoint).capabilities()
+                process.terminate()
+                self.assertEqual(process.wait(timeout=2), 0)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=5)
+
     def test_persistent_cwd_environment_and_separate_output(self):
         sid = self.session()
         result = self.channel.call("run", session_id=sid,

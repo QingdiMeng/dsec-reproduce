@@ -102,6 +102,13 @@ static int ns_unix(const char *path, int bind_socket) {
 static void ns_session_path(char *path, size_t size, const char *id) {
     snprintf(path,size,"%s/%s.sock",ns_root,id);
 }
+static int ns_accept(int listener) {
+    int fd=accept(listener,NULL,NULL);
+    if(fd>=0 && fcntl(fd,F_SETFL,fcntl(fd,F_GETFL)&~O_NONBLOCK)<0) {
+        int saved=errno;close(fd);errno=saved;return -1;
+    }
+    return fd;
+}
 static void ns_signal(int sig) { (void)sig; ns_stopping=1; if(ns_shell>0) kill(-ns_shell,SIGKILL); }
 static void ns_child_signal(int sig) { (void)sig; }
 #ifdef __linux__
@@ -159,7 +166,7 @@ static int ns_run(int client, int listener, int input, int donefd, const char *h
     int streaming=!strcmp(action,"STREAM");
     ns_stream_client=streaming?client:-1;
     if(streaming)ns_timeout(client,100);
-    char po[160],pe[160]; snprintf(po,sizeof(po),"%s/out",session_dir);snprintf(pe,sizeof(pe),"%s/err",session_dir);
+    char po[192],pe[192]; snprintf(po,sizeof(po),"%s/out",session_dir);snprintf(pe,sizeof(pe),"%s/err",session_dir);
     unlink(po);unlink(pe);
     if(mkfifo(po,0600) || mkfifo(pe,0600)) goto setup_error;
     int fo=open(po,O_RDWR|O_NONBLOCK|O_CLOEXEC),fe=open(pe,O_RDWR|O_NONBLOCK|O_CLOEXEC);
@@ -188,7 +195,7 @@ static int ns_run(int client, int listener, int input, int donefd, const char *h
         struct pollfd p[4]={{fo,POLLIN,0},{fe,POLLIN,0},{donefd,POLLIN,0},{listener,POLLIN,0}};
         poll(p,4,5);
         if(p[3].revents & POLLIN) {
-            int other=accept(listener,NULL,NULL);
+            int other=ns_accept(listener);
             if(other>=0) {
                 ns_timeout(other,1000);char h[256];
                 if(!ns_line(other,h,sizeof(h))) {
@@ -222,6 +229,7 @@ setup_error:
     unlink(po);unlink(pe);free(command);free(out);free(err);return 0;
 }
 static void ns_session(int listener, int readyfd, const char *id) {
+    fcntl(listener,F_SETFL,fcntl(listener,F_GETFL)|O_NONBLOCK);
 #ifdef __linux__
     if(prctl(PR_SET_CHILD_SUBREAPER,1))_exit(1);
 #endif
@@ -250,7 +258,9 @@ static void ns_session(int listener, int readyfd, const char *id) {
         pid_t reaped;
         while((reaped=waitpid(-1,NULL,WNOHANG))>0)if(reaped==ns_shell)ns_stopping=1;
         if(ns_stopping)break;
-        int c=accept(listener,NULL,NULL);
+        struct pollfd incoming={.fd=listener,.events=POLLIN};
+        if(poll(&incoming,1,100)<=0 || ns_stopping)continue;
+        int c=ns_accept(listener);
         if(c<0) {if(errno==EINTR)continue;break;}
         ns_timeout(c,DSEC_MAX_TIMEOUT_MS+5000);
         char h[256];
@@ -435,6 +445,7 @@ static void ns_cleanup(void) {
     rmdir(ns_root);
 }
 int dsec_native_serve(int server, const char *root) {
+    if(fcntl(server,F_SETFL,fcntl(server,F_GETFL)|O_NONBLOCK)<0)return 1;
     signal(SIGPIPE,SIG_IGN);
 #ifdef __linux__
     if(prctl(PR_SET_CHILD_SUBREAPER,1))return 1;
@@ -450,7 +461,9 @@ int dsec_native_serve(int server, const char *root) {
         pid_t reaped;
         while((reaped=waitpid(-1,NULL,WNOHANG))>0)
             for(unsigned i=0;i<NS_CLIENTS;i++)if(children[i]==reaped)children[i]=0;
-        int c=accept(server,NULL,NULL);if(c<0)continue;
+        struct pollfd incoming={.fd=server,.events=POLLIN};
+        if(poll(&incoming,1,100)<=0 || ns_stopping)continue;
+        int c=ns_accept(server);if(c<0)continue;
         ns_timeout(c,5000);char h[256];
         if(ns_line(c,h,sizeof(h))) {close(c);continue;}
         unsigned slot=0;while(slot<NS_CLIENTS && children[slot])slot++;

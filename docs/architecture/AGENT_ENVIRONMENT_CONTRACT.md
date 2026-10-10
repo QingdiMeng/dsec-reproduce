@@ -267,6 +267,13 @@ container with the new agent.
 
 Local tests execute the compiled agent with real shells and exercise SDK →
 Edge → UDS, deduplication, commit faults, slow/detached subscribers and bounded
-output. Real vsock, idle-session snapshot restoration, native layered-container
-deployment and TB2.1/MBPP application regressions require the deferred Linux
-acceptance; the UDS tests do not establish those gates.
+output. On 2026-10-10, installed-package Linux acceptance additionally verified
+real vsock, idle-session snapshot restoration, layered-container deployment,
+idle/paused Edge restart, and SIGKILL during a native stream: the request became
+UNKNOWN, the old VM was retired and resubmission was rejected. A pinned TB2.1
+task passed its official verifier and 32 fixed-code MBPP episodes passed their
+expected scoring/cleanup checks. These application regressions retain the
+existing one-shot adapter path; they do not migrate training to native sessions.
+The [installation report](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md) records the
+conditions and scope. These checks do not establish production containment,
+all-task correctness, high-concurrency performance or every storage combination.

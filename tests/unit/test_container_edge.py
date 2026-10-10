@@ -162,6 +162,22 @@ class ContainerEdgeTests(unittest.IsolatedAsyncioTestCase):
         self.server.server_close()
         self.runtime.close()
 
+    async def test_native_socket_path_limit_rejects_before_backend_creation(self):
+        binary = self.root / 'native-agent'
+        binary.write_bytes(b'fixture')
+        for root in ('/tmp/' + 'x' * 58, '/tmp/' + '中' * 20):
+            runtime = ContainerRuntime(dict(self.configuration,
+                DSEC_CONTAINER_ROOT=root, DSEC_NATIVE_AGENT=str(binary)))
+            with self.assertRaisesRegex(UnsupportedCapability, '107-byte.*shorten DSEC_CONTAINER_ROOT'):
+                runtime._container_backend(self.spec)
+        self.assertEqual(Backend.made, [])
+        runtime = ContainerRuntime(dict(self.configuration,
+            DSEC_CONTAINER_ROOT='/tmp/' + 'x' * 57, DSEC_NATIVE_AGENT=str(binary)))
+        self.assertEqual(len(os.fsencode(runtime._container_backend(self.spec).root / ('0' * 32) / 'native.sock')), 107)
+        # The new limit applies to opted-in native UDS deployments only.
+        legacy = ContainerRuntime(dict(self.configuration, DSEC_CONTAINER_ROOT='/tmp/' + 'x' * 58))
+        legacy._container_backend(self.spec)
+
     async def test_client_needs_no_artifact_paths_and_close_leaves_sandbox_running(self):
         with patch.dict(os.environ, {}, clear=True):
             sandbox = await self.client.run_container(self.spec, request_id='a' * 32)
