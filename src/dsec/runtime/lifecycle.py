@@ -111,6 +111,7 @@ class Sandbox:
         self.generation = 0
         self.inflight = None
         self.native_inflight = {}
+        self.native_incarnation = 0
         self.vm.on_process_started = self._persist
 
     def _persist(self):
@@ -120,6 +121,9 @@ class Sandbox:
 
     def _snapshot_checkpoint(self, stage):
         """No-op boundary used by isolated crash-injection tests."""
+
+    def _native_checkpoint(self, stage, **details):
+        """No-op boundary for controlled native/lifecycle correspondence checks."""
 
     def _touch(self):
         self.deadline = time.monotonic()+self.ttl

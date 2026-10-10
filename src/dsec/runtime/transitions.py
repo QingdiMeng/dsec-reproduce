@@ -36,6 +36,9 @@ class LifecycleController:
         sandbox.overlaybd_daemon_socket_identity = None
 
     def fail(self, sandbox, reason):
+        # A late transport callback must not reopen a completed stop.
+        if sandbox.state == "STOPPED":
+            return
         sandbox.vm.stop()
         if sandbox.overlaybd_store and sandbox.overlaybd_device_id is not None:
             try:
@@ -113,6 +116,10 @@ class LifecycleController:
                     sparse=sandbox.environment_id in sandbox.manager.tb2_templates)
             if sandbox.work_disk:
                 sandbox.manager.disk_storage.copy_file(sandbox.snapshot/"work.ext4", sandbox.work_disk, mode=0o600)
+            # Fence callbacks from the retired process BEFORE starting its
+            # replacement. Snapshot generation is not a process incarnation.
+            sandbox.native_incarnation = getattr(sandbox, "native_incarnation", 0) + 1
+            sandbox._persist()
             sandbox.vm.restore(sandbox.snapshot/"state", sandbox.snapshot/"memory",
                             track_dirty_pages=sandbox.snapshot_mode == "incremental")
             if sandbox.work_disk:

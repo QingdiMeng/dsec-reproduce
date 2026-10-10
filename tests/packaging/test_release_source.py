@@ -25,7 +25,17 @@ class SourceReleaseTests(unittest.TestCase):
                     self.assertEqual(hashlib.sha256(archive.extractfile(name).read()).hexdigest(), digest)
                     self.assertFalse(name.startswith(('experiments/', 'results/', '.runtime/')))
                 for name in ('LICENSE', 'licenses/miles-APACHE-2.0.txt', 'guest_agent.c', 'guest_native.c',
-                             'tools/build_native_agent.py', 'tools/verify_native_sdk.py', 'src/dsec/sdk/native.py',
+                             'tools/build_native_agent.py', 'tools/verify_native_sdk.py', 'tools/verify_native_races.py', 'src/dsec/sdk/native.py',
+                             'tools/check_concurrency_model.py',
+                             'tools/check_shutdown_refinement.py',
+                             'tools/check_native_race_refinement.py', 'tests/unit/test_native_races.py',
+                             'verification/QueueCancellation.tla', 'verification/QueueCancellation.cfg',
+                             'verification/NativeCallbackFence.tla', 'verification/NativeCallbackFence.cfg',
+                             'verification/ContainerNativeGate.tla', 'verification/ContainerNativeGate.cfg',
+                             'verification/RaceReplay.tla',
+                             'verification/NativeLifecycle.tla', 'verification/NativeLifecycle.cfg',
+                             'verification/ShutdownSignal.tla', 'verification/ShutdownSignal.cfg',
+                             'verification/ShutdownReplay.tla', 'verification/native_shutdown_probe.h',
                              'src/dsec/runtime/sessions/jobs.py',
                              'docs/guides/QUICKSTART.md', 'apps/tb21/pyproject.toml',
                              'apps/mbpp/pyproject.toml', 'apps/mbpp/src/dsec_mbpp_case/reward.py'):

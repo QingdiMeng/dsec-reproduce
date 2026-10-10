@@ -80,6 +80,19 @@ class RequestJournal:
             record["state"] = "UNKNOWN"
             atomic_json(path, record)
 
+    def native_cancel_intent(self, request_id):
+        """Persist cancellation before acknowledging its in-memory wakeup."""
+        path = self._path(request_id)
+        with self.lock:
+            record = json.loads(path.read_text())
+            if record["state"] != "PENDING":
+                return False
+            if record["operation"] != "native_stream":
+                raise ValueError("Queued cancellation requires a native stream")
+            record["cancel_requested"] = True
+            atomic_json(path, record)
+            return True
+
     def finish(self, request_id, response):
         path = self._path(request_id)
         with self.lock:
@@ -100,4 +113,5 @@ class RequestJournal:
                     "operation": record["operation"],
                     "sandbox_id": record["sandbox_id"], "digest": record["digest"],
                     "response": record.get("response"),
+                    **({"cancel_requested": record["cancel_requested"]} if "cancel_requested" in record else {}),
                     **({"args": record["args"]} if "args" in record else {})}

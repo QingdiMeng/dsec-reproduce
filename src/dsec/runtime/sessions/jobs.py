@@ -56,7 +56,9 @@ class NativeJobs:
                 channel, values = stack.enter_context(native_operation(self.server,
                     request["sandbox_id"], request["args"], operation_id))
                 writer = self._trace(operation_id).open("xb")
-                job = dict(lock=threading.Lock(), bytes=0, seq=0, stream_truncated=False)
+                job = dict(lock=threading.Lock(), control=threading.RLock(),
+                    cancel_requested=threading.Event(), done=threading.Event(), phase="QUEUED",
+                    bytes=0, seq=0, stream_truncated=False)
                 self.server.manager.foreground_enter()
                 foreground = True
                 thread = threading.Thread(target=self._collect,
@@ -107,6 +109,9 @@ class NativeJobs:
             job["seq"] += 1
             job["bytes"] += len(line)
 
+    def _checkpoint(self, operation_id, stage, job):
+        """No-op boundary for controlled queue/cancel correspondence checks."""
+
     def _collect(self, request, channel, values, writer, stack, job):
         operation_id = request["request_id"]
         completed = False
@@ -119,25 +124,46 @@ class NativeJobs:
                 def admitted_events():
                     nonlocal queue_wait_ms
                     while True:
+                        self._checkpoint(operation_id, "before_dispatch", job)
+                        with job["control"]:
+                            cancelled = job["cancel_requested"].is_set()
+                            if not cancelled:
+                                job["phase"] = "DISPATCHING"
+                                self._checkpoint(operation_id, "dispatch", job)
+                        if cancelled:
+                            # No request is sent after this queued cancellation.
+                            # The other command using the session is unaffected.
+                            yield {"type":"result", "result":dict(exit_code=None,
+                                timed_out=False, truncated=False, session_reset=False,
+                                cancelled=True, cancellation_scope="queued")}
+                            return
                         try:
                             yield from channel.stream(**values)
                             return
                         except ServiceBusy:
+                            with job["control"]:
+                                job["phase"] = "QUEUED"
+                                self._checkpoint(operation_id, "busy", job)
                             if time.monotonic() - queue_start >= 35:
                                 raise
-                            time.sleep(.05)
+                            job["cancel_requested"].wait(.05)
                             queue_wait_ms = int((time.monotonic() - queue_start) * 1000)
                 for event in admitted_events():
                     if event["type"] == "result":
-                        event["result"]["queue_wait_ms"] = queue_wait_ms
-                        event["result"]["stream_truncated"] = job["stream_truncated"]
-                        self._append(writer, job, event)
-                        try:
-                            self.journal.finish(operation_id, {"request_id": operation_id,
-                                "ok": True, "result": event["result"]})
-                        except OSError as exc:
-                            raise CommandOutcomeUnknown("Stream result commit failed") from exc
-                        completed = True
+                        # Cancellation and result publication share one gate.
+                        with job["control"]:
+                            event["result"]["queue_wait_ms"] = queue_wait_ms
+                            event["result"]["stream_truncated"] = job["stream_truncated"]
+                            self._append(writer, job, event)
+                            try:
+                                self.journal.finish(operation_id, {"request_id": operation_id,
+                                    "ok": True, "result": event["result"]})
+                            except OSError as exc:
+                                raise CommandOutcomeUnknown("Stream result commit failed") from exc
+                            completed = True
+                            job["phase"] = "DONE"
+                            job["done"].set()
+                            self._checkpoint(operation_id, "committed", job)
                     else:
                         try:
                             self._append(writer, job, event)
@@ -147,17 +173,23 @@ class NativeJobs:
                     raise CommandOutcomeUnknown("Stream ended without a result")
         except Exception as exc:
             try:
-                if isinstance(exc, CommandOutcomeUnknown) or completed:
-                    self.journal.unknown(operation_id)
-                else:
-                    self.journal.finish(operation_id, {"request_id": operation_id, "ok": False,
-                        "error": {"type": type(exc).__name__, "message": str(exc)}})
+                with job["control"]:
+                    if self.journal.lookup(operation_id)["state"] == "PENDING":
+                        if isinstance(exc, CommandOutcomeUnknown):
+                            self.journal.unknown(operation_id)
+                        else:
+                            self.journal.finish(operation_id, {"request_id": operation_id, "ok": False,
+                                "error": {"type": type(exc).__name__, "message": str(exc)}})
             except Exception as journal_error:
                 # Leave the original PENDING intent authoritative if storage
                 # cannot even persist UNKNOWN; restart converts it to UNKNOWN.
                 self.server.manager.errors.append({"component": "native_stream",
                     "request_id": operation_id, "error": str(journal_error)})
         finally:
+            job["done"].set()
+            broker = job.get("cancel_thread")
+            if broker is not None:
+                broker.join()
             try:
                 writer.close()
             except OSError as exc:
@@ -218,6 +250,30 @@ class NativeJobs:
             raise RequestUncertain("Command outcome unknown; reconcile before cancellation")
         if proof["state"] != "PENDING":
             return {"cancel_requested": False, "state": proof["state"]}
+        with self.lock:
+            job = self.active.get(args["lookup_id"])
+        if job is not None:
+            with job["control"]:
+                # Re-read at the same boundary as result commit. A completed
+                # result cannot be replaced by a later cancellation.
+                proof = self.journal.lookup(args["lookup_id"])
+                if proof["state"] != "PENDING":
+                    return {"cancel_requested":False, "state":proof["state"]}
+                if not job["cancel_requested"].is_set():
+                    if not self.journal.native_cancel_intent(args["lookup_id"]):
+                        state = self.journal.lookup(args["lookup_id"])["state"]
+                        if state == "UNKNOWN":
+                            raise RequestUncertain("Command outcome unknown; reconcile before cancellation")
+                        return {"cancel_requested": False, "state": state}
+                    job["cancel_requested"].set()
+                    self._checkpoint(args["lookup_id"], "cancel_intent", job)
+                    if job["phase"] == "DISPATCHING":
+                        broker = threading.Thread(target=self._cancel_dispatched,
+                            args=(sandbox_id, proof, request_id, job),
+                            name=f"cancel-{args['lookup_id'][:8]}", daemon=False)
+                        job["cancel_thread"] = broker
+                        broker.start()
+            return {"cancel_requested":True, "state":"PENDING"}
         values = {**proof["args"], "action": "cancel", "operation_id": args["lookup_id"]}
         values.pop("command", None)
         values.pop("timeout_ms", None)
@@ -228,6 +284,29 @@ class NativeJobs:
         except (FileNotFoundError, NativeSessionReset):
             return {"cancel_requested": False, "state": self.journal.lookup(args["lookup_id"])["state"]}
         return {"cancel_requested": True, "state": "PENDING"}
+
+    def _cancel_dispatched(self, sandbox_id, proof, request_id, job):
+        values = {**proof["args"], "action":"cancel", "operation_id":proof["request_id"]}
+        for key in ("command", "timeout_ms", "output_limit"):
+            values.pop(key, None)
+        try:
+            while not job["done"].is_set():
+                with job["control"]:
+                    if job["phase"] != "DISPATCHING":
+                        return
+                try:
+                    with native_operation(self.server, sandbox_id, values, request_id) as (channel, native):
+                        channel.call("cancel", **native)
+                    self._checkpoint(proof["request_id"], "cancel_sent", job)
+                    return
+                except (FileNotFoundError, NativeSessionReset, ServiceBusy):
+                    # The execution permit can be in transit. ENOENT is not
+                    # proof that the pending command will never start. Retry
+                    # this exact cancellation, never the command itself.
+                    job["done"].wait(.02)
+        except Exception as exc:
+            self.server.manager.errors.append({"component":"native_cancel",
+                "request_id":proof["request_id"], "error":str(exc)})
 
     def close(self):
         with self.lock:

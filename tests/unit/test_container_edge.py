@@ -171,8 +171,12 @@ class ContainerEdgeTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(UnsupportedCapability, '107-byte.*shorten DSEC_CONTAINER_ROOT'):
                 runtime._container_backend(self.spec)
         self.assertEqual(Backend.made, [])
+        # /tmp resolves to /private/tmp on macOS. Test the byte boundary,
+        # independently of that host-specific prefix.
+        prefix = Path('/tmp').resolve()
+        length = 107 - len(os.fsencode(prefix / ('0' * 32) / 'native.sock')) - 1
         runtime = ContainerRuntime(dict(self.configuration,
-            DSEC_CONTAINER_ROOT='/tmp/' + 'x' * 57, DSEC_NATIVE_AGENT=str(binary)))
+            DSEC_CONTAINER_ROOT=str(prefix / ('x' * length)), DSEC_NATIVE_AGENT=str(binary)))
         self.assertEqual(len(os.fsencode(runtime._container_backend(self.spec).root / ('0' * 32) / 'native.sock')), 107)
         # The new limit applies to opted-in native UDS deployments only.
         legacy = ContainerRuntime(dict(self.configuration, DSEC_CONTAINER_ROOT='/tmp/' + 'x' * 58))

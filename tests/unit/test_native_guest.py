@@ -37,10 +37,11 @@ class NativeGuestFixture(unittest.TestCase):
         self.process = subprocess.Popen([str(self.binary), "--unix", str(self.socket)],
                                         start_new_session=True)
         self.addCleanup(self.ensure_stopped)
-        for _ in range(100):
-            if self.socket.exists() or self.process.poll() is not None:
-                break
+        deadline = time.monotonic() + 5
+        while not self.socket.exists() and self.process.poll() is None and time.monotonic() < deadline:
             time.sleep(.01)
+        if not self.socket.exists():
+            raise RuntimeError(f"Native agent failed to bind: exit={self.process.poll()}")
         self.channel = NativeChannel(self.socket)
         self.sessions = []
         self.channel.capabilities()

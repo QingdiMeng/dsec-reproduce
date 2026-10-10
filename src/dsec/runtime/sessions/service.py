@@ -23,17 +23,16 @@ def native_operation(server, sandbox_id, args, request_id):
         values.pop("spec", None)
         if kind != "container":
             raise UnsupportedCapability("Legacy TB2 server images need a native agent upgrade")
-        with runtime._operation(sandbox_id):
-            entry = runtime._entry(kind, spec, sandbox_id)
+        with runtime.native_operation(kind, spec, sandbox_id, request_id) as entry:
             endpoint = entry.backend.root / sandbox_id / "native.sock"
             if not endpoint.exists():
                 raise UnsupportedCapability("Container has no native v1 agent")
-        channel = NativeChannel(endpoint)
-        channel.prepare(action, **values)
-        channel.capabilities()
-        if action == "stream" and STREAM_FEATURE not in channel.capabilities():
-            raise UnsupportedCapability("Upgrade guest for native streaming")
-        yield channel, values
+            channel = NativeChannel(endpoint)
+            channel.prepare(action, **values)
+            features = channel.capabilities()
+            if action == "stream" and STREAM_FEATURE not in features:
+                raise UnsupportedCapability("Upgrade guest for native streaming")
+            yield channel, values
         return
     if backend != "microvm":
         raise ValueError("Unknown native backend")
@@ -56,7 +55,9 @@ def native_operation(server, sandbox_id, args, request_id):
             sandbox._restore()
         if sandbox.state != "RUNNING":
             raise SandboxError("Sandbox is not running")
-        sandbox.native_inflight[request_id] = action
+        incarnation = getattr(sandbox, "native_incarnation", 0)
+        activity = {"action": action, "incarnation": incarnation}
+        sandbox.native_inflight[request_id] = activity
         try:
             sandbox._persist()
         except Exception:
@@ -65,6 +66,8 @@ def native_operation(server, sandbox_id, args, request_id):
     # A command does not hold the sandbox-wide lifecycle lock. Distinct native
     # sessions can execute concurrently; pause sees the durable activity fence.
     try:
+        checkpoint = getattr(sandbox, "_native_checkpoint", lambda *a, **k: None)
+        checkpoint("admitted", request_id=request_id, incarnation=incarnation)
         features = channel.capabilities()
         if action == "stream" and STREAM_FEATURE not in features:
             raise UnsupportedCapability("Upgrade guest for native streaming")
@@ -73,12 +76,25 @@ def native_operation(server, sandbox_id, args, request_id):
         # The guest may still be executing. Retire it before releasing the
         # activity fence; neither pause nor a replacement shell may hide it.
         with sandbox.lock:
-            sandbox._fail("native_operation_outcome_unknown")
+            if (getattr(sandbox, "native_incarnation", 0) == incarnation
+                    and sandbox.state == "RUNNING"):
+                sandbox._fail("native_operation_outcome_unknown")
+            checkpoint("outcome_unknown", request_id=request_id, incarnation=incarnation)
         raise
     finally:
         with sandbox.lock:
-            sandbox.native_inflight.pop(request_id, None)
-            sandbox._touch()
+            owns_activity = sandbox.native_inflight.get(request_id) == activity
+            if owns_activity:
+                sandbox.native_inflight.pop(request_id, None)
+            if (getattr(sandbox, "native_incarnation", 0) == incarnation
+                    and sandbox.state == "RUNNING"):
+                sandbox._touch()
+            elif owns_activity or getattr(sandbox, "native_incarnation", 0) == incarnation:
+                # Removing this operation's record must survive restart, even
+                # when its process was replaced. Do not renew the replacement's
+                # idle deadline or remove any newer operation's activity.
+                sandbox._persist()
+            checkpoint("released", request_id=request_id, incarnation=incarnation)
 
 
 def dispatch_native(server, sandbox_id, args, request_id):

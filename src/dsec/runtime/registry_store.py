@@ -90,6 +90,7 @@ class RegistryRecords:
             "boot_id":self.operations.boot_id,"snapshot":sb.snapshot.name if sb.snapshot else None,
             "generation":sb.generation,"process":process,"inflight":sb.inflight,
             "native_inflight":getattr(sb, "native_inflight", {}),
+            "native_incarnation":getattr(sb, "native_incarnation", 0),
             "node_lease_id":sb.node_lease_id,
             "resource_cleanup_complete":sb.resource_cleanup_complete})
 
@@ -322,6 +323,9 @@ class RegistryRecords:
                 sb.last_create_phases=None
                 sb.generation=value["generation"]; sb.inflight=value["inflight"]
                 sb.native_inflight=value.get("native_inflight", {})
+                sb.native_incarnation=value.get("native_incarnation", 0)
+                if type(sb.native_incarnation) is not int or sb.native_incarnation < 0:
+                    raise ValueError("Invalid native incarnation")
                 manager.sandboxes[sid]=sb
                 saved=value["process"]
                 if saved:

@@ -185,7 +185,7 @@ no timeout evidence retain the missing field. The legacy command boundary
 remains unchanged. Native sessions, files and bounded streaming use an additional
 protocol described below. Neither path manages policy/model state.
 
-### Native sandbox SDK (local implementation, real-VM acceptance pending)
+### Native sandbox SDK
 
 The Python SDK and Edge call one shared C agent, through native vsock port 5001
 in a microVM or a private UDS in a layered container. Port 5000 retains the
@@ -217,8 +217,11 @@ sessions can run concurrently and share only the sandbox filesystem. A second
 handle contending for a busy session receives provable non-admission and the
 SDK waits with the same ID. A stream collector also waits on explicit guest
 non-admission, for at most 35 seconds; `queue_wait_ms` records that wait.
-Cancellation reports `cancel_requested=false` if that exact command is not
-currently admitted; it does not cancel a different command occupying the shell.
+Queued stream cancellation durably records its intent and prevents dispatch.
+A dispatched stream may be in transit; cancellation retries only its exact ID.
+`cancel_requested=true` acknowledges the intent, not confirmed termination.
+Completed operations return false with their terminal state; no cancellation
+targets a different command occupying the shell.
 There is no PTY or interactive stdin. Commands receive `/dev/null` stdin;
 detached child jobs are cleaned up after a command on Linux. Timeout, cancel,
 `exit`, or loss of the shell's control FD ends the session. A subsequent call
@@ -253,7 +256,8 @@ event spool is at most 8 MiB; overflow drops further output events while drainin
 the guest, and the final result sets `stream_truncated=true`. Final success is
 exposed only after the journal commit. `session.query(operation_id)` reads that
 same journal. `session.cancel(operation_id)` targets the exact active command,
-and does not kill a later command. Cancellation resets this session.
+and does not kill a later command. Cancellation of an executing command resets
+its shell; queued cancellation leaves the existing session and other work intact.
 
 MicroVM lifecycle admission uses the same durable registry: idle sessions can
 be included in VM snapshots; active native calls/streams reject pause before
@@ -277,3 +281,241 @@ existing one-shot adapter path; they do not migrate training to native sessions.
 The [installation report](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md) records the
 conditions and scope. These checks do not establish production containment,
 all-task correctness, high-concurrency performance or every storage combination.
+
+### Formal concurrency model
+
+The executable [TLA+ lifecycle model](../../verification/NativeLifecycle.tla)
+specifies a **target concurrency contract**, not a claim that the current
+runtime refines it. The separate
+[signal model](../../verification/ShutdownSignal.tla) exposes the concrete
+`ns_stopping = ns_run(...)` read/return/assignment window. Neither model belongs
+to the installed runtime; Java/TLC is a contributor/CI dependency only.
+The [official TLC tools](https://github.com/tlaplus/tlaplus) perform exhaustive
+finite-state exploration. The
+[runner](../../tools/check_concurrency_model.py) pins version 1.7.4 and checks
+the jar's SHA-256 before executing it.
+
+The lifecycle configuration has two stable request IDs and two VM incarnations
+(`MaxEpoch=1`, epochs 0 and 1). Edge and guest actions interleave independently.
+Start permits, completion/failure callbacks and cancel messages may be delayed;
+callbacks may be observed repeatedly. Edge may crash/restart at any boundary.
+There are no depth cutoffs, state constraints, random simulation or symmetry
+reductions in this gate. Every reachable state of this finite abstraction is
+visited by TLC. Increasing the bounds is a separate check, not an inference
+that two requests cover arbitrarily many clients.
+
+The authority is Edge's durable request/lifecycle record. Guest actions do not
+read that record. A start permit is sent only after execution admission, so an
+admitted-but-not-yet-started command must use the running-cancel path. Queued
+cancel can finish immediately only before any permit exists. Running cancel
+finishes after receiver-side revocation/termination; it does not undo shell
+side effects. A completion already committed remains a completion.
+
+`RequestStop` closes admission and enters `STOPPING`. A permit admitted earlier
+may still start while shutdown is in progress. `STOPPED` is committed only after
+confirmed VM death. Recovery creates a new incarnation after the old VM is
+dead. Incarnation identity must fence state-changing callbacks at their write
+boundary; it is distinct from snapshot generation and must not be inferred
+from a reusable PID alone.
+
+| Property | Meaning |
+| --- | --- |
+| `AtMostOnce` | A stable command request is started at most once in the modeled history. |
+| `TerminalNoNewExecution` | No new start follows a committed success or confirmed cancellation. |
+| `StoppedIsFinal` | Late callbacks cannot undo `STOPPED` in the same incarnation; explicit recovery changes incarnation. |
+| `StoppedIsQuiescent` | A stopped sandbox has no live VM or active command. |
+| `PausedIsQuiescent` | Pause has no admitted/running native work. |
+| `UnknownNeverReadmitted` | An uncertain request is not admitted again. UNKNOWN does not mean the original command had no side effects. |
+| `StartIsFenced` | A start is delivered only to the matching live incarnation. |
+| `CallbackIsFenced` | Old-incarnation failure callbacks cannot mutate current state. |
+| `StopIsMonotonic` | Once the signal requests shutdown, ordinary return handling cannot clear the flag. |
+
+Assumptions are explicit: an exclusive Edge owner; atomic durable admission and
+result transitions; no automatic retransmission of an admitted command;
+transport delivery of one submitted start at most once; correct acknowledgement
+of process termination. Client retries attach to the existing journal. The
+model's `seen`, execution counters and settled counts are history monitors,
+not a proposed second guest execution journal. It does not model Byzantine
+guests, filesystem durability internals, arbitrary shell side effects, multiple
+nodes, file-transfer races, session exclusivity, event-spool correctness,
+network isolation or resource-lease cleanup. It checks safety only: no fairness,
+eventual-delivery or eventual-completion claim is made. Deadlock checking is
+disabled because terminal/quiescent states may stutter; this does **not** prove
+deadlock freedom. Full linearizability needs invocation/response histories and
+a refinement mapping, beyond these safety invariants.
+
+| Model boundary | Code boundary / remaining correspondence |
+| --- | --- |
+| Admission before start; request-ID dedup | Existing `RequestJournal` and `NativeJobs.start`; EBUSY proves guest non-admission. Check the gap between Edge acceptance and guest admission. |
+| Queued cancel / running cancel / confirmed terminal result | `NativeJobs.cancel` durably records a pending stream cancellation under the collector control lock. A queued intent prevents dispatch; an in-transit dispatch retries only cancellation for the exact operation ID. Intent acknowledgement is distinct from the final execution result. |
+| Pause activity fence | `native_operation` and `LifecycleController.pause` already register/check native work under the sandbox lock. |
+| Stop completion and late callback rejection | `native_operation` captures the durable process incarnation; late UNKNOWN callbacks only retire the same RUNNING incarnation. `LifecycleController.fail` preserves STOPPED. Container activity registration and stop admission share the existing lifecycle lock, with activity retained through native I/O. |
+| Interrupted work becomes UNKNOWN; explicit recovery | Existing registry/journal recovery retires interrupted VMs. `native_incarnation` advances and is persisted before restore starts a replacement process; it is separate from snapshot generation. Old callbacks cannot fail or touch the replacement. |
+| Monotonic signal | `ns_session` now writes `1` only when the return value requests stopping and otherwise makes no write. The real C-agent trace check covers this boundary and requires rejection of the previous assignment. A read-modify-write `stop |= returned` would still race with a signal. |
+
+Unsafe variants deliberately violate queued cancellation, stopped-state
+finality, old-incarnation fencing, UNKNOWN non-replay, start fencing and signal
+monotonicity. CI requires an exact expected invariant violation and a TLC
+counterexample, not merely a nonzero exit. The broad lifecycle variants are mutation checks of the target contract.
+Targeted models below additionally replay actual implementation observations
+and require corresponding code mutations to fail the canonical regressions.
+
+Run `python tools/check_concurrency_model.py --fetch --out /tmp/dsec-model-check-unique`
+with Java 11+, or provide the pinned jar with `--jar`. Output directories cannot
+be overwritten. Each run preserves model/config copies, raw counterexamples,
+state counts, tool/model hashes and `report.json`. Incomplete searches fail.
+The targeted correspondence gates below map selected lifecycle actions to
+code and replay counterexample orderings with deterministic barriers. They
+check those mappings and complement model exploration; the broader lifecycle
+model still lacks full implementation refinement.
+
+#### Worked implementation correspondence: shutdown signal/result race
+
+Run `python tools/check_shutdown_refinement.py --fetch --out /tmp/dsec-shutdown-check-unique`
+with Java 11+ and a C compiler. The
+[correspondence tool](../../tools/check_shutdown_refinement.py) compiles the real
+`guest_native.c`, executes its persistent-shell command path and uses
+[compile-time probes](../../verification/native_shutdown_probe.h) to deliver
+SIGTERM at a chosen boundary. Probes and their environment variables are absent
+from normal builds. Handler observations use fixed-size async-signal-safe writes;
+no Python FSM decides which state transitions are legal.
+
+| Observation | Model projection |
+| --- | --- |
+| Before the real `ns_run` call | `phase=RUN`, actual `ns_stopping`, initial return value/signal marker |
+| After `ns_run` returns, before applying its result | `phase=ASSIGN`, actual return value and stopping flag |
+| Inside the real SIGTERM handler, after setting the flag | `Signal`: actual stopping flag and signal marker; current phase retained |
+| After the caller applies the result | `phase=IDLE`, actual stopping flag and cached return value |
+
+`Return` allows either Boolean value because timeout, exit and shell reset can
+request stopping without SIGTERM. This corrects an overly narrow initial
+abstraction (`returned=stop`); `StopIsMonotonic` is unchanged. The safe caller is
+`if (stop_run) ns_stopping=1;`, so normal return handling never writes zero.
+
+The trace wrapper [ShutdownReplay](../../verification/ShutdownReplay.tla)
+extends the same `ShutdownSignal` module and requires every consecutive observed
+state to satisfy its original `Next`. `TraceConforms` rejects a prefix for which
+the next observed state is not legal. It does not infer success from event names.
+Five controlled scenarios cover no signal, signal before return, signal between
+return/application, signal after application and explicit shell exit.
+
+A required negative control replaces only the result-application statement with
+the historical `ns_stopping=stop_run;`. Its real trace matches the unsafe model
+and violates `StopIsMonotonic`; the identical trace is rejected by the safe model
+through `TraceConforms`. Thus the gate detects a reintroduced assignment rather
+than passing any compiled agent. The tool refuses to guess a mapping when the
+marked code boundary is removed/refactored. Review that mapping and regenerate
+traces when changing the implementation or model.
+
+Each run retains original/mutated C sources, build logs, binary/probe/model hashes,
+raw binary observations, projected JSON states, generated replay inputs and TLC
+verdicts. Local validation on 2026-10-10 passed the five positive traces and two
+required negative checks. The captured prefix covers this command-return/signal
+window only; it is not all instruction-level interleavings, full runtime
+refinement, a guarantee of shutdown latency or a liveness proof. Ordinary native
+SDK/agent tests still verify execution and cleanup independently.
+
+
+#### Implementation correspondence: queue, callbacks and container admission
+
+Run `python tools/check_native_race_refinement.py --fetch --out /tmp/dsec-native-race-check-unique`.
+The canonical [regression suite](../../tests/unit/test_native_races.py) executes
+real `NativeJobs`, request journals and lifecycle methods. Queue tests use the
+compiled C agent and actual Unix-socket commands. Host process and container
+drivers are instrumented fixtures; this is local contract validation.
+
+| Counterexample ordering | Implementation boundary and deterministic regression |
+| --- | --- |
+| Queue → cancel returns false/PENDING → dispatch executes | [QueueCancellation](../../verification/QueueCancellation.tla): `before_dispatch` barrier holds the collector; cancel must durably record intent, return true/PENDING, and finish queued/cancelled without creating the command's marker file. Reattaching the same ID cannot execute it. |
+| Dispatch permit → cancel sees ENOENT → guest admits | A transport barrier holds the real stream before sending. The first exact-ID cancel reaches the guest and gets ENOENT. Release dispatch; cancellation must retry that ID and obtain a cancelled terminal result. It never retries the execution. |
+| Result commit → cleanup throws → late cancel | After-commit exception injection must preserve the durable DONE result. Cancel returns false/DONE; evidence and the command effect remain unchanged. |
+| Admit → stop completes → old transport exception | [NativeCallbackFence](../../verification/NativeCallbackFence.tla): hold the native operation, call the actual stop method, then deliver UNKNOWN. STOPPED and completed resource cleanup must remain final. |
+| Admit epoch N → retire → restore epoch N+1 → callback from N | The real restore path advances/persists `native_incarnation` before replacement startup. Release the old UNKNOWN callback; the replacement stays RUNNING, alive, and unmodified. |
+| Two native readers → stop / owner close | [ContainerNativeGate](../../verification/ContainerNativeGate.tla): two native contexts coexist. Stop returns ServiceBusy before lifecycle journal admission; owner close also returns ServiceBusy. Releasing both permits stop. |
+| Stop holds admission → new native operation | Hold the instrumented backend stop method while the actual lifecycle lock is held. New native admission returns ServiceBusy and never reaches the endpoint; completed stop rejects later native work. |
+
+The [trace wrapper](../../verification/RaceReplay.tla) evaluates each adjacent
+state against the original model's `Next` (or an observation with no state
+change). Python only projects observations. Queue projection uses the actual
+phase, cancellation Event, persisted response and marker-file existence;
+callback projection uses actual lifecycle state, captured/current incarnation
+and activity map; container projection uses admitted request IDs, activity
+removal, backend stop entry/completion and admission rejection. History monitors
+record whether a stale callback itself retired a RUNNING replacement. They do
+not require a replacement to stay healthy forever: unrelated crashes remain
+legal. This distinction corrected an overstrong initial invariant exposed by
+TLC, without hiding independent failures or narrowing them out of the model.
+
+Four negative controls restore lost queued cancellation, remove callback guards
+(two guards for stopped-state finality), or remove the container stop activity
+check. These are reviewed code mutations, not parallel runtime implementations.
+Each must produce a behavioral assertion failure in the same regression,
+conform to the unsafe model, violate the specified property, and have its SAME
+trace rejected by the safe model. The runner fails on source-boundary drift,
+missing evidence, skips, parser errors and setup/cleanup errors. It retains source
+copies/hashes, original/mutated code, JSON observations, regression logs, generated
+TLA+ inputs/configuration, counterexamples and a combined report. CI requires
+these checks alongside the exhaustive model and real C signal checks.
+
+Cancellation success in the API acknowledges an intent, not guaranteed process
+termination. A command already in transit can execute before cancellation wins;
+its journal owns the final result. A queued cancellation prevents future sends.
+Interrupted pending intents still reconcile as UNKNOWN; they are not relabeled
+CANCELLED or automatically replayed. Container stop remains retryable while
+native work is active, consistent with existing one-shot container execution.
+
+Local validation on 2026-10-10 covers seven deterministic regressions, five safe
+implementation traces and four required faulty-code traces. The correspondence
+runner has 22 gates. Full model checks enumerate finite states without fairness
+or timing assumptions. These results do not prove all instruction-level races,
+linearizability of the whole system, eventual cancellation, physical child
+termination, filesystem/lease cleanup, or Linux deployment acceptance. The isolated Linux acceptance below validates these targeted runtime changes;
+broader composition and production release gates remain separate.
+
+
+#### Real Linux acceptance (2026-10-10)
+
+The [Linux acceptance tool](../../tools/verify_native_races.py) passed seven
+controlled checks on the experiment host with the installed candidate wheel:
+VM/container queued cancellation without any execution send; exact-ID cancel
+when dispatch is in transit; completed stop followed by a late UNKNOWN callback;
+old-incarnation callback after real snapshot restore; and both container
+native/stop admission orders. Container admission reached the real native agent,
+not an emulated endpoint. The callback tests executed a real guest command,
+then deliberately withheld/lost its response at a host barrier. They used real
+Firecracker processes, snapshot files and Linux pidfd attestation/adoption.
+EROFS boot/layer artifacts were immutable, private writable disks were isolated,
+and the recovered guest successfully executed commands before and after Edge
+ownership adoption. Its idle deadline was unchanged by the old callback.
+
+The installed core wheel SHA-256 was
+`4e6851aaa5788423dd904f442c0760d7c7bd8f0478b4723fd71f2ba26f686769`.
+The physical-run source manifest SHA-256 was
+`c7b83a4479468b08c301d11eb76d5ff1f6c55b543bf04a069877942904c96c8b`.
+The guest C source SHA-256 was
+`6df612523d2e39dfd188955b5155bc960f91dd2991b7a565e8f3ad7b2bcc59fb`.
+Raw reports and logs live in the dedicated
+`/home/xiaoxiaohu/dsec-race-20261010` acceptance directory. The physical verdict
+is `runtime-r4/report.json`; model, signal, mutation and Linux unit evidence is
+in `evidence/`. Failed earlier runs are preserved. Their two harness defects
+were conflicting default arguments on same-ID stream reattachment and an
+unreaped original child handle when both Edge owners lived in one OS process;
+no runtime guard was relaxed. The harness reaps only its exact original Popen
+child after the adopted VMM stops, and still requires `/proc` disappearance.
+
+Linux reran 16 exhaustive model gates, seven C-signal correspondence gates and
+22 implementation/mutation gates. The full unit suite ran 285 tests: 284 passed
+and one legacy experiment-alias test was inapplicable to the exported checkout.
+Its optional TB2.1 test package was built from the same snapshot solely to run
+the application-related regression collection. The physical acceptance does
+not need TB2.1 task downloads, a model or GPU. Six real backend traces are replayed
+against the same three original TLA+ specifications using
+`check_native_race_refinement.py --observed /path/to/report.json`.
+
+Cleanup verified six VMM process incarnations no longer existed, no owned Docker
+containers/private directories remained, no native activity remained, and no
+cleanup error occurred. Existing Docker/Grafana/Prometheus and DSec user services
+were not restarted by acceptance. This is a targeted single-host contract gate;
+it does not establish unbounded linearizability, every cancellation delivery
+window, child termination under arbitrary faults, 3FS/ublk recovery, network
+containment, scheduler lease correctness or a performance claim.

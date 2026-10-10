@@ -48,6 +48,7 @@ class ContainerRuntime:
         self.journal = None
         self.owner_lock = None
         self.operation_locks = {}
+        self.native_activity = {}
         self.closed = False
 
     def _journal(self):
@@ -75,6 +76,8 @@ class ContainerRuntime:
     def close(self):
         # Closing the service's owner handle does not stop its containers.
         with self.lock:
+            if self.native_activity or self.operation_locks:
+                raise ServiceBusy("Container operations are active; owner cannot be released")
             self.closed = True
             if self.owner_lock is not None:
                 self.owner_lock.close()
@@ -106,6 +109,32 @@ class ContainerRuntime:
         spec = cls(**args["spec"])
         spec.validate()
         return kind, spec
+
+    def _native_checkpoint(self, stage, sandbox_id, **details):
+        """No-op boundary for controlled native/lifecycle correspondence checks."""
+
+    @contextmanager
+    def native_operation(self, kind, spec, sandbox_id, request_id):
+        # Registration and stop admission share the existing lifecycle lock.
+        # Readers then run concurrently; the lock is not held over guest I/O.
+        token = object()
+        with self._operation(sandbox_id):
+            self._journal()
+            entry = self._entry(kind, spec, sandbox_id)
+            if entry.backend.prove_stopped(sandbox_id):
+                raise RuntimeError("Container is stopped")
+            with self.lock:
+                self.native_activity.setdefault(sandbox_id, {})[token] = request_id
+        try:
+            self._native_checkpoint("admitted", sandbox_id, request_id=request_id)
+            yield entry
+        finally:
+            with self.lock:
+                readers = self.native_activity[sandbox_id]
+                readers.pop(token)
+                if not readers:
+                    self.native_activity.pop(sandbox_id)
+            self._native_checkpoint("released", sandbox_id, request_id=request_id)
 
     def _backend(self, kind, spec):
         with self.lock:
@@ -200,6 +229,10 @@ class ContainerRuntime:
                     self.node_admission.stopped('container', sandbox_id)
                 return result
             with self._operation(sandbox_id):
+                with self.lock:
+                    if self.native_activity.get(sandbox_id):
+                        self._native_checkpoint("stop_rejected", sandbox_id)
+                        raise ServiceBusy("Native work is active; stop was not admitted")
                 return journal.execute(request_id, "stop", sandbox_id, spec.stop_args(), stop)
         backend = self._backend(kind, spec)
         if operation == "container_status" and backend.prove_stopped(sandbox_id):

@@ -36,6 +36,14 @@ static char ns_root[100];
 static volatile sig_atomic_t ns_stopping;
 static pid_t ns_shell;
 static int ns_stream_client=-1;
+/* Compile-time probes are supplied only by the developer verification build.
+ * Production agents contain no trace collector or fault-injection behavior. */
+#ifndef NS_TEST_BEFORE_RUN
+#define NS_TEST_BEFORE_RUN() ((void)0)
+#define NS_TEST_AFTER_RUN(result) ((void)0)
+#define NS_TEST_AFTER_APPLY() ((void)0)
+#define NS_TEST_SIGNAL() ((void)0)
+#endif
 static void ns_parent_guard(pid_t parent) {
 #ifdef __linux__
     if(prctl(PR_SET_PDEATHSIG,SIGTERM) || getppid()!=parent)_exit(1);
@@ -109,7 +117,7 @@ static int ns_accept(int listener) {
     }
     return fd;
 }
-static void ns_signal(int sig) { (void)sig; ns_stopping=1; if(ns_shell>0) kill(-ns_shell,SIGKILL); }
+static void ns_signal(int sig) { (void)sig; ns_stopping=1; if(ns_shell>0) kill(-ns_shell,SIGKILL); NS_TEST_SIGNAL(); }
 static void ns_child_signal(int sig) { (void)sig; }
 #ifdef __linux__
 /* Commands cannot leave detached work outside the session's lifetime. */
@@ -265,7 +273,15 @@ static void ns_session(int listener, int readyfd, const char *id) {
         ns_timeout(c,DSEC_MAX_TIMEOUT_MS+5000);
         char h[256];
         if(!ns_line(c,h,sizeof(h))) {
-            if(!strncmp(h,"RUN ",4) || !strncmp(h,"STREAM ",7)) ns_stopping=ns_run(c,listener,input[1],done[0],h,dir);
+            if(!strncmp(h,"RUN ",4) || !strncmp(h,"STREAM ",7)) {
+                NS_TEST_BEFORE_RUN();
+                int stop_run=ns_run(c,listener,input[1],done[0],h,dir);
+                NS_TEST_AFTER_RUN(stop_run);
+                /* A signal may have requested stop after ns_run returned.
+                 * Never write zero here, including through a read-modify-write. */
+                if(stop_run)ns_stopping=1;
+                NS_TEST_AFTER_APPLY();
+            }
             else if(!strncmp(h,"CLOSE ",6)) {unlink(path);ns_reply(c,0,0,0,0,0,NULL,0,NULL,0);ns_stopping=1;}
             else if(!strncmp(h,"CANCEL ",7)) ns_reply(c,ENOENT,0,0,0,0,NULL,0,NULL,0);
             else ns_reply(c,EINVAL,0,0,0,0,NULL,0,NULL,0);
