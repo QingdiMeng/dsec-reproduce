@@ -63,6 +63,15 @@ class LayeredContainerBackend:
     container_prefix = "dsec-e1-"
     docker_label = "e1-erofs-overlay"
 
+    def _native_mounts(self):
+        binary = getattr(self, "native_agent", None)
+        if binary is None:
+            return []
+        if not binary.is_file():
+            raise ContainerBackendError("Native agent binary is unavailable")
+        return ["--mount", f"type=bind,src={binary},dst=/dsec-native-agent,readonly",
+                "--env", "DSEC_NATIVE_AGENT=/dsec-native-agent"]
+
     def __init__(self, *, artifacts=None, root, image, agent, layers=None,
                  environment_id="erofs_overlay", catalog_sha256=None, storage="local"):
         self.artifacts = Path(artifacts).resolve(strict=True) if artifacts else None
@@ -187,6 +196,7 @@ class LayeredContainerBackend:
                   *source_mounts,
                   "--mount", f"type=bind,src={private},dst=/dsec-private,bind-propagation=rprivate",
                   "--mount", f"type=bind,src={self.agent},dst=/dsec-agent.py,readonly",
+                  *self._native_mounts(),
                   "--env", "DSEC_LAYER_NAMES=" + ",".join(name for name, _ in self.layers),
                   *qos_args,
                   self.image, "python3", "-B", "/dsec-agent.py", "serve"])
@@ -428,7 +438,7 @@ class FullErofsBackend(LayeredContainerBackend):
         cpu = _qos_cpu(qos)
         if cpu is not None:
             qos_args += ["--cpuset-cpus", str(cpu)]
-        mounts = ["--mount", f"type=bind,src={self.meta_dir},dst=/dsec-meta,readonly",
+        mounts = [*self._native_mounts(), "--mount", f"type=bind,src={self.meta_dir},dst=/dsec-meta,readonly",
                   "--mount", f"type=bind,src={private},dst=/dsec-private",
                   "--mount", f"type=bind,src={self.agent},dst=/dsec-agent.py,readonly",
                   "--mount", f"type=bind,src={self.mount_helper},dst=/dsec-mount.py,readonly"]

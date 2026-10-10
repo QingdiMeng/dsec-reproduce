@@ -11,7 +11,7 @@ import subprocess
 import time
 import uuid
 
-from dsec.contracts.errors import SandboxError
+from dsec.contracts.errors import SandboxError, ServiceBusy
 from dsec.contracts.storage import DiskStorage
 
 
@@ -36,6 +36,9 @@ class LifecycleController:
         sandbox.overlaybd_daemon_socket_identity = None
 
     def fail(self, sandbox, reason):
+        # A late transport callback must not reopen a completed stop.
+        if sandbox.state == "STOPPED":
+            return
         sandbox.vm.stop()
         if sandbox.overlaybd_store and sandbox.overlaybd_device_id is not None:
             try:
@@ -45,7 +48,8 @@ class LifecycleController:
         sandbox._event("FAILED", reason)
 
     def check(self, sandbox):
-        if sandbox.state in ("RUNNING", "PAUSED") and time.monotonic() >= sandbox.deadline:
+        if (sandbox.state in ("RUNNING", "PAUSED") and not getattr(sandbox, "native_inflight", {})
+                and time.monotonic() >= sandbox.deadline):
             sandbox._stop("idle_ttl_expired")
         if sandbox.state == "RUNNING" and not sandbox._overlaybd_service_matches():
             sandbox._fail("ublk_service_identity_changed")
@@ -112,6 +116,10 @@ class LifecycleController:
                     sparse=sandbox.environment_id in sandbox.manager.tb2_templates)
             if sandbox.work_disk:
                 sandbox.manager.disk_storage.copy_file(sandbox.snapshot/"work.ext4", sandbox.work_disk, mode=0o600)
+            # Fence callbacks from the retired process BEFORE starting its
+            # replacement. Snapshot generation is not a process incarnation.
+            sandbox.native_incarnation = getattr(sandbox, "native_incarnation", 0) + 1
+            sandbox._persist()
             sandbox.vm.restore(sandbox.snapshot/"state", sandbox.snapshot/"memory",
                             track_dirty_pages=sandbox.snapshot_mode == "incremental")
             if sandbox.work_disk:
@@ -124,6 +132,8 @@ class LifecycleController:
     def pause(self, sandbox):
         """Snapshot + stop the VMM, releasing its runtime memory."""
         with sandbox.lock:
+            if getattr(sandbox, "native_inflight", {}):
+                raise ServiceBusy("Native work is active; pause was not admitted")
             if sandbox.reserved:
                 raise SandboxError("Sandbox is reserved for warm checkout")
             sandbox._check()

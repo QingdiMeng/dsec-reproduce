@@ -80,6 +80,65 @@ the SDK before retiring services. A VM PSS comparison does not establish a
 full backend resource advantage, and model failure is not an infrastructure
 failure.
 
+Lifecycle/native concurrency changes also require the bounded TLA+ checks:
+
+```sh
+python tools/check_concurrency_model.py --fetch --out /tmp/dsec-model-check-unique
+python tools/check_shutdown_refinement.py --fetch --out /tmp/dsec-shutdown-check-unique
+python tools/check_native_race_refinement.py --fetch --out /tmp/dsec-native-race-check-unique
+```
+
+Use a new output directory for each run; logs and counterexamples are retained.
+Java 11+ and the correspondence check's C compiler are development dependencies
+only. `--fetch` explicitly downloads the
+fixed, SHA-256-checked TLC version; offline runs use `--jar /path/to/tla2tools.jar`.
+CI must pass both exhaustive safe-model checks and the expected invariant
+violations in unsafe variants. Parser failures, missing tools and incomplete
+searches are failures, not skips. See the
+[model boundary and code mapping](docs/architecture/AGENT_ENVIRONMENT_CONTRACT.md#formal-concurrency-model).
+Model checking validates the specified finite protocol, not the runtime's
+refinement of it. Map code admission, commit, fencing and cleanup boundaries
+to the model, and turn counterexamples into controlled implementation tests.
+The shutdown correspondence check compiles the real C agent with probes,
+injects signals at named boundaries and asks the same TLA+ model to accept/reject
+the observed state sequence. It must reject the historical assignment mutant.
+Changes to that boundary require updating/reviewing this mapping; do not make
+Python duplicate the model's transition rules or weaken the safety property.
+The native-race tool runs the canonical `tests/unit/test_native_races.py` against
+real journals, lifecycle methods and local C-agent commands. Barriers reproduce
+queue cancellation, late callbacks, incarnation replacement and container
+stop/admission orderings. Four required code mutations must make the specified
+regressions fail; their observed traces must conform to the corresponding
+unsafe specification, violate its invariant, and be rejected by the safe one.
+A changed marked code fragment, missing trace, skipped test, setup/cleanup error
+or unexpected TLC failure rejects the mapping. Source snapshots and hashes tie
+the verdict to the implementation. These checks use instrumented Docker/KVM
+drivers. Real Linux acceptance uses `tools/verify_native_races.py` with a new
+exclusive `--root`, pinned `--binary`, `--kernel`, `--template`, `--native-agent`,
+optional `--vm-catalog`/`--vm-environment`, and `--container-catalog`/
+`--container-environment`. Supply the tested source manifest SHA with
+`--source-manifest-sha256`. This creates at most two VMs and one container at a
+time, uses no GPU/network, and stops owned resources. The prepared disks must
+already contain the tested agent; the tool does not modify immutable templates
+or restart existing services. Recheck the same models against its six physical
+traces:
+
+```sh
+python tools/check_native_race_refinement.py --fetch --observed /path/to/private-root/report.json --out /tmp/dsec-linux-trace-check-unique
+```
+
+A failed behavioral or cleanup report cannot be used as successful acceptance.
+Record source/wheel/agent identities, complete raw evidence and host continuity;
+fixture tests alone do not satisfy this gate.
+
+For each change to a mapped concurrency boundary, review the transition and
+invariant mapping, update the controlled regression/projection when necessary,
+and run all three correspondence tools. A source-text mutation mismatch must be
+reviewed, not bypassed. Changes to lifecycle behavior also require the relevant
+real Linux acceptance. CI retains source snapshots, observations, checker logs
+and counterexamples as `concurrency-evidence` artifacts for 14 days; TLC's
+temporary state directories are excluded.
+
 See release notes for the tested artifact identities. Future roadmap items
 remain planned until their acceptance evidence is attached; do not replace
 historical or frozen evidence with results from a different revision.

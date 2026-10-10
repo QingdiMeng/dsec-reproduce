@@ -13,6 +13,39 @@ import subprocess
 import time
 
 
+def start_native():
+    binary = os.environ.get("DSEC_NATIVE_AGENT")
+    if not binary:
+        return None
+    apply_qos()
+    socket_path = Path("/dsec-private/native.sock")
+    if socket_path.exists():
+        raise RuntimeError("Native agent socket already exists")
+    process = subprocess.Popen([binary, "--unix", str(socket_path),
+                                "--root", "/dsec-private/rootfs"])
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError("Native agent exited during startup")
+        if socket_path.exists():
+            return process
+        time.sleep(.01)
+    process.terminate()
+    process.wait(timeout=5)
+    raise RuntimeError("Native agent did not become ready")
+
+
+def stop_native(process):
+    if process is not None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        Path("/dsec-private/native.sock").unlink(missing_ok=True)
+
+
 def run(*argv):
     result = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if result.returncode:
@@ -64,6 +97,7 @@ def serve():
         raise ValueError("Invalid EROFS layer list")
     mounts = []
     loops = []
+    native = None
     try:
         for name in layers:
             target = private / ("lower-" + name)
@@ -91,6 +125,7 @@ def serve():
         mounts.append(root / "dev/null")
         run("mount", "-t", "proc", "-o", "ro,nosuid,nodev,noexec", "proc", str(root / "proc"))
         mounts.append(root / "proc")
+        native = start_native()
         (private / "ready.json").write_text(json.dumps({"state": "RUNNING", "layers":
             list(layers), "lowerdir": lower}) + "\n")
         stop = False
@@ -100,8 +135,11 @@ def serve():
         signal.signal(signal.SIGTERM, requested)
         signal.signal(signal.SIGINT, requested)
         while not stop:
+            if native is not None and native.poll() is not None:
+                raise RuntimeError("Native agent exited")
             time.sleep(0.2)
     finally:
+        stop_native(native)
         (private / "ready.json").unlink(missing_ok=True)
         for target in reversed(mounts):
             try: run("umount", str(target))
@@ -128,6 +166,7 @@ def serve_full(storage):
         if source != "fuse.hf3fs":
             raise RuntimeError("3FS FUSE data source is not mounted")
     mounts = []
+    native = None
     try:
         lower = private / "lower-full"
         lower.mkdir(parents=True, exist_ok=True)
@@ -146,6 +185,7 @@ def serve_full(storage):
         mounts.append(root / "dev/null")
         run("mount", "-t", "proc", "-o", "ro,nosuid,nodev,noexec", "proc", str(root / "proc"))
         mounts.append(root / "proc")
+        native = start_native()
         (private / "ready.json").write_text(json.dumps({"state": "RUNNING",
             "layers": ["full"], "storage": storage, "data": data}) + "\n")
         stop = False
@@ -155,8 +195,11 @@ def serve_full(storage):
         signal.signal(signal.SIGTERM, requested)
         signal.signal(signal.SIGINT, requested)
         while not stop:
+            if native is not None and native.poll() is not None:
+                raise RuntimeError("Native agent exited")
             time.sleep(0.2)
     finally:
+        stop_native(native)
         (private / "ready.json").unlink(missing_ok=True)
         for target in reversed(mounts):
             try: run("umount", str(target))

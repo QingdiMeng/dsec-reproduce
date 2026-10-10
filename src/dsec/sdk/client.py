@@ -9,14 +9,16 @@ from dsec.contracts.sandbox import (UnsupportedCapability, DSecMicroVMRunArgs,
 from dsec.sdk.sandbox_transport import SandboxClient, ServiceError
 from dsec.contracts.resources import NodeDemand
 from dsec.sdk.scheduled import ScheduledDSecClient, ScheduledOutcomeUnknown
+from dsec.sdk.native import NativeSandboxMixin
 
 
-class DSecSandbox:
-    def __init__(self, transport: SandboxClient, sandbox_id: str, *, retry_busy=False):
+class DSecSandbox(NativeSandboxMixin):
+    def __init__(self, transport: SandboxClient, sandbox_id: str, *, retry_busy=False, features=()):
         self._transport = transport
         self.id = sandbox_id
         self.backend = "microvm"
         self._retry_busy = retry_busy
+        self._features = frozenset(features)
 
     async def seal_baseline(self, *, allow_prepared_state=False, request_id=None):
         return await asyncio.to_thread(self._transport.call, "seal_baseline", self.id,
@@ -128,7 +130,7 @@ class DSecClient:
         result = await asyncio.to_thread(self._transport.call, "create",
                                          request_id=request_id, resource_demand=self._node_hint(resource_demand), **service_args)
         return DSecSandbox(self._transport, result["id"],
-                           retry_busy='busy-nonadmission-v1' in self._features)
+                           retry_busy='busy-nonadmission-v1' in self._features, features=self._features)
 
     async def lookup_request(self, request_id: str):
         self._require_open()
@@ -143,7 +145,7 @@ class DSecClient:
         args.validate()
         result = await asyncio.to_thread(self._transport.call, "container_create",
             request_id=request_id, resource_demand=self._node_hint(resource_demand), spec=asdict(args))
-        return DSecContainerSandbox(self._transport, result["id"], args)
+        return DSecContainerSandbox(self._transport, result["id"], args, features=self._features)
 
     async def run_tb2(self, args: DSecTB2RunArgs, *, request_id: str | None = None, resource_demand=None):
         self._require_container_service()
@@ -152,7 +154,7 @@ class DSecClient:
         args.validate()
         result = await asyncio.to_thread(self._transport.call, "container_create",
             request_id=request_id, resource_demand=self._node_hint(resource_demand), kind="tb2", spec=asdict(args))
-        return DSecTB2Sandbox(self._transport, result["id"], args)
+        return DSecTB2Sandbox(self._transport, result["id"], args, features=self._features)
 
     async def attach_container(self, sandbox_id: str, args: DSecContainerRunArgs):
         self._require_container_service()
@@ -161,7 +163,7 @@ class DSecClient:
         if not isinstance(args, DSecContainerRunArgs):
             raise TypeError("attach_container requires DSecContainerRunArgs")
         args.validate()
-        sandbox = DSecContainerSandbox(self._transport, sandbox_id, args)
+        sandbox = DSecContainerSandbox(self._transport, sandbox_id, args, features=self._features)
         if (await sandbox.status())["state"] != "RUNNING":
             raise RuntimeError("Container is not running")
         return sandbox
@@ -180,16 +182,17 @@ class DSecClient:
         if status["state"] not in ("RUNNING", "PAUSED"):
             raise RuntimeError(f"Cannot attach to sandbox in {status['state']}")
         return DSecSandbox(self._transport, sandbox_id,
-                           retry_busy='busy-nonadmission-v1' in self._features)
+                           retry_busy='busy-nonadmission-v1' in self._features, features=self._features)
 
 
-class DSecContainerSandbox:
+class DSecContainerSandbox(NativeSandboxMixin):
     backend = "container"
 
-    def __init__(self, transport: SandboxClient, sandbox_id: str, run_args: DSecContainerRunArgs):
+    def __init__(self, transport: SandboxClient, sandbox_id: str, run_args: DSecContainerRunArgs, *, features=()):
         self._transport = transport
         self.id = sandbox_id
         self._run_args = run_args
+        self._features = frozenset(features)
 
     async def _call(self, operation, *, request_id=None, **args):
         return await asyncio.to_thread(self._transport.call, operation, self.id,

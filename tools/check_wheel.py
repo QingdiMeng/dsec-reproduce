@@ -44,6 +44,8 @@ def main() -> None:
         directory = root / relative
         installed = Path(*parts)
         for path in directory.rglob('*.py'):
+            if not all(part.isidentifier() for part in path.relative_to(directory).with_suffix('').parts):
+                continue
             name = str(installed / path.relative_to(directory))
             allowed.add(name)
             source_paths[name] = str(path.relative_to(root))

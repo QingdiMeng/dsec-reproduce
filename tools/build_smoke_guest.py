@@ -12,6 +12,8 @@ def build(image, source, output):
     if not re.fullmatch(r'sha256:[0-9a-f]{64}', image):
         raise ValueError('Supply an exact local Docker image ID')
     source = Path(source).resolve(strict=True)
+    native_digest = (hashlib.sha256(source.with_name('guest_native.c').read_bytes()).hexdigest()
+                     if '#include "guest_native.c"' in source.read_text() else None)
     output = Path(output).resolve()
     if output.exists():
         raise FileExistsError(output)
@@ -56,6 +58,7 @@ def build(image, source, output):
         digest = hashlib.file_digest(stream, 'sha256').hexdigest()
     return {'status':'passed', 'template':str(output), 'sha256':digest,
             'source_image_id':image, 'source_agent_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),
+            'source_native_agent_sha256':native_digest,
             'bytes':output.stat().st_size, 'network':False, 'task':'counter-example'}
 
 

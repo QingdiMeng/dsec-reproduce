@@ -10,5 +10,8 @@ __all__ = [
     "SandboxClient", "ServiceError", "RequestOutcomeUnknown",
     "ScheduledDSecClient", "ScheduledSandbox", "ScheduledOutcomeUnknown",
     "DSecClient", "DSecSandbox", "DSecContainerSandbox", "DSecTB2Sandbox",
+    "DSecSession",
     "DSecMicroVMRunArgs", "DSecContainerRunArgs", "DSecTB2RunArgs", "UnsupportedCapability",
 ]
+
+from dsec.sdk.native import DSecSession

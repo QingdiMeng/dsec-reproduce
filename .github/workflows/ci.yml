@@ -11,6 +11,56 @@ permissions:
   contents: read
 
 jobs:
+  concurrency-model:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Exhaustive safety checks and required counterexamples
+        run: |
+          java -version
+          python3 tools/check_concurrency_model.py --fetch --cache "$RUNNER_TEMP/dsec-tla" --out "$RUNNER_TEMP/dsec-concurrency-model"
+      - name: Real C-agent trace correspondence and historical negative control
+        run: python3 tools/check_shutdown_refinement.py --fetch --cache "$RUNNER_TEMP/dsec-tla" --out "$RUNNER_TEMP/dsec-shutdown-refinement"
+      - name: Native race regressions, trace correspondence and code mutations
+        run: python3 tools/check_native_race_refinement.py --fetch --cache "$RUNNER_TEMP/dsec-tla" --out "$RUNNER_TEMP/dsec-native-races"
+      - name: Counterexample evidence
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os
+          import tarfile
+          from pathlib import Path
+          for name in ('dsec-concurrency-model', 'dsec-shutdown-refinement', 'dsec-native-races'):
+              root = Path(os.environ['RUNNER_TEMP']) / name
+              report = root / 'report.json'
+              if report.exists():
+                  print(report.read_text())
+              for log in sorted(root.glob('*/regression.log')):
+                  print(str(log.relative_to(root)))
+                  print(log.read_text())
+              for log in sorted(root.glob('*/tlc.log')):
+                  text = log.read_text()
+                  marker = 'Error: The behavior up to this point is:'
+                  if marker in text:
+                      print(str(log.relative_to(root)))
+                      print(text[text.index(marker):])
+          with tarfile.open(Path(os.environ['RUNNER_TEMP']) / 'dsec-concurrency-evidence.tar.gz', 'w:gz') as archive:
+              for name in ('dsec-concurrency-model', 'dsec-shutdown-refinement', 'dsec-native-races'):
+                  root = Path(os.environ['RUNNER_TEMP']) / name
+                  if root.exists():
+                      archive.add(root, arcname=name,
+                                  filter=lambda item: None if 'states' in Path(item.name).parts else item)
+          PY
+      - name: Preserve model, source and regression evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: concurrency-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/dsec-concurrency-evidence.tar.gz
+          retention-days: 14
+          if-no-files-found: warn
   packages:
     runs-on: ubuntu-latest
     strategy:
@@ -28,6 +78,8 @@ jobs:
         run: python -m pip install 'setuptools>=77' wheel build
       - name: Build and check packages
         run: |
+          cc -static -O2 -Wall -Wextra -Werror -o /tmp/dsec-guest-agent guest_agent.c
+          python tools/build_native_agent.py --source guest_native.c --out /tmp/dsec-native-agent
           python -m build --wheel --no-isolation --outdir dist/core .
           python tools/check_wheel.py dist/core/*.whl
           python -m build --wheel --no-isolation --outdir dist/tb21 apps/tb21

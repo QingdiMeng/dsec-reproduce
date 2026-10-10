@@ -200,6 +200,24 @@ class EdgeAssemblyTests(unittest.TestCase):
         self.assertTrue(process.alive)
         self.assertTrue(any(item['event']=='not_attached' for item in restored.recovery_events))
 
+    def test_interrupted_native_activity_uses_same_registry_and_never_replays(self):
+        first = self.open()
+        sandbox = first.create()
+        request = dict(request_id='b'*32, operation='native_stream', sandbox_id=sandbox.id,
+                       args={'backend':'microvm','action':'stream','session_id':'c'*32,
+                             'command':'uncommitted native action'})
+        RequestJournal(first.root).begin(request)
+        sandbox.native_inflight={request['request_id']:'stream'}
+        sandbox._persist()
+        first.detach()
+        restored = self.open()
+        recovered = restored.sandboxes[sandbox.id]
+        self.assertEqual(recovered.state, 'FAILED')
+        self.assertIn('interrupted_native_outcome_unknown', recovered.reason)
+        self.assertFalse(recovered.native_inflight)
+        self.assertEqual(self.commands, [])
+        self.assertEqual(RequestJournal(restored.root).lookup('b'*32)['state'], 'UNKNOWN')
+
     def test_failed_monitor_start_releases_handles_and_owner_without_stopping_vm(self):
         first = self.open()
         sandbox = first.create()

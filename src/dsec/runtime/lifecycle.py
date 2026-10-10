@@ -110,6 +110,8 @@ class Sandbox:
         self.network_ready = False
         self.generation = 0
         self.inflight = None
+        self.native_inflight = {}
+        self.native_incarnation = 0
         self.vm.on_process_started = self._persist
 
     def _persist(self):
@@ -119,6 +121,9 @@ class Sandbox:
 
     def _snapshot_checkpoint(self, stage):
         """No-op boundary used by isolated crash-injection tests."""
+
+    def _native_checkpoint(self, stage, **details):
+        """No-op boundary for controlled native/lifecycle correspondence checks."""
 
     def _touch(self):
         self.deadline = time.monotonic()+self.ttl
@@ -167,6 +172,7 @@ class Sandbox:
                     "resource_cleanup_complete":getattr(self, 'resource_cleanup_complete', False),
                     "baseline_sealed":self.baseline_sealed, "fork_origin":self.fork_origin,
                     "fork_readers":self.fork_readers,
+                    "active_native_operations":len(getattr(self, "native_inflight", {})),
                     "snapshot_cache_policy":self.manager.snapshot_cache_policy,
                     "snapshot_cache_evicted":self.snapshot_cache_evicted,
                     "last_pause_phases":getattr(self, "last_pause_phases", None),
