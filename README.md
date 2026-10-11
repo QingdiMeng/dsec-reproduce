@@ -60,7 +60,9 @@ experimental GPU training patches.
 
 A development preview adds IAM, multiple stateless API replicas, placement and
 watchers over authenticated Linux Nodes. See the [HA cluster guide](docs/guides/CLUSTER_DEPLOYMENT.md)
-for deployment prerequisites and current limits.
+for deployment prerequisites and current limits. An optional
+[management console](docs/guides/CLUSTER_CONSOLE.md) serves project, Node, sandbox
+and request/audit views through the same IAM-protected API.
 
 ## Use cases
 

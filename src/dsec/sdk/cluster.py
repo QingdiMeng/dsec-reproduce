@@ -94,7 +94,8 @@ class ClusterTransport:
                         sandbox_id=sandbox_id, args=args)
         if resource_demand is not None:
             envelope['resource_demand'] = resource_demand
-        readonly = operation in ('health', 'node_status', 'status', 'container_status',
+        readonly = operation in ('project.get', 'project.list', 'admission.list', 'sandbox.list',
+            'audit.list', 'node.list', 'health', 'node_status', 'status', 'container_status',
             'query_request', 'container_query_request', 'native_events') or (
             operation == 'native' and args.get('action') in ('read', 'capabilities'))
         return self.rpc.send(self.token, envelope, readonly=readonly)

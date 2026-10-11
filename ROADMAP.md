@@ -244,3 +244,15 @@ and [deployment guide](docs/guides/CLUSTER_DEPLOYMENT.md). Local process/member
 failure and a real Linux Node have been exercised; independent-host availability,
 operator recovery for indefinitely unknown dispatches, quota resizing and key
 rotation remain open. This preview does not replace existing milestone gates.
+
+## Cluster management console preview
+
+The optional [management console](docs/guides/CLUSTER_CONSOLE.md) provides
+project/Node/allocation/admission/audit views and existing create/stop/IAM/native
+operations through the authorized cluster API. It owns no new VM registry.
+Browse reads validate IAM at the return boundary, missing Nodes remain visible,
+and BOUND is not presented as RUNNING. The preview has portable authorization
+and HTTP gates; browser simulation is distinct from real KVM acceptance.
+Production ingress/independent failure domains, credential renewal, indefinite
+unknown-dispatch recovery, indexed inventories above 4,096 records and final
+release-artifact live acceptance remain release gates.

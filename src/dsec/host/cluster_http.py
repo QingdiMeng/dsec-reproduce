@@ -14,7 +14,7 @@ class ClusterHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
 
     def __init__(self, address, dispatch, *, cert_file=None, key_file=None,
                  client_ca_file=None, node_token=None, max_requests=32,
-                 allow_loopback_http=False):
+                 allow_loopback_http=False, console=False):
         if type(max_requests) is not int or not 1 <= max_requests <= 512:
             raise ValueError('Invalid request bound')
         if not cert_file and not (allow_loopback_http and address[0] in ('localhost', '127.0.0.1', '::1')):
@@ -31,6 +31,9 @@ class ClusterHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
                 self.context.verify_mode = ssl.CERT_REQUIRED
         if node_token is not None and (not client_ca_file or len(node_token) < 32):
             raise ValueError('Node gateway requires controller mTLS and a strong internal credential')
+        if type(console) is not bool or (console and node_token is not None):
+            raise ValueError('Console may only be enabled on a controller')
+        self.console = console
         self.dispatch, self.node_token = dispatch, node_token
         self.slots = threading.BoundedSemaphore(max_requests)
         super().__init__(address, Handler)
@@ -62,6 +65,25 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         # Credentials, commands and raw task material are not access logs.
         pass
+
+    def do_GET(self):
+        from dsec.host.cluster_console import HEADERS, asset
+        content = asset(self.path) if self.server.console else None
+        if content is None:
+            self.send_error(404)
+            return
+        data, mime = content
+        self.send_response(200)
+        self.send_header('Content-Type', mime)
+        self.send_header('Content-Length', str(len(data)))
+        self.send_header('Connection', 'close')
+        for name, value in HEADERS.items():
+            self.send_header(name, value)
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except OSError:
+            pass
 
     def do_POST(self):
         operation_id = None
@@ -99,6 +121,8 @@ class Handler(BaseHTTPRequestHandler):
                 error=dict(type='RequestOutcomeUnknown', message='Oversized response; query committed request'))).encode()
         try:
             self.send_response(200)
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Content-Type-Options', 'nosniff')
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', str(len(data)))
             self.send_header('Connection', 'close')

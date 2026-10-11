@@ -6,6 +6,7 @@ from dataclasses import asdict
 
 from dsec.contracts.cluster import (AuthorizationDenied, PROTOCOL, Quota, SandboxRoute,
                                    identifier, request_id)
+from dsec.control.cluster_inventory import OPERATIONS, browse
 from dsec.contracts.requests import request_digest
 from dsec.contracts.native import NATIVE_FEATURE, STREAM_FEATURE
 
@@ -18,7 +19,7 @@ def permission(operation, args):
     if operation in ('pause', 'resume', 'recover', 'seal_baseline'):
         return 'sandbox.snapshot'
     if operation in ('status', 'container_status', 'query_request', 'container_query_request',
-                     'native_events', 'health', 'node_status'):
+                     'native_events', 'health', 'node_status', 'node.list'):
         return 'sandbox.read'
     if operation == 'native' and args.get('action') in ('capabilities', 'read'):
         return 'sandbox.read'
@@ -47,6 +48,8 @@ class ClusterAPI:
         args = envelope.get('args', {})
         if not isinstance(args, dict):
             raise ValueError('Object arguments required')
+        if operation in OPERATIONS:
+            return browse(self.iam, credential, project, operation, args, self.route_key)
         if operation == 'project.create':
             if args['parent'] != project:
                 raise AuthorizationDenied('Delegation parent must match request project')
@@ -67,6 +70,10 @@ class ClusterAPI:
         if operation == 'health':
             return dict(protocol=PROTOCOL, protocol_features=[PROTOCOL, 'container-rpc-v1',
                 'busy-nonadmission-v1', 'node-admission-v1', NATIVE_FEATURE, STREAM_FEATURE])
+        if operation == 'node.list':
+            if args:
+                raise ValueError('Node inventory takes no arguments')
+            return {'scope':'cluster-derived-view', 'nodes':self.placement.watcher.inventory()}
         if operation == 'node_status':
             return {'scope':'cluster-derived-view', 'nodes':{
                 name:asdict(view) for name, view in self.placement.watcher.snapshot().items()}}

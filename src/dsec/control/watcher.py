@@ -1,5 +1,5 @@
 """Reconstructable fleet views. Missing health never releases a quota grant."""
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import threading
 import math
 import time
@@ -23,6 +23,7 @@ class Watcher:
         self.max_age, self.clock = max_age, clock
         self.lock = threading.Lock()
         self.views, self.generation, self.errors = {}, {}, {}
+        self.last_views = {}
 
     def probe(self, node):
         # Begin ordering fences a slow old completion after a newer probe.
@@ -44,6 +45,7 @@ class Watcher:
             if self.generation[node] != generation or self.clock() - began >= self.max_age:
                 return False
             self.views[node] = Observation(view, began)
+            self.last_views[node] = self.views[node]
             self.errors.pop(node, None)
         return True
 
@@ -56,3 +58,19 @@ class Watcher:
             now = self.clock()
             return {node:observation.view for node, observation in self.views.items()
                     if now - observation.observed_at < self.max_age}
+
+    def inventory(self):
+        """Configured fleet including missing/stale nodes; no placement authority."""
+        with self.lock:
+            now = self.clock()
+            items = []
+            for node in sorted(self.probes):
+                last = self.last_views.get(node)
+                fresh = node in self.views and now - self.views[node].observed_at < self.max_age
+                items.append(dict(node_id=node,
+                    state='HEALTHY' if fresh else ('UNREACHABLE' if node in self.errors else
+                        ('STALE' if last else 'UNOBSERVED')),
+                    schedulable=fresh, valid_for_seconds=max(0, self.max_age-(now-last.observed_at)) if fresh else 0,
+                    observation_age_seconds=max(0, now-last.observed_at) if last else None,
+                    error=self.errors.get(node), last_view=asdict(last.view) if last else None))
+            return items

@@ -24,7 +24,10 @@ class SourceReleaseTests(unittest.TestCase):
                 for name, digest in manifest['files'].items():
                     self.assertEqual(hashlib.sha256(archive.extractfile(name).read()).hexdigest(), digest)
                     self.assertFalse(name.startswith(('experiments/', 'results/', '.runtime/')))
-                for name in ('LICENSE', 'licenses/miles-APACHE-2.0.txt', 'guest_agent.c', 'guest_native.c',
+                for name in ('src/dsec/host/console/index.html', 'src/dsec/host/console/console.js',
+                             'src/dsec/host/console/console.css', 'src/dsec/control/cluster_inventory.py',
+                             'docs/guides/CLUSTER_CONSOLE.md', 'tests/unit/test_cluster_console.py',
+                             'LICENSE', 'licenses/miles-APACHE-2.0.txt', 'guest_agent.c', 'guest_native.c',
                              'tools/build_native_agent.py', 'tools/verify_native_sdk.py', 'tools/verify_native_races.py', 'src/dsec/sdk/native.py',
                              'tools/check_concurrency_model.py',
                              'tools/check_shutdown_refinement.py',

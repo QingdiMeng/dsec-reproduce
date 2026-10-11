@@ -132,6 +132,13 @@ hex `request_id`, `operation`, `sandbox_id` (null for create) and object `args`.
 Creation also requires an explicit `resource_demand`. The Python client builds
 these envelopes. Legacy local `DSecClient` remains usable over its private UDS.
 
+## Optional management console
+
+Enable `server.console: true` on controller replicas to serve `/console/`.
+See the [console guide](CLUSTER_CONSOLE.md) for IAM, browser trust, supported
+operations and recovery limits. It is disabled by default; Node gateways cannot
+serve it.
+
 ## Remote native SDK
 
 ```python

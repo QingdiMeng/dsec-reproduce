@@ -46,3 +46,5 @@ Current operational instructions are in the guides above.
 - [Roadmap and paper alignment](../ROADMAP.md)
 - [Contribution guide](../CONTRIBUTING.md)
 - [License](../LICENSE) and [third-party notices](../THIRD_PARTY_NOTICES.md)
+
+- [Cluster management console](guides/CLUSTER_CONSOLE.md): optional same-origin UI, authorized inventories and recovery semantics.
