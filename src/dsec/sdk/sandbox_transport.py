@@ -11,8 +11,11 @@ class ServiceError(RuntimeError):
 
 
 class SandboxClient:
-    def __init__(self, socket_path):
+    def __init__(self, socket_path, *, readonly_timeout=None):
         self.socket_path=str(socket_path)
+        if readonly_timeout is not None and not 0 < readonly_timeout <= 60:
+            raise ValueError('Readonly inspection timeout must be in (0, 60] seconds')
+        self.readonly_timeout=readonly_timeout
     def call(self, operation, sandbox_id=None, *, request_id=None, resource_demand=None, **args):
         request_id=request_id or uuid.uuid4().hex
         if not isinstance(request_id,str) or not re.fullmatch(r"[0-9a-f]{32}",request_id):
@@ -33,6 +36,9 @@ class SandboxClient:
                     # A cold microVM create includes serialized host netns setup
                     # and root-disk preparation. A lost reply is not retryable.
                     wait_s = max(wait_s, 300)
+                if self.readonly_timeout is not None and operation in ('health', 'node_status',
+                        'status', 'container_status', 'query_request', 'container_query_request'):
+                    wait_s = self.readonly_timeout
                 sock.settimeout(wait_s); sock.connect(self.socket_path); sock.sendall(data)
                 with sock.makefile("rb") as reader:
                     line=reader.readline(8*1024**2+1)
@@ -51,7 +57,7 @@ class SandboxClient:
             raise ServiceError(response["error"]["type"],response["error"]["message"],response["error"].get("details"))
         return response["result"]
 
-    def query_request(self, request_id):
+    def query_request(self, request_id, *, sandbox_id=None):
         if not isinstance(request_id,str) or not re.fullmatch(r"[0-9a-f]{32}",request_id):
             raise ValueError("request_id must be 32 lowercase hex characters")
-        return self.call("query_request",lookup_id=request_id)
+        return self.call("query_request",sandbox_id,lookup_id=request_id)

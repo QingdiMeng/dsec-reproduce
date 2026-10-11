@@ -10,6 +10,7 @@ record the tested revision and configuration; they are not installation guides.
 | [Quickstart](guides/QUICKSTART.md) | Install, provision a smoke guest and validate an isolated instance |
 | [Use cases](guides/USE_CASES.md) | Application entry points, dependencies and current gaps |
 | [Host configuration](guides/DSEC_HOST_CONFIGURATION.md) | Configure paths, runtime identity, storage and budgets |
+| [HA cluster preview](guides/CLUSTER_DEPLOYMENT.md) | IAM, multiple API replicas, placement, watchers and authenticated Nodes |
 | [Service deployment](guides/SERVICE_DEPLOYMENT.md) | Deploy and administer the daemon and rollout worker |
 | [Artifact publication](guides/ARTIFACT_PUBLICATION.md) | Prepare and publish immutable environment artifacts |
 | [RL integration](guides/RL_FRAMEWORK_ADAPTERS.md) | Trainer responsibilities, Miles integration and historical GPU experiments |
@@ -22,6 +23,7 @@ record the tested revision and configuration; they are not installation guides.
 | --- | --- |
 | [Modular refactor design](architecture/MODULAR_REFACTOR_DESIGN.md) | Approved boundaries, paper alignment, migration progress and acceptance gates |
 | [Agent environment](architecture/AGENT_ENVIRONMENT_CONTRACT.md) | Task lifecycle, scoring boundary, durable actions and recovery |
+| [HA control design](architecture/CLUSTER_CONTROL_DESIGN.md) | Ownership, failure boundaries and acceptance evidence |
 | [Sandbox daemon](architecture/SANDBOX_DAEMON.md) | Durable request handling and sandbox control plane |
 | [Comparison protocol](architecture/DOCKER_DSEC_BENCHMARK_PROTOCOL.md) | Matched workloads, cache conditions and complete backend accounting |
 

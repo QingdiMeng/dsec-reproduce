@@ -58,6 +58,10 @@ The core wheel has no third-party Python runtime dependencies. It does not
 bundle tasks, model weights, guest images, kernels, 3FS, storage binaries or
 experimental GPU training patches.
 
+A development preview adds IAM, multiple stateless API replicas, placement and
+watchers over authenticated Linux Nodes. See the [HA cluster guide](docs/guides/CLUSTER_DEPLOYMENT.md)
+for deployment prerequisites and current limits.
+
 ## Use cases
 
 | Application | Available today | Start here |

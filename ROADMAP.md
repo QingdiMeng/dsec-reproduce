@@ -233,3 +233,14 @@ RM-102/103/104 → RM-201/202/203**. The production and distributed milestones
 remain explicit future scope. The current v0.1 delivery checklist is maintained
 in [the release plan](ROADMAP.md), and historical implementation
 records are in [system status](ROADMAP.md).
+
+## HA cluster preview — implementation on 2026-10-11
+
+IAM, stateless API ingress, placement and watcher modules now have a development
+implementation with active controller replicas and quorum-backed IAM admission.
+Node physical resources and execution truth remain owned by the existing Edge.
+See [cluster design and acceptance](docs/architecture/CLUSTER_CONTROL_DESIGN.md)
+and [deployment guide](docs/guides/CLUSTER_DEPLOYMENT.md). Local process/member
+failure and a real Linux Node have been exercised; independent-host availability,
+operator recovery for indefinitely unknown dispatches, quota resizing and key
+rotation remain open. This preview does not replace existing milestone gates.

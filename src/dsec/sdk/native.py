@@ -111,7 +111,8 @@ class DSecSession:
             lookup_id=identifier(operation_id), session_id=self.id, request_id=request_id)
 
     async def query(self, operation_id):
-        proof = await asyncio.to_thread(self.sandbox._transport.query_request, identifier(operation_id))
+        proof = await asyncio.to_thread(self.sandbox._transport.query_request,
+            identifier(operation_id), sandbox_id=self.sandbox.id)
         if (proof["state"] != "NOT_FOUND" and (proof.get("sandbox_id") != self.sandbox.id
                 or proof.get("args", {}).get("session_id") != self.id)):
             raise ValueError("Request belongs to another session")

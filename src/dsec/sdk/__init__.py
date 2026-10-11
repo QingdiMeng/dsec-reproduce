@@ -15,3 +15,5 @@ __all__ = [
 ]
 
 from dsec.sdk.native import DSecSession
+from dsec.sdk.cluster import ClusterClient
+__all__.append('ClusterClient')

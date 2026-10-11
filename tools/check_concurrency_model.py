@@ -34,6 +34,11 @@ CASES = (
     ("callback-stop", "NativeCallbackFence", "unfenced", "StoppedIsFinal"),
     ("callback-replacement", "NativeCallbackFence", "unfenced", "OldCallbackCannotRetireReplacement"),
     ("container-missing-guard", "ContainerNativeGate", "missing_guard", "StopExcludesNativeActivity"),
+    ("cluster-admission", "ClusterAdmission", "none", None),
+    ("cluster-quota-guard", "ClusterAdmission", "quota_guard", "QuotaBounded"),
+    ("cluster-unknown-replacement", "ClusterAdmission", "unknown_replacement", "UniqueWritableOwner"),
+    ("cluster-health-release", "ClusterAdmission", "health_release", "ReleasedHasProof"),
+    ("cluster-late-rejected-dispatch", "ClusterAdmission", "late_rejected_dispatch", "ReleasedHasProof"),
 )
 
 
