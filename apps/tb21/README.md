@@ -87,8 +87,15 @@ reply parsing. Miles uses the packaged adapter with these variables:
 ```sh
 export DSEC_TB2_TASKS_DIR=/data/tb21-case/tasks
 export DSEC_TB2_ENVIRONMENT_CATALOG=/data/tb21-catalog.json
-export DSEC_ROLLOUT_WORKER_SOCKET=/srv/dsec/tb21/worker/worker.sock
+export DSEC_API_CONFIG=/run/dsec/api-client.json
 ```
+
+Deploy the [API and Node worker bridge](../../docs/guides/CLUSTER_DEPLOYMENT.md#remote-native-sdk)
+first. The client file carries API endpoint/project and private token/CA-file
+references; no worker socket is exposed to the trainer. Staged tasks/instructions
+are available to the task adapter, while runtime layers and verifier dependencies
+remain on the Node. Use `RolloutAPIClient` for `DSecAgentEnvironment`. Lost replies
+are recovered by the original project/rollout ID through another API replica.
 
 Supply the task ID as trainer metadata. Model sampling, tokens, logprobs,
 training and any GPU integration patches belong to the trainer; installing

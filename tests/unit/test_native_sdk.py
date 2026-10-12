@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from dsec.contracts.errors import RequestOutcomeUnknown
 from dsec.contracts.native import NATIVE_FEATURE
@@ -19,12 +20,66 @@ from dsec.contracts.sandbox import UnsupportedCapability
 from dsec.control.server import BoundedServer, Handler
 from dsec.runtime.requests import RequestJournal
 from dsec.runtime.sessions.native import NativeChannel
-from dsec.sdk.client import DSecClient, DSecSandbox
+from dsec.sdk.development import DevEdgeClient as DSecClient
+from dsec.sdk.client import DSecSandbox
 from dsec.sdk.sandbox_transport import SandboxClient, ServiceError
 from tests.unit.test_native_guest import NativeGuestFixture
 
 
 class NativeSDKTests(NativeGuestFixture):
+    def test_native_http_uses_edge_journal_without_repeating_post(self):
+        requests = []
+        class Endpoint(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers['Content-Length']))
+                requests.append(body)
+                self.send_response(201);self.end_headers();self.wfile.write(body)
+            def log_message(self, *_): pass
+        http = ThreadingHTTPServer(('127.0.0.1', 0), Endpoint)
+        thread = threading.Thread(target=http.serve_forever, daemon=True);thread.start()
+        try:
+            async def check():
+                _, sandbox = await self.client()
+                session = await sandbox.open_session();self.sessions.append(session.id)
+                operation = uuid.uuid4().hex
+                options = dict(body=b'\x00\xff', request_id=operation)
+                url = f'http://127.0.0.1:{http.server_port}'
+                first = await session.request('POST', url, **options)
+                self.assertEqual(first['status_code'], 201)
+                self.assertEqual(first['body'], b'\x00\xff')
+                self.assertEqual(await session.request('POST', url, **options), first)
+                self.assertEqual((await session.query(operation))['state'], 'DONE')
+                self.assertEqual(requests, [b'\x00\xff'])
+            asyncio.run(check())
+        finally:
+            http.shutdown();thread.join(timeout=2);http.server_close()
+
+    def test_session_files_use_the_same_native_identity_and_closed_session_is_rejected(self):
+        async def check():
+            _, sandbox = await self.client()
+            session = await sandbox.open_session()
+            self.sessions.append(session.id)
+            path = str(self.root / 'session-file')
+            await session.write_file(path, b'\x00\xffsession')
+            self.assertEqual(await session.read_file(path), b'\x00\xffsession')
+            await session.close()
+            with self.assertRaises(ServiceError) as failure:
+                await session.read_file(path)
+            self.assertEqual(failure.exception.kind, 'NativeSessionReset')
+        asyncio.run(check())
+
+    def test_old_edge_rejects_new_semantics_before_any_request_is_sent(self):
+        async def check():
+            _, sandbox = await self.client()
+            session = await sandbox.open_session();self.sessions.append(session.id)
+            sandbox._features = frozenset((NATIVE_FEATURE,))
+            with patch.object(sandbox._transport, 'call', side_effect=AssertionError('must not send')):
+                with self.assertRaises(UnsupportedCapability):
+                    await session.read_file('/tmp/anything')
+                with self.assertRaises(UnsupportedCapability):
+                    await session.request('POST', 'http://127.0.0.1', body=b'anything')
+        asyncio.run(check())
+
     def setUp(self):
         super().setUp()
         self.sb = SimpleNamespace(id="abcdef012345", lock=threading.RLock(), state="RUNNING",

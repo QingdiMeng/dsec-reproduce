@@ -10,9 +10,9 @@ import json
 import os
 from pathlib import Path
 import signal
-import stat
 import threading
 
+from dsec._credentials import secret_file
 from dsec.contracts.cluster import Quota
 from dsec.control.cluster_api import ClusterAPI
 from dsec.control.coordination import EtcdStore
@@ -23,22 +23,7 @@ from dsec.host.cluster_http import ClusterHTTPServer
 from dsec.host.cluster_node import NodeGateway, RemoteNode
 from dsec.sdk.cluster import JSONRPC
 from dsec.sdk.sandbox_transport import SandboxClient
-
-
-def secret_file(path):
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    try:
-        details = os.fstat(fd)
-        if (not stat.S_ISREG(details.st_mode) or details.st_uid != os.getuid()
-                or details.st_mode & 0o077 or details.st_size > 4096):
-            raise ValueError('Secret must be a private regular file owned by this service user')
-        with os.fdopen(fd, closefd=False) as stream:
-            value = stream.read().strip()
-        if len(value) < 32 or '\n' in value or '\r' in value:
-            raise ValueError('Invalid private credential')
-        return value
-    finally:
-        os.close(fd)
+from dsec.sdk.rollout_transport import RolloutClient
 
 
 def components(config, role):
@@ -59,7 +44,9 @@ def components(config, role):
             route_key=key, boot_id=boot_id, environments=spec['environments'],
             backends=spec.get('backends', ['microvm']), capabilities=spec.get('capabilities', []),
             max_sandboxes=spec['max_sandboxes'], minimum_demands=spec['minimum_demands'],
-            inspection=SandboxClient(spec['edge_socket'], readonly_timeout=3))
+            inspection=SandboxClient(spec['edge_socket'], readonly_timeout=3),
+            worker=RolloutClient(spec['worker_socket']) if spec.get('worker_socket') else None,
+            worker_inspection=RolloutClient(spec['worker_socket'], timeout_s=3) if spec.get('worker_socket') else None)
     nodes = {}
     for node, spec in config['nodes'].items():
         nodes[node] = RemoteNode(JSONRPC(spec['endpoints'], **spec['tls']),

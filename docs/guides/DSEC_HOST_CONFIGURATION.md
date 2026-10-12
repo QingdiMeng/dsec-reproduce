@@ -47,7 +47,7 @@ under `state_root/sandboxes` and `state_root/worker`.
 ### Container runtime ownership
 
 The sandbox service owns container backends, artifact resolution and lifecycle
-journals. `DSecClient` is a transport-only SDK; its caller needs the service
+journals. `DevEdgeClient` is the explicit node-local development SDK; its caller needs the service
 socket rather than local image paths or Docker access. `health` advertises
 `container-rpc-v1`. A new client refuses container calls against an older
 service; it does not fall back to managing host Docker itself. Upgrade the

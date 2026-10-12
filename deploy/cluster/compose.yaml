@@ -1,0 +1,105 @@
+# One Docker-host development topology. No whole-host availability claim.
+name: ${COMPOSE_PROJECT_NAME:?prepare a dedicated project first}
+x-etcd: &etcd
+  image: ${ETCD_IMAGE:?supply a locally available immutable image digest}
+  pull_policy: never
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  mem_limit: 384m
+  environment: &etcd-env
+    ETCD_DATA_DIR: /data
+    ETCD_LISTEN_CLIENT_URLS: https://0.0.0.0:2379
+    ETCD_LISTEN_PEER_URLS: https://0.0.0.0:2380
+    ETCD_INITIAL_CLUSTER: etcd1=https://etcd1:2380,etcd2=https://etcd2:2380,etcd3=https://etcd3:2380
+    ETCD_INITIAL_CLUSTER_TOKEN: ${COMPOSE_PROJECT_NAME}
+    ETCD_INITIAL_CLUSTER_STATE: new
+    ETCD_CERT_FILE: /tls/member.crt
+    ETCD_KEY_FILE: /tls/member.key
+    ETCD_TRUSTED_CA_FILE: /tls/ca.crt
+    ETCD_CLIENT_CERT_AUTH: "true"
+    ETCD_PEER_CERT_FILE: /tls/member.crt
+    ETCD_PEER_KEY_FILE: /tls/member.key
+    ETCD_PEER_TRUSTED_CA_FILE: /tls/ca.crt
+    ETCD_PEER_CLIENT_CERT_AUTH: "true"
+    ETCD_AUTH_TOKEN: jwt,pub-key=/tls/jwt.pub,priv-key=/tls/jwt.key,sign-method=RS256,ttl=24h
+    ETCD_QUOTA_BACKEND_BYTES: "268435456"
+  healthcheck:
+    test: [CMD, /usr/local/bin/etcdctl, --endpoints=https://localhost:2379, --cacert=/tls/ca.crt, --cert=/tls/health.crt, --key=/tls/health.key, endpoint, health]
+    interval: 3s
+    timeout: 3s
+    retries: 20
+    start_period: 5s
+x-controller: &controller
+  image: dsec-compose:${COMPOSE_PROJECT_NAME}
+  build:
+    context: ./image
+    args: {PYTHON_IMAGE: "${PYTHON_IMAGE:?supply an immutable image digest}"}
+  pull_policy: never
+  user: "${DSEC_UID:?}:${DSEC_GID:?}"
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  mem_limit: 256m
+  tmpfs: [/tmp]
+  volumes:
+    - ./config:/config:ro
+    - ./secrets/controllers:/secrets:ro
+  depends_on:
+    initialize: {condition: service_completed_successfully}
+services:
+  etcd1:
+    <<: *etcd
+    environment:
+      <<: *etcd-env
+      ETCD_NAME: etcd1
+      ETCD_ADVERTISE_CLIENT_URLS: https://etcd1:2379
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: https://etcd1:2380
+    ports: ["${HOST_ADDRESS}:${ETCD_PORT_1}:2379"]
+    volumes: [etcd1:/data, ./secrets/etcd1:/tls:ro]
+  etcd2:
+    <<: *etcd
+    environment:
+      <<: *etcd-env
+      ETCD_NAME: etcd2
+      ETCD_ADVERTISE_CLIENT_URLS: https://etcd2:2379
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: https://etcd2:2380
+    ports: ["${HOST_ADDRESS}:${ETCD_PORT_2}:2379"]
+    volumes: [etcd2:/data, ./secrets/etcd2:/tls:ro]
+  etcd3:
+    <<: *etcd
+    environment:
+      <<: *etcd-env
+      ETCD_NAME: etcd3
+      ETCD_ADVERTISE_CLIENT_URLS: https://etcd3:2379
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: https://etcd3:2380
+    ports: ["${HOST_ADDRESS}:${ETCD_PORT_3}:2379"]
+    volumes: [etcd3:/data, ./secrets/etcd3:/tls:ro]
+  initialize:
+    <<: *controller
+    restart: "no"
+    entrypoint: [python, /opt/dsec-initialize.py]
+    command: [/config/initialize.json]
+    volumes:
+      - ./config:/config:ro
+      - ./secrets/initialize:/initialize:ro
+      - ./secrets/controllers:/secrets
+      - ./node/secrets:/node-secrets
+    depends_on:
+      etcd1: {condition: service_healthy}
+      etcd2: {condition: service_healthy}
+      etcd3: {condition: service_healthy}
+  api1:
+    <<: *controller
+    command: [controller, --config, /config/controller.json]
+    ports: ["${HOST_ADDRESS}:${API_PORT_1}:8443"]
+  api2:
+    <<: *controller
+    command: [controller, --config, /config/controller.json]
+    ports: ["${HOST_ADDRESS}:${API_PORT_2}:8443"]
+volumes:
+  etcd1:
+  etcd2:
+  etcd3:

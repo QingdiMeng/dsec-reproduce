@@ -21,7 +21,7 @@ from dsec.contracts.errors import RequestOutcomeUnknown
 from dsec.contracts.resources import NodeDemand
 from dsec.control.cluster_api import ClusterAPI
 from dsec.host.cluster import main as service_main, secret_file
-from dsec.sdk.cluster import ClusterClient
+from dsec.sdk import DSecClient
 
 
 def controller(config, root):
@@ -108,7 +108,7 @@ async def acceptance(args, report):
             if spec['host'] in ('0.0.0.0', '::'):
                 raise ValueError('Use an explicit test listener hostname/address')
             scheme = 'https://'+spec['host']+':'+str(spec['port'])
-            clients[name] = ClusterClient([scheme], token=secret_file(args.token_file),
+            clients[name] = DSecClient([scheme], token=secret_file(args.token_file),
                 project=args.project, ca_file=str(args.ca_file))
             start(name)
         if addresses[0] == addresses[1]:

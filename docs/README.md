@@ -1,6 +1,9 @@
 # Documentation
 
-Start with the deployment quickstart, then choose an application. Reports
+Start with API access in the quickstart, then choose an application. Operators
+use the HA cluster and host setup guides; direct sockets are development/internal
+interfaces. RL recipes use the rollout API; historical scores retain their earlier
+configuration. Reports
 record the tested revision and configuration; they are not installation guides.
 
 ## Guides
@@ -48,3 +51,5 @@ Current operational instructions are in the guides above.
 - [License](../LICENSE) and [third-party notices](../THIRD_PARTY_NOTICES.md)
 
 - [Cluster management console](guides/CLUSTER_CONSOLE.md): optional same-origin UI, authorized inventories and recovery semantics.
+
+- [Native execution and production isolation](architecture/EXECUTION_ISOLATION.md): current aether/chronus responsibilities, compatibility and unfinished QEMU containment gates.

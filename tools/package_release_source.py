@@ -16,7 +16,7 @@ DOCS = (
     'docs/guides/SERVICE_DEPLOYMENT.md', 'docs/architecture/SANDBOX_DAEMON.md',
     'docs/architecture/AGENT_ENVIRONMENT_CONTRACT.md', 'docs/guides/RL_FRAMEWORK_ADAPTERS.md',
     'docs/architecture/CLUSTER_CONTROL_DESIGN.md', 'docs/guides/CLUSTER_DEPLOYMENT.md',
-    'docs/guides/CLUSTER_CONSOLE.md',
+    'docs/guides/CLUSTER_CONSOLE.md', 'docs/architecture/EXECUTION_ISOLATION.md',
     'docs/architecture/MODULAR_REFACTOR_DESIGN.md',
     'docs/guides/ARTIFACT_PUBLICATION.md', 'docs/architecture/DOCKER_DSEC_BENCHMARK_PROTOCOL.md',
     'docs/reports/DSEC_VERITY_PILOT_REPORT.md',
@@ -24,9 +24,13 @@ DOCS = (
     'docs/reports/MBPP_VERL_FIRST_USE.md',
 )
 TESTS = (
+    'tests/unit/test_etcd_auth.py',
+    'tests/packaging/test_cluster_compose.py',
     'tests/contracts/test_module_boundaries.py',
     'tests/unit/test_admission_guard.py',
     'tests/unit/test_agent_environment.py',
+    'tests/unit/test_api_sdk.py',
+    'tests/unit/test_rollout_api.py',
     'tests/unit/test_artifact_integrity.py',
     'tests/unit/test_artifact_publisher.py',
     'tests/unit/test_container_lifecycle_journal.py',
@@ -36,6 +40,8 @@ TESTS = (
     'tests/unit/test_native_guest.py',
     'tests/unit/test_native_sdk.py',
     'tests/unit/test_native_races.py',
+    'tests/unit/test_qemu_backend.py',
+    'tests/unit/test_qemu_cid_pool.py',
     'tests/unit/test_cluster_control.py',
     'tests/unit/test_cluster_console.py',
     'tests/unit/test_runtime_storage.py',
@@ -78,6 +84,9 @@ TESTS = (
 )
 
 TOOLS = (
+    'deploy/cluster/prepare.py', 'deploy/cluster/initialize.py',
+    'deploy/cluster/compose.yaml', 'deploy/cluster/Dockerfile',
+    'deploy/cluster/export_hosts.py',
     '.github/workflows/ci.yml',
     'tools/check_wheel.py', 'tools/package_release_source.py',
     'tests/packaging/test_release_source.py', 'tools/check_docs.py',
@@ -87,13 +96,20 @@ TOOLS = (
     'tools/build_smoke_guest.py', 'tools/verify_installed_task.py',
     'tools/build_native_agent.py',
     'tools/verify_native_sdk.py',
+    'tools/verify_qemu_backend.py',
     'tools/verify_native_races.py',
     'tools/verify_cluster_control.py',
     'tools/verify_cluster_node.py',
+    'tools/verify_rollout_api.py',
+    'tools/verify_rollout_restart.py',
     'tools/check_cluster_refinement.py',
     'tools/check_concurrency_model.py',
     'tools/check_shutdown_refinement.py',
     'tools/check_native_race_refinement.py',
+    'verification/AetherRouting.tla', 'verification/AetherRouting.cfg',
+    'verification/QemuLifecycle.tla', 'verification/QemuLifecycle.cfg',
+    'verification/QemuCID.tla', 'verification/QemuCID.cfg',
+    'verification/RolloutDispatch.tla', 'verification/RolloutDispatch.cfg',
     'verification/QueueCancellation.tla', 'verification/QueueCancellation.cfg',
     'verification/NativeCallbackFence.tla', 'verification/NativeCallbackFence.cfg',
     'verification/ContainerNativeGate.tla', 'verification/ContainerNativeGate.cfg',
@@ -102,7 +118,7 @@ TOOLS = (
     'verification/NativeLifecycle.tla', 'verification/NativeLifecycle.cfg',
     'verification/ShutdownSignal.tla', 'verification/ShutdownSignal.cfg',
     'verification/ShutdownReplay.tla', 'verification/native_shutdown_probe.h',
-    'tools/verify_installed_fork.py', 'tools/fixtures/tb21-openssl.json',
+    'tools/verify_installed_fork.py', 'tools/fixtures/tb21-openssl.json', 'tools/fixtures/tb21-regex-log.json',
 )
 SECRET = re.compile(rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|'
                     rb'\bsk-[A-Za-z0-9_-]{24,}\b|\bhf_[A-Za-z0-9]{24,}\b|\bAKIA[A-Z0-9]{16}\b')
@@ -111,7 +127,8 @@ SECRET = re.compile(rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|'
 def source_files(root):
     config = tomllib.loads((root/'pyproject.toml').read_text())
     settings = config['tool']['setuptools']
-    files = {'pyproject.toml', 'guest_agent.c', 'guest_native.c', '.gitignore', *DOCS, *TESTS, *TOOLS,
+    files = {'pyproject.toml', 'guest_agent.c', 'guest_native.c', 'native/protocol.h',
+             'native/aether.c', 'native/chronus.c', 'native/files.c', 'native/http.c', '.gitignore', *DOCS, *TESTS, *TOOLS,
              *config['project']['license-files']}
     files.update(module+'.py' for module in settings['py-modules'])
     for package in settings['packages']:

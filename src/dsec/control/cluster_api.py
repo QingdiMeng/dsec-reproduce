@@ -8,7 +8,9 @@ from dsec.contracts.cluster import (AuthorizationDenied, PROTOCOL, Quota, Sandbo
                                    identifier, request_id)
 from dsec.control.cluster_inventory import OPERATIONS, browse
 from dsec.contracts.requests import request_digest
-from dsec.contracts.native import NATIVE_FEATURE, STREAM_FEATURE
+from dsec.contracts.native import NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_FEATURE, HTTP_FEATURE, required_extension
+from dsec.contracts.sandbox import UnsupportedCapability
+from dsec.contracts.rollout import ROLLOUT_FEATURE
 
 
 def permission(operation, args):
@@ -18,7 +20,7 @@ def permission(operation, args):
         return 'sandbox.stop'
     if operation in ('pause', 'resume', 'recover', 'seal_baseline'):
         return 'sandbox.snapshot'
-    if operation in ('status', 'container_status', 'query_request', 'container_query_request',
+    if operation in ('status', 'container_status', 'query_request', 'container_query_request', 'container_query_action',
                      'native_events', 'health', 'node_status', 'node.list'):
         return 'sandbox.read'
     if operation == 'native' and args.get('action') in ('capabilities', 'read'):
@@ -48,6 +50,11 @@ class ClusterAPI:
         args = envelope.get('args', {})
         if not isinstance(args, dict):
             raise ValueError('Object arguments required')
+        if isinstance(operation, str) and operation.startswith('rollout.'):
+            if envelope.get('sandbox_id') is not None or envelope.get('resource_demand') is not None:
+                raise ValueError('Rollout operations use episode identity/resources in args')
+            from dsec.control.rollout_api import dispatch
+            return dispatch(self, credential, project, operation_id, operation, args)
         if operation in OPERATIONS:
             return browse(self.iam, credential, project, operation, args, self.route_key)
         if operation == 'project.create':
@@ -69,7 +76,7 @@ class ClusterAPI:
         self.iam.authorize(credential, project, permission(operation, args))
         if operation == 'health':
             return dict(protocol=PROTOCOL, protocol_features=[PROTOCOL, 'container-rpc-v1',
-                'busy-nonadmission-v1', 'node-admission-v1', NATIVE_FEATURE, STREAM_FEATURE])
+                'busy-nonadmission-v1', 'node-admission-v1', ROLLOUT_FEATURE, NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_FEATURE, HTTP_FEATURE])
         if operation == 'node.list':
             if args:
                 raise ValueError('Node inventory takes no arguments')
@@ -119,6 +126,9 @@ class ClusterAPI:
         if operation != 'query_request' and (route.backend == 'container') != (operation.startswith('container_')
                 or args.get('backend') == 'container'):
             raise ValueError('Operation/backend mismatch')
+        required = required_extension(args.get('action'), args) if operation == 'native' else None
+        if required and required not in self.nodes[route.node].health().capabilities:
+            raise UnsupportedCapability('Owning Node does not support this native extension')
         result = self.nodes[route.node].call(route, operation, operation_id, args)
         self._checkpoint('result_before_reply', envelope)
         return result

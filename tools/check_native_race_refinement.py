@@ -41,7 +41,8 @@ SOURCES = ('src/dsec/runtime/sessions/jobs.py', 'src/dsec/runtime/sessions/servi
     'src/dsec/runtime/registry_store.py', 'tests/unit/test_native_races.py',
     'tests/unit/test_native_sdk.py', 'tests/unit/test_native_guest.py',
     'tests/unit/test_container_edge.py', 'tests/unit/test_edge_assembly.py', 'guest_native.c',
-    'tools/verify_native_races.py')
+    'tools/verify_native_races.py', 'native/protocol.h', 'native/aether.c',
+    'native/chronus.c', 'native/files.c', 'native/http.c')
 
 
 def mutated(module, changes, out):

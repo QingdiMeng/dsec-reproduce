@@ -16,7 +16,8 @@ import signal
 import time
 import uuid
 
-from dsec.sdk.client import DSecClient, DSecMicroVMRunArgs, DSecContainerRunArgs
+from dsec.sdk.development import DevEdgeClient as DSecClient
+from dsec.sdk.client import DSecMicroVMRunArgs, DSecContainerRunArgs
 from dsec.contracts.profiles import FrameworkProfile, MECHANISM_ROADMAP
 from dsec.sdk.sandbox_transport import RequestOutcomeUnknown, ServiceError
 from dsec.rollout.store import RolloutStore
@@ -265,6 +266,7 @@ class RolloutWorker:
             return {"pid": os.getpid(), "rollouts": len(self.rollouts),
                     "durable_journal": self.store is not None,
                     "scheduler_enabled": self.scheduler is not None,
+                    "edge_socket": getattr(getattr(self.sandbox_client, '_transport', None), 'socket_path', None),
                     "active_profile": FrameworkProfile().as_dict(),
                     "mechanism_roadmap": MECHANISM_ROADMAP}
         if op == "admission_check":
@@ -385,6 +387,11 @@ class RolloutWorker:
                 self.rollouts[rollout_id] = rollout
                 return rollout.view()
         rollout_id = args.get("rollout_id")
+        if op == 'lookup':
+            if not isinstance(rollout_id, str) or not re.fullmatch('[0-9a-f]{32}', rollout_id):
+                raise ValueError('Invalid rollout lookup identity')
+            return (self.rollouts[rollout_id].view() if rollout_id in self.rollouts
+                    else {'state':'NOT_FOUND', 'rollout_id':rollout_id})
         if not isinstance(rollout_id, str) or rollout_id not in self.rollouts:
             raise ValueError("Unknown rollout_id")
         rollout = self.rollouts[rollout_id]
@@ -1065,6 +1072,15 @@ class RolloutWorker:
         return rollout.view()
 
 
+def error_response(exc):
+    """Preserve Edge error identity and verifier evidence across the worker hop."""
+    error = {"type": getattr(exc, "kind", type(exc).__name__), "message": str(exc)}
+    details = getattr(exc, "details", None)
+    if isinstance(details, dict):
+        error["details"] = details
+    return {"ok": False, "error": error}
+
+
 async def serve(socket_path, sandbox_socket, state_dir=None,
                 scheduler_budget=None, metrics_port=None, tb2_tasks_dir=None):
     client = DSecClient(sandbox_socket)
@@ -1123,7 +1139,7 @@ async def serve(socket_path, sandbox_socket, state_dir=None,
                 request = json.loads(line)
                 response = {"ok": True, "result": await worker.dispatch(request)}
             except Exception as exc:
-                response = {"ok": False, "error": {"type": type(exc).__name__, "message": str(exc)}}
+                response = error_response(exc)
             writer.write(json.dumps(response).encode() + b"\n")
             await writer.drain()
         except (BrokenPipeError, ConnectionResetError, asyncio.CancelledError):

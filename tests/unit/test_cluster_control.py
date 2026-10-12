@@ -5,12 +5,14 @@ from dataclasses import asdict
 import json
 import threading
 import unittest
+from unittest.mock import Mock, patch
 
 from dsec.contracts.cluster import (AuthorizationDenied, CoordinationUnavailable,
     NoPlacement, NodeView, PERMISSIONS, Quota, QuotaExceeded, SandboxRoute)
 from dsec.contracts.errors import RequestOutcomeUnknown
 from dsec.contracts.requests import RequestConflict, request_digest
-from dsec.contracts.sandbox import DSecContainerRunArgs
+from dsec.contracts.sandbox import DSecContainerRunArgs, UnsupportedCapability
+from dsec.contracts.native import SESSION_FILE_FEATURE, HTTP_FEATURE
 from dsec.control.cluster_api import ClusterAPI
 from dsec.control.coordination import EtcdStore, Record
 from dsec.control.iam import IAM
@@ -271,6 +273,41 @@ class ClusterTests(unittest.TestCase):
             value['resource_demand'] = {k:v for k,v in asdict(self.demand).items() if k != 'concurrency'}
         return value
 
+    def test_old_node_rejects_native_extensions_before_dispatch(self):
+        api, node, _ = self.controller()
+        sid = api.call(self.token, self.envelope())['id']
+        for args in ({'action':'read', 'session_id':'4'*32, 'path':'/tmp/file'},
+                     {'action':'http', 'session_id':'4'*32, 'url':'http://example.com'}):
+            with self.subTest(action=args['action']), patch.object(node, 'health', return_value=self.view()), \
+                    patch.object(node, 'call', side_effect=AssertionError('Must not dispatch')):
+                with self.assertRaises(UnsupportedCapability):
+                    api.call(self.token, self.envelope('native', sandbox_id=sid,
+                        request_id='2'*32, args=args))
+
+    def test_node_checks_actual_edge_extension_before_dispatch(self):
+        api, node, _ = self.controller()
+        sid = api.call(self.token, self.envelope())['id']
+        route = SandboxRoute.decode(sid, self.key)
+        with patch.object(node.inspection, 'call', return_value={'protocol_features':[]}) as calls:
+            with self.assertRaises(UnsupportedCapability):
+                node.call(route, 'native', '2'*32,
+                          {'action':'read', 'session_id':'4'*32, 'path':'/tmp/file'})
+            calls.assert_called_once_with('health')
+
+    def test_configured_extensions_cannot_overstate_edge_health(self):
+        _, node, _ = self.controller()
+        node.capabilities = ('configured', SESSION_FILE_FEATURE, HTTP_FEATURE)
+        state = dict(budget=dict(cpu=3,memory_mb=1536,disk_mb=3072,network_mbps=3,
+                                min_memory_free_mb=0,min_disk_free_mb=0),
+                     reserved=dict(cpu=0,memory_mb=0,disk_mb=0,network_mbps=0),
+                     sample=dict(memory_available_mb=1536,disk_available_mb=3072,
+                                 cpu_utilization=0,disk_busy=0), leases={})
+        for features, expected in (([], {'configured'}),
+                                   ([SESSION_FILE_FEATURE], {'configured', SESSION_FILE_FEATURE})):
+            with self.subTest(features=features), patch.object(node.inspection, 'call',
+                    side_effect=[{'protocol_features':['node-admission-v1', *features]}, state]):
+                self.assertEqual(set(node.health().capabilities), expected)
+
     def test_duplicate_controller_creates_reuse_one_edge_request_and_quota(self):
         api, node, edge = self.controller()
         second = ClusterAPI(IAM(self.store), api.placement, {'n1':node}, route_key=self.key)
@@ -484,6 +521,37 @@ class ClusterTests(unittest.TestCase):
         transports[1].call('stop', result['id'])
         self.assertEqual(edge.created, 1)
         self.assertEqual(self.store.read('projects/case').value['usage']['concurrency'], 0)
+
+    def test_container_command_query_uses_guest_journal_and_public_identity(self):
+        spec = asdict(DSecContainerRunArgs())
+        receipt = self.iam.admit(self.token, 'case', '1'*32, 'd'*64, 'n1',
+            'container', self.demand, args={'spec':spec})
+        self.iam.bind('case', receipt['request_id'], 'n1', 'a'*32)
+        route = SandboxRoute('case', 'n1', 'container', 'a'*32, receipt['request_id'])
+        lookup = '2'*32; private = edge_request_id('case', lookup)
+        edge = Mock()
+        edge.call.return_value = {'state':'DONE', 'request_id':private,
+                                  'response':{'request_id':private, 'ok':True, 'result':{'exit_code':0}}}
+        node = NodeGateway('n1', edge, self.iam, route_key=self.key, boot_id='boot1',
+            backends=('container',), environments=('default',),
+            minimum_demands={'default':asdict(self.demand)})
+        api = ClusterAPI(self.iam, None, {'n1':node}, route_key=self.key)
+        proof = api.call(self.token, self.envelope('container_query_action',
+            sandbox_id=route.encode(self.key), args={'lookup_id':lookup, 'spec':spec}))
+        self.assertEqual(proof['request_id'], lookup)
+        self.assertEqual(proof['response']['request_id'], lookup)
+        self.assertEqual(proof['sandbox_id'], route.encode(self.key))
+        edge.call.assert_called_once_with('container_query_action', 'a'*32,
+            request_id=edge_request_id('case', '1'*32), lookup_id=private, spec=spec)
+        changed = dict(spec, memory_limit_mb=1024)
+        with self.assertRaises(RequestConflict):
+            api.call(self.token, self.envelope('container_query_action',
+                sandbox_id=route.encode(self.key), args={'lookup_id':lookup, 'spec':changed}))
+        self.assertEqual(edge.call.call_count, 1)
+        edge.call.return_value = {'state':'DONE', 'sandbox_id':'b'*32}
+        with self.assertRaises(AuthorizationDenied):
+            api.call(self.token, self.envelope('container_query_action',
+                sandbox_id=route.encode(self.key), args={'lookup_id':lookup, 'spec':spec}))
 
 
 if __name__ == '__main__':

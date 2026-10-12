@@ -18,6 +18,20 @@ TLC_VERSION = "1.7.4"
 TLC_URL = f"https://github.com/tlaplus/tlaplus/releases/download/v{TLC_VERSION}/tla2tools.jar"
 TLC_SHA256 = "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 CASES = (
+    ("rollout-dispatch", "RolloutDispatch", "none", None),
+    ("rollout-create-replay", "RolloutDispatch", "replay", "NoCreateReplay"),
+    ("rollout-unproved-release", "RolloutDispatch", "unproved_release", "ReleasedHasCleanupProof"),
+    ("rollout-unready-dispatch", "RolloutDispatch", "unready_dispatch", "DispatchRequiresAcceptedHealth"),
+    ("qemu-cid", "QemuCID", "none", None),
+    ("qemu-cid-unlocked", "QemuCID", "unlocked_reserve", "LiveHasLease"),
+    ("qemu-cid-early-release", "QemuCID", "early_release", "ReleasedHasDeathProof"),
+    ("qemu-cid-stale-token", "QemuCID", "stale_token", "LiveHasLease"),
+    ("qemu-lifecycle", "QemuLifecycle", "none", None),
+    ("qemu-late-ready", "QemuLifecycle", "late_ready", "StoppedIsFinal"),
+    ("qemu-boot-replay", "QemuLifecycle", "replay", "NoBootReplay"),
+    ("aether-routing", "AetherRouting", "none", None),
+    ("aether-slow-header", "AetherRouting", "blocking_header", "NoHeadOfLineBlocking"),
+    ("aether-implicit-restart", "AetherRouting", "implicit_restart", "ClosedIsFinal"),
     ("lifecycle", "NativeLifecycle", "none", None),
     ("signal", "ShutdownSignal", "FALSE", None),
     ("queued-cancel", "NativeLifecycle", "queued_cancel", "TerminalNoNewExecution"),

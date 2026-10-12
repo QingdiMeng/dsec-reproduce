@@ -1,6 +1,6 @@
 # Roadmap: reproducing DSec as a usable elastic sandbox system
 
-Updated: 2026-10-10. Baseline: `0.1.0.dev0`, with modular R3 functional acceptance complete.
+Updated: 2026-10-12. Baseline: `0.1.0.dev0`, with modular R3 functional acceptance complete.
 
 The goal is a general elastic sandbox system for agent workloads and RL, with
 reproducible evidence for the mechanisms described in the
@@ -58,9 +58,13 @@ episodes passed the existing adapter's reward and cleanup checks. A short
 Qwen3.5-2B/verl GRPO run completed four updates with nonzero gradients and
 validation; it is an integration gate, not a new model-quality benchmark. Native SDK
 adoption by trainer loops remains separate from preserving those adapters.
-HTTP forwarding, PTY/interactive stdin and in-flight-command snapshot restore
+HTTP response streaming, PTY/interactive stdin and in-flight-command snapshot restore
 remain outside this iteration. See the [native SDK contract](docs/architecture/AGENT_ENVIRONMENT_CONTRACT.md).
-Complete aether/chronus remain later capabilities. This does not change the mechanism
+Linux aether/chronus responsibilities now have canonical proxy/session/file/HTTP
+modules and bounded execution gates. Session-scoped files and optional guest-curl
+HTTP are supported; complete cross-platform aether/chronus and QEMU production
+containment remain later capabilities. See the
+[execution/isolation boundary](docs/architecture/EXECUTION_ISOLATION.md). This does not change the mechanism
 validation statuses below; moving a component does not establish a missing
 paper capability.
 
@@ -73,7 +77,7 @@ path does not establish the same result for every storage or runtime backend.
 
 | Paper capability | v0.1 status | Remaining boundary |
 | --- | --- | --- |
-| libdsec-style client and backend selection | Partial | Container and microVM paths exist; some run arguments are unsupported. FnCall and full VM backends are absent. |
+| libdsec-style client and backend selection | Partial | Public Container and microVM paths exist. A private QEMU/KVM primitive passed real execution/fault and concurrent CID recovery gates; outer-VM Container, FnCall and public FullVM integration remain unfinished. Some run arguments are unsupported. |
 | Shared EROFS layers and private OverlayFS writes | Validated on single-host paths | Generic offline layer compaction is not yet a supported publication policy. |
 | On-demand storage, local metadata and local/3FS sources | Validated on selected paths | Distributed throughput, failure handling and heterogeneous workload benefits are not established. |
 | Rust OverlayBD and ublk storage path | Validated integration | External upstream components; not bundled binaries or a reproduction of their implementation. |
@@ -84,8 +88,8 @@ path does not establish the same result for every storage or runtime backend.
 | Container pause and memory offload | Missing from the public SDK | Container pause/resume, reclaim and prefetch require a supported implementation. |
 | Agent execution independent of GPU preemption | Partial | Worker persists sandbox/actions; the Miles-side agent loop and training trajectory still depend on the trainer session. |
 | `pack_diff` disk checkpoint to a new environment | Partial foundations | Disk COW and prepared-state forks do not provide the complete build, sanitize, publish and restore workflow. |
-| Scheduling and resource accounting | Validated locally | Resource budgets, queue reasons and leases exist; multi-node placement, watcher and hierarchical quotas do not. |
-| Production security and platform scale | Partial local isolation | netns/helpers exist; hierarchical IAM, AppArmor/eBPF policies, backend containment and distributed operations are not reproduced. |
+| Scheduling and resource accounting | Local runtime validated; HA control development preview | Resource budgets, queue reasons and leases exist. IAM/placement/watcher have bounded acceptance; independent-host availability, scale and production failure behavior are not established. |
+| Production security and platform scale | Partial local isolation | netns/helpers and IAM preview exist. Enforced AppArmor/eBPF policy, QEMU backend containment and production distributed operations remain unfinished. |
 
 Mechanism references: [paper §3](https://arxiv.org/html/2609.22978#S3),
 [§5](https://arxiv.org/html/2609.22978#S5), and
@@ -114,6 +118,7 @@ this milestone into another GPU optimization or performance exploration.
 | RM-002 | CI for the release boundary | Linux source build, package-content checks, selected core/application regressions and documentation-link checks pass. Actual KVM checks run on a separately configured runner; ordinary CI must not imply that it exercised a VM. |
 | RM-003 | Clean-host installation acceptance | A second Linux host provisions the documented external dependencies and a fresh non-TB guest, then passes create/execute/evaluate/stop, restart recovery and cleanup. A new venv on the existing experiment host is not this gate. |
 | RM-004 | Formal concurrency contract and implementation correspondence | Finite TLA+/TLC safety models and required unsafe counterexamples are implemented and wired into CI. Controlled implementation traces now cover the C-agent signal/result boundary, queued cancellation, stop finality, old-incarnation callbacks and container native/stop admission. Deterministic regressions and required code mutations catch reintroduced faults; fixes passed isolated Linux acceptance with real Firecracker, snapshots/adoption, and Docker/EROFS on 2026-10-10. Remaining: broader composition (files, leases, network containment and distributed recovery). These bounded checks do not establish full runtime refinement or unbounded linearizability. |
+| RM-005 | Product API entry and application migration | The public `DSecClient` now requires verified HTTPS API endpoints, IAM token/project and explicit creation demand, with no UDS fallback. `DevEdgeClient` and old compatibility imports are development-only; local worker transport is not publicly exported from the SDK. The durable rollout/task API, TB2.1/Miles and MBPP/verl adapters, and the MBPP native launcher use the authenticated API. The separately released historical Miles full-suite recipe still needs launcher migration. Controlled tests cover interrupted replies, project namespaces, verifier failure and proof-only quota release; required replay/cleanup code mutations fail. Linux TLS/mTLS acceptance passed eight fixed-response gates: the Miles loop, five MBPP fixtures, eight independent MBPP episodes at concurrency two, and the original TB2.1 regex-log verifier. IAM usage, Node leases and active worker episodes returned to zero. Linux regressions ran 376 tests with one skip. These gates use a CAS coordination fixture, not an etcd quorum, and are separate from historical training-quality scores. Remaining: evidence-based recovery for indefinitely unknown dispatched creates, queued episode cancellation and another full training campaign through the API. |
 
 **Exit:** a contributor can install and run the documented single-host system
 without our private experiment directory, credentials or pre-existing task
@@ -236,6 +241,41 @@ records are in [system status](ROADMAP.md).
 
 ## HA cluster preview — implementation on 2026-10-11
 
+The 2026-10-12 deployment preview adds a source-shipped Docker Compose topology:
+two installed-wheel API/controller containers, three real TLS/authenticated
+etcd members, and an external provisioned Linux Node. Controlled API reply loss
+and etcd quorum failures passed against a real microVM, with preserved owner,
+VM state and quota and no duplicate command effects. The generator pins images
+and wheel identities and exports private Node/client configuration. See the
+[Docker deployment instructions](docs/guides/CLUSTER_DEPLOYMENT.md#docker-preview-with-an-external-linux-node).
+This closes the single-Docker-host deployment rehearsal. The follow-up also
+passed a quorum distributed over two hosts and API failover across those hosts.
+Multi-Node placement, three independent quorum failure domains and ingress
+availability remain open. Physical-host loss was not performed.
+The follow-up implements typed worker-readiness UNKNOWN and explicit
+`recover_create`: a retained ADMITTED receipt may cross its original first-send
+gate; dispatched receipts are inspection-only. Controlled code tests and the
+RolloutDispatch model enforce the health boundary, with a required unsafe
+mutation. etcd service login/renewal uses a prefix-limited identity and private
+password file, preserves valid tokens during transient renewal failure, and
+fails closed after expiry. Cross-host role exports provide explicit peer/client
+addresses, per-host UID/GID, private data and limited credentials; only the
+administrator host receives initializer credentials. The two available hosts
+cannot establish arbitrary physical-host HA; three fault domains remain the
+final availability gate. Seven two-host service-fault gates and the three
+real-auth renewal/denial gates passed; eight installed-wheel application checks
+passed through the remote API. No physical-host loss or GPU training was run.
+
+Live-episode service restart acceptance also passed nine checks on the same
+two hosts. Both API replicas, then gateway/worker, then API/gateway/worker/Edge
+were stopped and restarted around a committed agent action. The exact VMM
+process identity, dialogue, history and held quota survived; duplicate action
+submission did not replay effects. Continued execution and counter verification
+returned reward 1, followed by zero quota/leases. The source includes
+`tools/verify_rollout_restart.py` and a real-worker protocol regression. This
+covers quiescent committed work with surviving hosts/quorum, not a killed
+in-flight verifier, stream or model session, or physical-host recovery.
+
 IAM, stateless API ingress, placement and watcher modules now have a development
 implementation with active controller replicas and quorum-backed IAM admission.
 Node physical resources and execution truth remain owned by the existing Edge.
@@ -253,6 +293,6 @@ operations through the authorized cluster API. It owns no new VM registry.
 Browse reads validate IAM at the return boundary, missing Nodes remain visible,
 and BOUND is not presented as RUNNING. The preview has portable authorization
 and HTTP gates; browser simulation is distinct from real KVM acceptance.
-Production ingress/independent failure domains, credential renewal, indefinite
+Production ingress/independent failure domains, certificate/key rotation, indefinite
 unknown-dispatch recovery, indexed inventories above 4,096 records and final
 release-artifact live acceptance remain release gates.

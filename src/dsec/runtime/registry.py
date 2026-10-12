@@ -21,14 +21,15 @@ def identity(pid):
             "uid":proc.stat().st_uid}
 
 class AttachedProcess:
-    def __init__(self, saved, binary, api_path, *, attester=None):
+    def __init__(self, saved, binary, api_path, *, attester=None, expected_argv=None):
         self.pid = saved["pid"]
         self.fd = os.pidfd_open(self.pid)
         try:
             current = attester(self.pid) if attester else identity(self.pid)
             if current != saved or current["uid"] != os.getuid() or current["exe"] != str(Path(binary).resolve()):
                 raise RuntimeError("VMM process identity mismatch")
-            if current["argv"] != [str(binary),"--api-sock",str(api_path)]:
+            expected = expected_argv if expected_argv is not None else [str(binary),"--api-sock",str(api_path)]
+            if current["argv"] != expected:
                 raise RuntimeError("Unexpected VMM command line")
         except Exception:
             os.close(self.fd); self.fd = None

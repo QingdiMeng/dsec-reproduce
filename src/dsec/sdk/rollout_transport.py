@@ -5,9 +5,10 @@ import socket
 
 
 class RolloutServiceError(RuntimeError):
-    def __init__(self, kind, message):
+    def __init__(self, kind, message, details=None):
         super().__init__(message)
         self.kind = kind
+        self.details = details or {}
 
 
 class RolloutOutcomeUnknown(RuntimeError):
@@ -37,5 +38,5 @@ class RolloutClient:
         response = json.loads(line)
         if not response["ok"]:
             error = response["error"]
-            raise RolloutServiceError(error["type"], error["message"])
+            raise RolloutServiceError(error["type"], error["message"], error.get("details"))
         return response["result"]

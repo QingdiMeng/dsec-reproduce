@@ -1,9 +1,48 @@
-# Single-host v0.1 deployment
+# API access and Linux Node setup
 
 The supported release scope is a trusted runtime user on Linux x86_64 with
 systemd user services, cgroup v2 and accessible KVM. The control plane is
 installed independently of benchmark datasets, model servers and optional
 storage services. It is an independent DSec reproduction.
+
+## Application entry point
+
+The product SDK connects to the API Server, including when controllers and Edge
+run on one machine. Operators provision the
+[HA controller and Node services](CLUSTER_DEPLOYMENT.md); application developers
+receive API endpoints, a trusted CA, an IAM credential and a project. They do not
+receive an Edge socket, host image paths or Node credentials.
+
+```python
+from pathlib import Path
+from dsec.sdk import DSecClient
+from dsec.contracts.resources import NodeDemand
+
+async def run():
+    async with DSecClient(
+        ["https://api1.example:8443", "https://api2.example:8443"],
+        token=Path("/run/secrets/dsec-token").read_text().strip(),
+        project="root", ca_file="/etc/dsec/api-ca.crt",
+    ) as client:
+        sandbox = await client.run_microvm(
+            resource_demand=NodeDemand(1, 512, 1024, 1))
+        try:
+            result = await sandbox.run_shell("printf hello")
+            print(result)
+        finally:
+            await sandbox.stop()
+```
+
+The example uses the Node's registered default environment. Creation requires
+an explicit resource demand. API transport uncertainty is reconciled by request
+ID, never silently retried against a direct Edge connection.
+`DSecClient(socket_path)` is no longer the public interface. Same-host tests use
+`from dsec.sdk.development import DevEdgeClient`; old `libdsec_compat` imports
+retain that development behavior. `DSEC_SOCKET` does not configure the product
+client. Node-internal UDS communication remains private to trusted services.
+
+The host steps below prepare a Node and its development acceptance instance;
+they do not substitute for API/IAM deployment or production isolation gates.
 
 ## 1. Install and select external artifacts
 
@@ -87,6 +126,10 @@ empty queue before stopping the two services. Stopping the sandbox service
 preserves VMMs for recovery; it is not a substitute for stopping owned sandboxes.
 
 ## 4. Add a task application or optional storage
+
+TB2.1/Miles and MBPP/verl use `RolloutAPIClient` and an API configuration file.
+Their earlier training scores remain historical local-worker evidence; API
+harness acceptance is separate. See [use-case boundaries](USE_CASES.md).
 
 The [TB2.1 application](../../apps/tb21/README.md) is an optional, separately installed
 package. Prepare only the selected tasks and artifacts, register a pinned

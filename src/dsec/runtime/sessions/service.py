@@ -1,7 +1,7 @@
 """Native Edge dispatch uses existing ownership, journal and VM lifecycle."""
 from contextlib import contextmanager
 from dsec.contracts.errors import SandboxError, CommandOutcomeUnknown
-from dsec.contracts.native import SESSION_ACTIONS, FILE_ACTIONS, STREAM_FEATURE
+from dsec.contracts.native import SESSION_ACTIONS, FILE_ACTIONS, STREAM_FEATURE, SESSION_FILE_FEATURE, HTTP_FEATURE
 from dsec.contracts.sandbox import UnsupportedCapability
 from dsec.runtime.isolation.proxy import guest_proxy_command
 from dsec.runtime.sessions.native import NativeChannel
@@ -13,7 +13,7 @@ def native_operation(server, sandbox_id, args, request_id):
     backend, action = values.pop("backend"), values.pop("action")
     if action not in SESSION_ACTIONS | FILE_ACTIONS:
         raise ValueError("Unknown native action")
-    if action in ("run", "stream"):
+    if action in ("run", "stream", "http"):
         values["operation_id"] = request_id
     if backend == "container":
         runtime = server.container_runtime
@@ -30,6 +30,10 @@ def native_operation(server, sandbox_id, args, request_id):
             channel = NativeChannel(endpoint)
             channel.prepare(action, **values)
             features = channel.capabilities()
+            if action == "http" and HTTP_FEATURE not in features:
+                raise UnsupportedCapability("Upgrade guest and provide curl for native HTTP")
+            if action in FILE_ACTIONS and values.get("session_id") and SESSION_FILE_FEATURE not in features:
+                raise UnsupportedCapability("Upgrade guest for session-scoped files")
             if action == "stream" and STREAM_FEATURE not in features:
                 raise UnsupportedCapability("Upgrade guest for native streaming")
             yield channel, values
@@ -69,6 +73,10 @@ def native_operation(server, sandbox_id, args, request_id):
         checkpoint = getattr(sandbox, "_native_checkpoint", lambda *a, **k: None)
         checkpoint("admitted", request_id=request_id, incarnation=incarnation)
         features = channel.capabilities()
+        if action == "http" and HTTP_FEATURE not in features:
+            raise UnsupportedCapability("Upgrade guest and provide curl for native HTTP")
+        if action in FILE_ACTIONS and values.get("session_id") and SESSION_FILE_FEATURE not in features:
+            raise UnsupportedCapability("Upgrade guest for session-scoped files")
         if action == "stream" and STREAM_FEATURE not in features:
             raise UnsupportedCapability("Upgrade guest for native streaming")
         yield channel, values

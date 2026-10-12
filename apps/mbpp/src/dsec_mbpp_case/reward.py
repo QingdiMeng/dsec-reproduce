@@ -14,7 +14,7 @@ import shlex
 import time
 
 from framework_profile import FrameworkProfile
-from scheduled_dsec import ScheduledDSecClient, ScheduledOutcomeUnknown
+from dsec.sdk import RolloutAPIClient, ScheduledOutcomeUnknown
 from dsec_mbpp_case.dataset import SOURCE_SHA256
 
 MAX_CODE_BYTES = 32768
@@ -104,9 +104,11 @@ def read_verdict(result, task_id):
 
 
 async def compute_score(data_source, solution_str, ground_truth, extra_info=None, *,
-                        worker_socket=None, environment_id=None, evidence_dir=None,
+                        api_config=None, environment_id=None, evidence_dir=None,
                         candidate_timeout=10, **kwargs):
     """Native verl custom_reward_function; no verl import or algorithm patch."""
+    if "worker_socket" in kwargs:
+        raise ValueError("worker_socket is development-only; configure api_config")
     if data_source != "mbpp-dsec":
         raise ValueError("This reward function only accepts the MBPP application")
     truth = json.loads(ground_truth) if isinstance(ground_truth, str) else ground_truth
@@ -121,14 +123,14 @@ async def compute_score(data_source, solution_str, ground_truth, extra_info=None
         raise ValueError("Reward task identity differs from dataset row")
     if not isinstance(candidate_timeout, (int, float)) or isinstance(candidate_timeout, bool) or not 0 < candidate_timeout <= 20:
         raise ValueError("candidate_timeout must be in (0, 20] seconds")
-    worker_socket = worker_socket or os.environ.get("DSEC_ROLLOUT_WORKER_SOCKET")
+    api_config = api_config or os.environ.get("DSEC_API_CONFIG")
     environment_id = environment_id or os.environ.get("DSEC_MBPP_ENVIRONMENT_ID")
     evidence_dir = evidence_dir or os.environ.get("DSEC_MBPP_EVIDENCE_DIR")
-    if not all([worker_socket, environment_id, evidence_dir]):
-        raise ValueError("Provide a worker socket, published Python environment ID and evidence directory")
+    if not all([api_config, environment_id, evidence_dir]):
+        raise ValueError("Provide API config, published Python environment ID and evidence directory")
     profile = FrameworkProfile.from_dict({"environment": "erofs_layers", "environment_id": environment_id})
     profile.validate_runtime()
-    rid = ScheduledDSecClient.new_rollout_id()
+    rid = RolloutAPIClient.new_rollout_id()
     started = time.monotonic()
     receipt = {"schema": "dsec.mbpp.execution.v1", "task_id": truth["task_id"],
                "rollout_id": rid, "source_sha256": SOURCE_SHA256,
@@ -143,7 +145,7 @@ async def compute_score(data_source, solution_str, ground_truth, extra_info=None
         if code is None:
             receipt.update(score=0, reward_source="model_format", reason="expected_one_complete_python_block")
         else:
-            client = ScheduledDSecClient(worker_socket)
+            client = RolloutAPIClient.from_config(api_config)
             await client.open()
             admission_started = time.monotonic()
             sandbox = await client.create(

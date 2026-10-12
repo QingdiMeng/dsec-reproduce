@@ -54,6 +54,16 @@ Follow the [deployment quickstart](docs/guides/QUICKSTART.md) to build a smoke
 guest, configure an isolated instance, start services and run the non-TB task
 acceptance. Configure networking and permissions once before launching jobs.
 
+Application callers use `from dsec.sdk import DSecClient` with HTTPS API Server
+endpoints, an IAM token and a project. Sandbox commands, files and streaming I/O
+all traverse the API Server; the SDK never falls back to a private Edge socket.
+Use the [API example](docs/guides/CLUSTER_DEPLOYMENT.md#remote-native-sdk) after
+operators have deployed the cluster services. `DevEdgeClient` in
+`dsec.sdk.development` and old `libdsec_compat` imports are explicitly local
+development interfaces. TB2.1/Miles and MBPP/verl use `RolloutAPIClient` with
+`DSEC_API_CONFIG`; the worker remains private on its Node. Historical training
+scores are not a repeat of training through the API.
+
 The core wheel has no third-party Python runtime dependencies. It does not
 bundle tasks, model weights, guest images, kernels, 3FS, storage binaries or
 experimental GPU training patches.
@@ -61,8 +71,13 @@ experimental GPU training patches.
 A development preview adds IAM, multiple stateless API replicas, placement and
 watchers over authenticated Linux Nodes. See the [HA cluster guide](docs/guides/CLUSTER_DEPLOYMENT.md)
 for deployment prerequisites and current limits. An optional
+[Docker Compose topology](docs/guides/CLUSTER_DEPLOYMENT.md#docker-preview-with-an-external-linux-node)
+simulates two API replicas and three real etcd members with an external Linux
+Node; it is a deployment preview, not physical-host HA. An optional
 [management console](docs/guides/CLUSTER_CONSOLE.md) serves project, Node, sandbox
-and request/audit views through the same IAM-protected API.
+and request/audit views through the same IAM-protected API. Cross-host role exports and automatic
+etcd service-token renewal are also documented there. Three independent etcd
+fault domains are required for physical-host availability acceptance.
 
 ## Use cases
 

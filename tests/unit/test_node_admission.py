@@ -19,7 +19,8 @@ from dsec.runtime.requests import RequestJournal
 from dsec.runtime.backends.firecracker import MicroVM
 from dsec.rollout.scheduler import WorkScheduler
 from dsec.rollout.worker import RolloutWorker
-from dsec.sdk.client import DSecClient, DSecMicroVMRunArgs
+from dsec.sdk.development import DevEdgeClient as DSecClient
+from dsec.sdk.client import DSecMicroVMRunArgs
 from dsec.sdk.sandbox_transport import ServiceError, RequestOutcomeUnknown
 from tests.unit.test_container_edge import Backend
 from tests.unit.test_work_scheduler import FakeSampler, budget

@@ -1,14 +1,11 @@
-"""Async libdsec-style client; all host lifecycle work belongs to Edge."""
+"""Public API-only SDK and shared handles; host lifecycle truth belongs to Edge."""
 from __future__ import annotations
 import asyncio
 from dataclasses import asdict
-import os
-from pathlib import Path
 from dsec.contracts.sandbox import (UnsupportedCapability, DSecMicroVMRunArgs,
                                    DSecContainerRunArgs, DSecTB2RunArgs)
 from dsec.sdk.sandbox_transport import SandboxClient, ServiceError
 from dsec.contracts.resources import NodeDemand
-from dsec.sdk.scheduled import ScheduledDSecClient, ScheduledOutcomeUnknown
 from dsec.sdk.native import NativeSandboxMixin
 
 
@@ -69,15 +66,8 @@ class DSecSandbox(NativeSandboxMixin):
         return await self._call_when_ready("stop", request_id=request_id)
 
 
-class DSecClient:
-    def __init__(self, socket_path: str | Path | None = None):
-        if socket_path is None:
-            socket_path = os.environ.get("DSEC_SOCKET")
-        if not socket_path:
-            raise ValueError("socket_path or DSEC_SOCKET is required")
-        self._transport = SandboxClient(socket_path)
-        self._opened = False
-        self._features = set()
+class _SandboxClient:
+    """Shared operations; each explicit client supplies its own transport."""
 
     async def open(self):
         health = await asyncio.to_thread(self._transport.call, "health")
@@ -230,3 +220,44 @@ class DSecTB2Sandbox(DSecContainerSandbox):
         if status["state"] != "RUNNING":
             raise RuntimeError("TB2 sandbox is not running")
         return status["base_url"]
+
+
+class DSecClient(_SandboxClient):
+    """Product entry point: verified TLS API endpoints, IAM token and project.
+
+    Does not inspect DSEC_SOCKET, connect to an Edge UDS, or downgrade to a local
+    transport. DevEdgeClient is an explicit, separate development interface.
+    """
+    def __init__(self, endpoints, *, token, project, ca_file=None,
+                 cert_file=None, key_file=None):
+        from dsec.sdk.cluster import ClusterTransport
+        if not isinstance(endpoints, (list, tuple)) or not endpoints or any(
+                not isinstance(endpoint, str) for endpoint in endpoints):
+            raise ValueError('Explicit list of HTTPS API Server endpoints required')
+        if not isinstance(token, str) or not token or '\n' in token or '\r' in token:
+            raise ValueError('IAM token required')
+        self._transport = ClusterTransport(endpoints, token=token, project=project,
+            ca_file=ca_file, cert_file=cert_file, key_file=key_file)
+        self._features = frozenset()
+        self._opened = False
+
+    async def open(self):
+        from dsec.contracts.cluster import PROTOCOL
+        health = await asyncio.to_thread(self._transport.call, 'health')
+        if health.get('protocol') != PROTOCOL:
+            raise RuntimeError('Unsupported cluster protocol')
+        self._features = frozenset(health['protocol_features'])
+        self._opened = True
+        return self
+
+    def _node_hint(self, demand):
+        if demand is None:
+            raise ValueError('API creation requires explicit resource_demand for admission')
+        return super()._node_hint(demand)
+
+    async def lookup_request(self, request_id, *, sandbox_id=None):
+        self._require_open()
+        return await asyncio.to_thread(self._transport.query_request, request_id, sandbox_id=sandbox_id)
+
+    async def run_tb2(self, *args, **kwargs):
+        raise UnsupportedCapability('Legacy TB2 container service is development-only; use a registered environment through the API')

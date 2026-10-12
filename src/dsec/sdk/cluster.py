@@ -1,5 +1,4 @@
 """TLS cluster transport reusing the native SDK, without automatic mutation replay."""
-import asyncio
 from collections import OrderedDict
 import json
 import http.client
@@ -10,9 +9,8 @@ import urllib.parse
 import urllib.request
 import uuid
 
-from dsec.contracts.cluster import PROTOCOL, identifier, request_id as checked_id
+from dsec.contracts.cluster import identifier, request_id as checked_id
 from dsec.contracts.errors import RequestOutcomeUnknown
-from dsec.sdk.client import DSecClient
 from dsec.sdk.sandbox_transport import ServiceError
 
 
@@ -96,7 +94,7 @@ class ClusterTransport:
             envelope['resource_demand'] = resource_demand
         readonly = operation in ('project.get', 'project.list', 'admission.list', 'sandbox.list',
             'audit.list', 'node.list', 'health', 'node_status', 'status', 'container_status',
-            'query_request', 'container_query_request', 'native_events') or (
+            'query_request', 'container_query_request', 'container_query_action', 'native_events') or (
             operation == 'native' and args.get('action') in ('read', 'capabilities'))
         return self.rpc.send(self.token, envelope, readonly=readonly)
 
@@ -107,22 +105,5 @@ class ClusterTransport:
         return self.call('query_request', sandbox_id, lookup_id=operation_id)
 
 
-class ClusterClient(DSecClient):
-    def __init__(self, endpoints, *, token, project, **tls):
-        # Reuse shell/file/stream handles and capability checks from one SDK.
-        # Only the transport differs; no host runtime is imported here.
-        self._transport = ClusterTransport(endpoints, token=token, project=project, **tls)
-        self._features = frozenset()
-        self._opened = False
-
-    async def open(self):
-        health = await asyncio.to_thread(self._transport.call, 'health')
-        if health.get('protocol') != PROTOCOL:
-            raise RuntimeError('Unsupported cluster protocol')
-        self._features = frozenset(health['protocol_features'])
-        self._opened = True
-        return self
-
-    async def lookup_request(self, request_id, *, sandbox_id=None):
-        self._require_open()
-        return await asyncio.to_thread(self._transport.query_request, request_id, sandbox_id=sandbox_id)
+# Compatibility name for the API client. There is one public implementation.
+from dsec.sdk.client import DSecClient as ClusterClient

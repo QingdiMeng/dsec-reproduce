@@ -5,6 +5,10 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import socket
+import select
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import subprocess
 import tempfile
 import time
@@ -53,8 +57,9 @@ class NativeGuestFixture(unittest.TestCase):
             except (NativeSessionReset, OSError):
                 pass
         try:
-            os.killpg(self.process.pid, signal.SIGTERM)
-            self.process.wait(timeout=5)
+            if self.process.poll() is None:
+                os.killpg(self.process.pid, signal.SIGTERM)
+                self.process.wait(timeout=5)
         finally:
             self.ensure_stopped()
 
@@ -72,6 +77,141 @@ class NativeGuestFixture(unittest.TestCase):
 
 
 class NativeGuestTests(NativeGuestFixture):
+    def test_slow_header_cannot_block_other_sessions_or_shutdown(self):
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as slow:
+            slow.connect(str(self.socket))
+            slow.sendall(b"R")
+            start = time.monotonic()
+            self.channel.capabilities()
+            sid = self.session()
+            self.assertEqual(self.channel.call("run", session_id=sid, command="printf alive")["stdout"], "alive")
+            self.assertLess(time.monotonic() - start, 1)
+            self.process.terminate()
+            self.assertEqual(self.process.wait(timeout=1), 0)
+            self.sessions.clear()
+
+    def test_session_file_operations_reject_closed_session(self):
+        sid = self.session()
+        path = str(self.root / "scoped")
+        Path(path).write_bytes(b"scoped-content")
+        args = dict(session_id=sid, path=path, transfer_id=uuid.uuid4().hex)
+        result = self.channel.call("read", **args)
+        self.assertEqual(base64.b64decode(result["data"]), b"scoped-content")
+        self.channel.call("close", session_id=sid)
+        with self.assertRaises(NativeSessionReset):
+            self.channel.call("read", **args)
+        # A closed identity is a tombstone, not a name for a fresh shell.
+        with self.assertRaises(NativeSessionReset):
+            self.channel.call("open", session_id=sid)
+
+    def test_closed_session_releases_its_incomplete_file_transfer(self):
+        a, b = self.session(), self.session()
+        path = str(self.root / 'unfinished')
+        transfer = uuid.uuid4().hex
+        self.channel.call('write_begin', session_id=a, path=path, transfer_id=transfer, total=64*1024**2)
+        with self.assertRaises(PermissionError):
+            self.channel.call('write_abort', session_id=b, path=path, transfer_id=transfer)
+        self.channel.call('close', session_id=a)
+        # Synchronize with chronus cleanup by awaiting a response from its
+        # proxy reaper; retry only proven pre-effect ENOSPC, not an unknown.
+        for _ in range(100):
+            try:
+                other=uuid.uuid4().hex
+                self.channel.call('write_begin', session_id=b, path=path, transfer_id=other, total=1)
+                self.channel.call('write_abort', session_id=b, path=path, transfer_id=other)
+                break
+            except OSError as exc:
+                if exc.errno != 28: raise
+                time.sleep(.01)
+        else:
+            self.fail('Closed chronus retained upload quota')
+        self.assertFalse(Path(path+'.dsec-upload-'+transfer).exists())
+
+    def test_native_http_binary_post_headers_redirect_and_limits(self):
+        class Endpoint(BaseHTTPRequestHandler):
+            def do_POST(self):
+                data = self.rfile.read(int(self.headers["Content-Length"]))
+                self.send_response(201)
+                self.end_headers()
+                self.wfile.write(self.headers["X-Test"].encode() + data)
+            def do_GET(self):
+                self.send_response(302 if self.path == "/redirect" else 200)
+                self.send_header("Location", "/unexpected")
+                self.end_headers()
+                self.wfile.write(b"content")
+            def log_message(self, *_): pass
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Endpoint)
+        thread = threading.Thread(target=server.serve_forever, daemon=True);thread.start()
+        try:
+            sid = self.session()
+            url = f"http://127.0.0.1:{server.server_port}"
+            result = self.channel.call("http", session_id=sid, method="POST", url=url,
+                headers={"X-Test":"header:"}, body=base64.b64encode(b"\x00\xff").decode())
+            self.assertEqual(result["status_code"], 201)
+            self.assertEqual(base64.b64decode(result["body"]), b"header:\x00\xff")
+            result = self.channel.call("http", session_id=sid, method="GET", url=url+"/redirect")
+            self.assertEqual(result["status_code"], 302)
+            result = self.channel.call("http", session_id=sid, method="GET", url=url, response_limit=3)
+            self.assertTrue(result["truncated"])
+            self.assertEqual(base64.b64decode(result["body"]), b"con")
+            for fields in ({"url":"file:///etc/passwd"}, {"headers":{"x":"a\r\nb"}}, {"timeout_ms":0}):
+                with self.assertRaises(ValueError):
+                    self.channel.call("http", **{"session_id":sid, "method":"GET", "url":url, **fields})
+        finally:
+            server.shutdown();thread.join(timeout=2);server.server_close()
+
+    def test_http_timeout_and_close_have_distinct_session_semantics(self):
+        admitted, release = threading.Event(), threading.Event()
+        class Endpoint(BaseHTTPRequestHandler):
+            def do_GET(self):
+                admitted.set();release.wait(5)
+                try:
+                    self.send_response(200);self.end_headers();self.wfile.write(b'late')
+                except BrokenPipeError: pass
+            def log_message(self, *_): pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Endpoint)
+        thread = threading.Thread(target=server.serve_forever, daemon=True);thread.start()
+        try:
+            sid = self.session();url = f'http://127.0.0.1:{server.server_port}'
+            value = self.channel.call('http', session_id=sid, method='GET', url=url, timeout_ms=100)
+            self.assertTrue(value['timed_out']);self.assertFalse(value['session_reset'])
+            self.assertEqual(self.channel.call('run', session_id=sid, command='printf still-alive')['stdout'], 'still-alive')
+            admitted.clear()
+            with ThreadPoolExecutor(1) as pool:
+                active = pool.submit(self.channel.call, 'http', session_id=sid, method='GET', url=url, timeout_ms=10000)
+                self.assertTrue(admitted.wait(2), 'HTTP operation did not reach server')
+                self.channel.call('close', session_id=sid)
+                value = active.result(timeout=2)
+            self.assertTrue(value['cancelled']);self.assertTrue(value['session_reset'])
+            self.assertIsNone(value['status_code'])
+        finally:
+            release.set();server.shutdown();thread.join(timeout=2);server.server_close()
+
+    @unittest.skipUnless(Path('/proc/self/task').exists(), 'Linux process ownership gate')
+    def test_chronus_death_does_not_recreate_session_or_kill_other_session(self):
+        a, b = self.session(), self.session()
+        children = Path(f'/proc/{self.process.pid}/task/{self.process.pid}/children')
+        pids = [int(pid) for pid in children.read_text().split()
+                if Path(f'/proc/{pid}/comm').read_text().strip() == 'dsec-chronus']
+        self.assertEqual(len(pids), 2)
+        death = os.pidfd_open(pids[0])
+        try:
+            os.kill(pids[0], signal.SIGKILL)
+            self.assertTrue(select.select([death], [], [], 2)[0], 'chronus did not exit')
+        finally:
+            os.close(death)
+        gone, alive = [], []
+        for sid in (a,b):
+            try:
+                self.channel.call("run", session_id=sid, command="printf survived")
+                alive.append(sid)
+            except NativeSessionReset:
+                gone.append(sid)
+        self.assertEqual(len(gone), 1);self.assertEqual(len(alive), 1)
+        with self.assertRaises(NativeSessionReset):
+            self.channel.call("run", session_id=gone[0], command="printf cannot-replay")
+        self.assertEqual(self.channel.call("run", session_id=alive[0], command="printf alive")["stdout"], "alive")
+
     def test_idle_sigterm_does_not_race_with_capability_child_exit(self):
         for index in range(12):
             endpoint = self.root / f'shutdown-{index}.sock'

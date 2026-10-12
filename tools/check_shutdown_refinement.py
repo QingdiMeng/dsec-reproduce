@@ -37,7 +37,7 @@ def digest(path):
 
 
 def build(cc, out, unsafe):
-    source = (ROOT / "guest_native.c").read_text()
+    source = (ROOT / "native/chronus.c").read_text()
     if source.count(FIXED_STATEMENT) != 1:
         raise ValueError("Code/model mapping changed: review the result-application boundary")
     if unsafe:
@@ -47,7 +47,8 @@ def build(cc, out, unsafe):
     binary = target.with_suffix("")
     result = subprocess.run([cc, "-DDSEC_NATIVE_STANDALONE", "-O2", "-Wall", "-Wextra",
         "-Werror", "-include", str(ROOT / "verification/native_shutdown_probe.h"),
-        "-o", str(binary), str(target)], capture_output=True, text=True, timeout=60)
+        "-I", str(ROOT), f'-DDSEC_CHRONUS_SOURCE="{target}"',
+        "-o", str(binary), str(ROOT / "guest_native.c")], capture_output=True, text=True, timeout=60)
     (out / (binary.name + "-build.log")).write_text(result.stdout + result.stderr)
     if result.returncode:
         raise RuntimeError("Controlled agent build failed: " + result.stderr)
@@ -185,6 +186,8 @@ def main():
     checks.append(replay(java, jar, out, "historical-rejected-by-safe", observed, False, "TraceConforms"))
     report = dict(checks=checks, tlc_sha256=TLC_SHA256,
         source_sha256=digest(ROOT / "guest_native.c"), probe_sha256=digest(ROOT / "verification/native_shutdown_probe.h"),
+        native_modules_sha256={str(p.relative_to(ROOT)):digest(p) for p in sorted((ROOT/'native').glob('*'))
+                               if p.suffix in ('.c', '.h')},
         fixed_build_source_sha256=digest(fixed_source), unsafe_build_source_sha256=digest(unsafe_source),
         fixed_binary_sha256=digest(fixed), unsafe_binary_sha256=digest(unsafe),
         model_sha256={name: digest(ROOT / "verification" / name)

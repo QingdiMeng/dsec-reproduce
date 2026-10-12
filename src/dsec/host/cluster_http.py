@@ -62,6 +62,15 @@ class Handler(BaseHTTPRequestHandler):
             self.request = self.server.context.wrap_socket(self.request, server_side=True)
         super().setup()
 
+    def finish(self):
+        try:
+            super().finish()
+        finally:
+            if self.server.context:
+                # wrap_socket moved the descriptor out of socketserver's raw
+                # socket. Close the owned TLS socket explicitly, not via GC.
+                self.request.close()
+
     def log_message(self, *_):
         # Credentials, commands and raw task material are not access logs.
         pass

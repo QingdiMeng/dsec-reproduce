@@ -13,7 +13,11 @@ from dsec.contracts.cluster import (AuthorizationDenied, NodeView, Quota,
 from dsec.contracts.errors import RequestOutcomeUnknown
 from dsec.contracts.requests import RequestConflict, RequestPending, request_digest
 from dsec.contracts.sandbox import DSecContainerRunArgs
+from dsec.contracts.native import SESSION_FILE_FEATURE, HTTP_FEATURE, required_extension
+from dsec.contracts.sandbox import UnsupportedCapability
 from dsec.sdk.sandbox_transport import ServiceError
+from dsec.contracts.rollout import ROLLOUT_FEATURE, ROLLOUT_READS, is_rollout
+from dsec.host.rollout_gateway import RolloutGateway
 
 
 def edge_request_id(project, operation_id):
@@ -32,7 +36,7 @@ def public_proof(proof, operation_id):
 class NodeGateway:
     def __init__(self, node_id, edge, iam, *, route_key, boot_id, environments,
                  backends=('microvm',), capabilities=(), max_sandboxes=1,
-                 minimum_demands=None, inspection=None):
+                 minimum_demands=None, inspection=None, worker=None, worker_inspection=None):
         self.node_id, self.edge, self.iam = identifier(node_id), edge, iam
         self.inspection = inspection or edge
         if not isinstance(route_key, bytes) or len(route_key) < 32:
@@ -47,6 +51,13 @@ class NodeGateway:
         if any(name not in self.minimum_demands for name in self.environments):
             raise ValueError('Every advertised environment requires a trusted minimum quota demand')
         self.lock, self.requests = threading.Lock(), {}
+        self.rollouts = RolloutGateway(self, worker, worker_inspection or worker)
+
+    def create_rollout(self, receipt):
+        return self.rollouts.create(receipt)
+
+    def call_rollout(self, receipt, operation, args):
+        return self.rollouts.call(receipt, operation, args)
 
     @contextmanager
     def _admission(self, operation_id):
@@ -97,6 +108,8 @@ class NodeGateway:
     def create(self, receipt):
         with self._admission((receipt['project'], receipt['request_id'])):
             receipt = self._receipt(receipt)
+            if is_rollout(receipt):
+                raise RequestConflict('Rollout admission requires the worker path')
             if receipt['state'] == 'RELEASED':
                 raise RequestConflict('Released admission cannot create another sandbox')
             backend, args = receipt['backend'], receipt['args']
@@ -151,6 +164,8 @@ class NodeGateway:
     def query_create(self, receipt):
         with self._admission((receipt['project'], receipt['request_id'])):
             receipt = self._receipt(receipt)
+            if is_rollout(receipt):
+                raise RequestConflict('Use rollout status for a worker-owned admission')
             proof = self._creation_proof(receipt)
             if proof['state'] == 'NOT_FOUND' and receipt['state'] == 'DISPATCHED':
                 return dict(proof, state='UNKNOWN', reason='dispatch_may_be_delayed')
@@ -168,12 +183,17 @@ class NodeGateway:
     def call(self, route, operation, operation_id, args):
         request_id(operation_id)
         receipt = self.iam.lookup(route.project, route.admission_id)
+        if receipt is not None and is_rollout(receipt):
+            raise RequestConflict('Worker-owned sandboxes require rollout operations')
         if (route.node != self.node_id or receipt is None or receipt['node'] != self.node_id
                 or receipt['sandbox_id'] != route.local_id or receipt['backend'] != route.backend):
             raise AuthorizationDenied('Sandbox route does not match its admitted owner')
         if route.backend == 'container' and args.get('spec', receipt['args'].get('spec')) != receipt['args'].get('spec'):
             raise RequestConflict('Container specification changed from original admission')
         values = dict(args)
+        required = required_extension(values.get('action'), values) if operation == 'native' else None
+        if required and required not in self.inspection.call('health').get('protocol_features', ()):
+            raise UnsupportedCapability('Upgrade Edge before forwarding native extension')
         private_id = edge_request_id(route.project, operation_id)
         lookup_id = values.get('lookup_id')
         if lookup_id is not None:
@@ -184,6 +204,15 @@ class NodeGateway:
             proof = public_proof(self.edge.call(operation, route.local_id,
                 request_id=private_id, **values), lookup_id)
             if proof['state'] != 'NOT_FOUND' and proof.get('sandbox_id') != route.local_id:
+                raise AuthorizationDenied('Request belongs to another sandbox')
+            return dict(proof, **({'sandbox_id':route.encode(self.route_key)} if proof['state'] != 'NOT_FOUND' else {}))
+        if operation == 'container_query_action':
+            # Container command proofs live in that container's guest journal,
+            # not the Edge lifecycle journal. Keep the admitted specification
+            # and map private request IDs back to the authenticated API scope.
+            proof = public_proof(self.edge.call(operation, route.local_id,
+                request_id=private_id, **values), lookup_id)
+            if proof['state'] != 'NOT_FOUND' and proof.get('sandbox_id', route.local_id) != route.local_id:
                 raise AuthorizationDenied('Request belongs to another sandbox')
             return dict(proof, **({'sandbox_id':route.encode(self.route_key)} if proof['state'] != 'NOT_FOUND' else {}))
         if operation in ('stop', 'container_stop'):
@@ -222,8 +251,16 @@ class NodeGateway:
             max(0, min(budget['disk_mb']-reserved['disk_mb'], sample['disk_available_mb']-budget['min_disk_free_mb'])),
             max(0, budget['network_mbps']-reserved['network_mbps']))
         load = max(sample['cpu_utilization'], sample['disk_busy'], active/self.max_sandboxes)
+        extensions = {SESSION_FILE_FEATURE, HTTP_FEATURE, ROLLOUT_FEATURE}
+        capabilities = (set(self.capabilities)-extensions) | (extensions & set(health.get('protocol_features', ())))
+        capabilities.discard(ROLLOUT_FEATURE)
+        try:
+            if self.rollouts.healthy():
+                capabilities.add(ROLLOUT_FEATURE)
+        except Exception:
+            pass  # Worker failure withdraws its capability; Edge stays probeable.
         return NodeView(self.node_id, self.boot_id, self.backends, self.environments,
-                        self.capabilities, load, available, active)
+                        tuple(sorted(capabilities)), load, available, active)
 
     def reconcile(self):
         """TTL/controller-crash reconciliation from Edge proofs, never health expiry."""
@@ -231,6 +268,9 @@ class NodeGateway:
             with self._admission((receipt['project'], receipt['request_id'])):
                 current = self.iam.lookup(receipt['project'], receipt['request_id'])
                 if current['state'] == 'RELEASED':
+                    continue
+                if is_rollout(current):
+                    self.rollouts.reconcile(current)
                     continue
                 if current['state'] in ('ADMITTED', 'DISPATCHED'):
                     proof = self._creation_proof(current)
@@ -255,6 +295,10 @@ class NodeGateway:
             receipt = envelope['receipt']
             request_id(envelope['request_id'])
             return (self.create if operation == 'node_create' else self.query_create)(receipt)
+        if operation in ('node_rollout_create', 'node_rollout_call'):
+            request_id(envelope['request_id'])
+            return (self.create_rollout(envelope['receipt']) if operation == 'node_rollout_create'
+                    else self.call_rollout(envelope['receipt'], envelope['worker_operation'], envelope['args']))
         if operation == 'node_call':
             route = SandboxRoute.decode(envelope['sandbox_id'], self.route_key)
             return self.call(route, envelope['edge_operation'], envelope['request_id'], envelope.get('args', {}))
@@ -270,6 +314,15 @@ class RemoteNode:
         return self.rpc.send(self.token, dict(operation='node_create',
             request_id=receipt['request_id'], receipt=receipt))
 
+    def create_rollout(self, receipt):
+        return self.rpc.send(self.token, dict(operation='node_rollout_create',
+            request_id=receipt['request_id'], receipt=receipt), timeout=1810)
+
+    def call_rollout(self, receipt, operation, args):
+        return self.rpc.send(self.token, dict(operation='node_rollout_call',
+            request_id=uuid.uuid4().hex, receipt=receipt, worker_operation=operation, args=args),
+            readonly=operation in ROLLOUT_READS, timeout=12110)
+
     def query_create(self, receipt):
         return self.rpc.send(self.token, dict(operation='node_query_create',
             request_id=uuid.uuid4().hex, receipt=receipt), readonly=True)
@@ -278,7 +331,7 @@ class RemoteNode:
         return self.rpc.send(self.token, dict(operation='node_call',
             request_id=operation_id, sandbox_id=route.encode(self.route_key),
             edge_operation=operation, args=args), readonly=operation in (
-                'status', 'container_status', 'query_request', 'container_query_request', 'native_events'))
+                'status', 'container_status', 'query_request', 'container_query_request', 'container_query_action', 'native_events'))
 
     def probe(self):
         value = self.rpc.send(self.token, dict(operation='node_probe', request_id=uuid.uuid4().hex), readonly=True, timeout=5)

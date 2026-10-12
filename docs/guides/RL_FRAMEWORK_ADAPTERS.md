@@ -21,7 +21,7 @@ python -m pip install '.[miles]'
 消息列表格式，metadata 携带 `task_id` 与 `dsec_environment`。任务 instruction 在
 环境 reset 时加入；不把解答或 verifier 内容放进策略 prompt。
 
-设置 `DSEC_ROLLOUT_WORKER_SOCKET` 指向部署好的 worker。TB2.1 还需显式准备任务、
+设置 `DSEC_API_CONFIG` 指向 API 客户端配置文件；训练进程不访问 worker socket。TB2.1 还需显式准备任务、
 注册环境目录并配置 verifier 制品，参见 [可选应用](../../apps/tb21/README.md)。
 安装核心不会下载任务或模型。
 
@@ -47,12 +47,46 @@ episode 用于更新。
 释放、单 rank NCCL 生命周期、LoRA-only NVMe 和输出投影分块修复。这些修复不计入
 DSec 系统功能，也不进入核心 wheel 或默认源码发行包。
 
-独立训练 recipe 正在接受干净部署验收；历史实验成功不能替代新入口验收。当前验证
-覆盖少量任务与短训练，不证明 89 个任务全部通过、长上下文训练全部通过或模型学习
-收益。单 rank NCCL 修复的上游草稿为
+当前 API 入口已完成固定回复的 Miles agent 循环与 TB2.1 官方 verifier 验收。
+历史 GPU 训练使用旧的本地 worker 入口，不能算作新 API 入口的训练验收；本轮没有
+重跑 GPU 训练。旧全量 recipe 尚未迁移到 API 配置。短训练记录不证明 89 个任务
+全部通过、长上下文训练全部通过或模型学习收益。单 rank NCCL 修复的上游草稿为
 [Miles #3914](https://github.com/radixark/miles/pull/3914)。
 
-## Qwen3.5-4B × 全量 TB2.1 × GRPO
+## 当前 API 训练接入
+
+在 Node 上准备任务、环境和 verifier，部署
+[API/Node/worker bridge](CLUSTER_DEPLOYMENT.md#remote-native-sdk)，再将 API 配置文件
+提供给 trainer 和 reward 进程。Miles 的三个适配器入口与 `DSEC_API_CONFIG` 见本文开头；
+任务通过 metadata 的 `task_id` 和 `dsec_environment: "tb2"` 选择。
+配置文件使用 endpoint、project 和私有 token/CA 文件引用，不将密钥写进训练参数。
+
+先通过 API 检查已准备任务的执行、官方评分与回收：
+
+```sh
+python -I /data/dsec-source/tools/verify_rollout_api.py \
+  --api-config /run/dsec/api-client.json \
+  --tb21-tasks /data/tb21/tasks --tb21-catalog /data/tb21-catalog.json \
+  --tb21-trajectory /data/dsec-source/tools/fixtures/tb21-regex-log.json \
+  --out /data/evidence/api-harness-unique
+```
+
+该例需要 Node 注册 `default` 与 `tb2-regex-log`，提供匹配层数和超时预算的启动模板，
+并正确配置 verifier 网络或完整缓存。固定回复只验证接入，不是训练数据或模型效果。
+Miles 的完整模型、采样和 GPU 配置由独立训练环境提供；当前没有新的全量 API 训练
+launcher。MBPP/verl 的现行 launcher 已接受 `--api-config`，步骤见
+[应用指南](../../apps/mbpp/README.md)。
+
+## 历史 Qwen3.5-4B × 全量 TB2.1 × GRPO recipe
+
+下面的 `20261006-r6` release recipe 使用 `worker_socket` 和固定旧版核心。
+它记录原来的干净部署方法，不能直接替换成当前 API-only SDK；仅将字段改名为
+`api_config` 不足以迁移该制品。需要当前 API 接入时使用上一节，不向 trainer 暴露 UDS。
+旧 recipe 的 launcher 迁移和全量 GPU 重验仍待完成。
+
+<details>
+<summary>展开旧版 recipe 的版本、配置和验收说明</summary>
+
 
 以下流程使用独立的可选训练制品，DSec 核心 wheel 和默认源码发行包仍不包含 GPU
 内存补丁。Linux x86_64、单张 16 GiB NVIDIA GPU 是本轮验收配置；不是未经补丁的
@@ -122,7 +156,7 @@ tar -xzf "$HOME/dsec-training/qwen35-tb21-grpo-recipe-20261006-r6.tar.gz" \
 该制品的 SHA-256 为
 `7636f1cfabb358e605bec86d584659eae8b065e5322cdc9b193b3db9238b1108`。
 其 `source-manifest.json` 固定每个源文件；包含 MIT/Apache-2.0 许可与 NOTICE。
-私有项目下载需要有权限的 GitHub 登录。离线传输可以使用校验过的同一制品。
+使用已配置的 GitHub CLI 下载该固定版本制品。离线传输可以使用校验过的同一制品。
 
 预先提供 Qwen3.5-4B 的完整 HF snapshot，并缓存此 trainer 镜像：
 `radixark/miles@sha256:45ae7833f97a01369dbd8f336784830a87d94587bc010c7b8065291cc15cd7ca`。
@@ -227,15 +261,19 @@ IO 为训练容器 cgroup 的累计字节，网络为宿主默认网卡所有作
 确保原始回复与失败证据可直接读取；强制杀死容器仍可能需要管理员修复权限。
 失败先保留该输出目录、定位并修复问题；本版本尚不提供一条命令自动断点续训。
 
+</details>
+
 ## 接入其他训练框架
 
 verl 的首个可选接入是 [MBPP 应用](../../apps/mbpp/README.md)：使用原生
-`reward.custom_reward_function`，由已有调度 SDK 在独立 microVM 内执行 Python
+`reward.custom_reward_function`，由 `RolloutAPIClient` 经 API Server 和 Node worker
+在独立 microVM 内执行 Python
 及官方三个测试。数据转换固定原始 MBPP 的 train/validation/test 划分，不包含
 参考答案。它已完成真实 microVM 评分、隔离、超时及清理验收，以及 Qwen3.5-2B
 的一整轮 GRPO：374 道训练题，每题 8 条，共 2992 条样本、187 次更新。它是
 单轮代码生成的 execution reward 接入，不能当作已验证的多轮 Agent Loop。核心安装不引入 verl、
-MBPP 数据或模型。接口检查固定 verl 提交 `8718ca30a3f002f93b7c4fd99b9b2506718681bc`。
+MBPP 数据或模型。该完整训练结果来自旧本地 transport；当前 API 评分和并发接入
+已通过验收，但没有重跑训练前后效果对比。接口检查固定 verl 提交 `8718ca30a3f002f93b7c4fd99b9b2506718681bc`。
 
 完整案例在同一组 500 道测试题上，训练前后各采样 8 次，单次成功率从 39.775%
 提升到 42.275%，8 次至少成功一次的题目比例从 64.8% 提升到 68.4%。使用

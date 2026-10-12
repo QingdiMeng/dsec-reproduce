@@ -240,3 +240,46 @@ metrics, failure counts and bootstrap interval. The wheel SHA-256 is
 this identifies the subsequently verified application package, not the wheel
 used to generate the original training trajectories. Documentation links,
 source-export regressions and local package construction also passed.
+
+
+## API migration (2026-10-12)
+
+The application entry now uses `RolloutAPIClient` with `--api-config` /
+`DSEC_API_CONFIG`, through the API Server and authenticated Node gateway. The
+existing scheduled worker keeps execution, dialogue, evidence and recovery.
+Training/sampling, TITO, verifier assertions and model-format zeros are unchanged.
+The historical epoch and accuracy tables above are not a new API training run.
+
+| First-use issue | Resolution and boundary |
+| --- | --- |
+| Public SDK previously selected a local socket | API-only `DSecClient` and `RolloutAPIClient`; development imports are explicit; no API failure fallback to UDS. |
+| Reward workers run from different working directories | The launcher resolves `--api-config` before starting GPU work; token/CA references resolve relative to that config file. Raw credentials are not Hydra arguments or receipts. |
+| TB2 verifier helper recreated a local socket transport | Shared episode evaluation uses its selected transport with the verifier budget; API and Node preserve that budget. |
+| A combined Node catalog required the TB2 task manifest even during MBPP startup | Operator setup includes the pinned task manifest when TB2 environments are registered; missing metadata rejects startup. |
+| A just-released slot was still full in Watcher state | Real concurrent MBPP acceptance exposed `NoPlacement`; the SDK waits only on this definite non-admission using the same episode ID and one total deadline. Unknown replies never retry creates. |
+| Direct sandbox calls could bypass worker bookkeeping | Worker-owned admissions require `rollout.*`; the gateway checks original task/profile/resources and physical identity before effects. |
+
+Real Linux acceptance exercised the actual Miles agent loop with fixed responses,
+MBPP correct/wrong/timeout/early-exit/file-isolation fixtures, and eight independent
+MBPP episodes with two concurrent VMs. The combined follow-up added TB2.1
+`regex-log`: its original official `tests/test.sh` produced reward 1 and a
+complete CTRF report through the API path. All eight harness gates passed and
+owned resources were reclaimed (IAM usage zero, no Edge lease or active worker
+episode, no cleanup error). The networkless gate explicitly used the already
+prepared complete verifier cache; an earlier `openssl-selfsigned-cert` verifier
+network failure remains a failure record, not a zero reward or successful
+acceptance. No official assertions were changed. The gate used verified API TLS and Node mTLS with a
+CAS coordination fixture, not a real etcd quorum; it does not add HA or model
+quality evidence. This run used local EROFS with file-ext4 roots, while the
+existing ublk service stayed inactive. It is not an OverlayBD performance result.
+
+
+The combined gate used core wheel SHA-256
+`0a92a3c269fc41ffd94117ec9bc0cc4781d23f7227340f5e9a98b31caffad212`,
+MBPP wheel `7701044e190f5dee1f814c19797915eb5969edddb7af912bbe7dcc8f456f6993`
+and TB2.1 wheel `36bcd17004a52414919ef9ab0ba9d7e528cbe836690dd520a736c1d3b902f410`.
+The task source is terminal-bench-2.1 revision
+`7131e4375048a0e408a8fb404b5f499d726b695b`; fixed trajectory SHA-256 is
+`7fb0c1150388acf0ae72450935477ef514028b3183b1fb67f73745108ee89936`.
+Private raw reports include the physical gate, API harness, MBPP receipts and
+TB2.1 verifier artifacts; credentials and runtime images are not published.

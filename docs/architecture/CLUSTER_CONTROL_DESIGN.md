@@ -13,6 +13,14 @@ filters and samples healthy nodes; watchers reconstruct their views by polling
 Edges. An Edge owns sandbox execution, admission, process identities, storage,
 snapshots and native sessions. Model/GPU management remains external.
 
+The formal user path is SDK → API Server → owning Edge. All remote sandbox
+operations, including shell commands, files and streaming I/O, traverse that
+ingress. The Node gateway below is our authenticated bridge to the Edge's private
+UDS, not a second placement authority. The local direct UDS SDK is retained for
+compatibility and development. New QEMU/FullVM and outer-VM Container/FnCall
+backends must extend this existing cluster path; passing a private VMM test does
+not expose a backend through the cluster API.
+
 ```mermaid
 flowchart LR
     SDK[SDK / training framework] --> LB[Ingress with multiple API endpoints]
@@ -167,6 +175,51 @@ against the model and regression schedule.
 
 Before a production release: validate independent failure domains and additional
 physical Nodes; provide operator recovery for indefinitely unknown dispatches;
-finish etcd authentication-token renewal, IAM quota changes, route-key rotation
+finish IAM quota changes, route-key rotation
 and exact cluster trace replay. Existing guest, storage, snapshot and local SDK
 mechanisms are preserved.
+
+
+## Deployment follow-up: readiness and service credentials
+
+`RolloutDispatch` models worker health at the first-send boundary and includes
+`DispatchRequiresAcceptedHealth`. Explicit `recover_create` uses the same
+ADMITTED-to-DISPATCHED CAS; later states inspect the original worker only.
+The worker-health regression is paired with a required guard-removal mutation.
+The follow-up finite-model campaign has 35 cases; implementation refinement has
+seven required unsafe mutations. These checks are bounded safety evidence.
+
+`EtcdCredential` serializes service login and renewal within each process. JWT
+expiry is only a scheduling hint; verified HTTPS and etcd enforce authenticity
+and permissions. Only an explicit 401/code-16 rejection can refresh and resend
+once. Permission denial and unknown replies preserve the original coordination
+semantics. Expired tokens never provide an availability fallback.
+
+Cross-host exports retain TLS and peer identity checks behind Docker NAT,
+separate administrator credentials from service replicas, and preserve local
+private data directories. Two physical fault domains do not prove arbitrary
+single-host HA for a three-member quorum.
+
+
+The real two-host follow-up passed seven controlled service-fault gates:
+worker readiness UNKNOWN, original-episode recovery, same-VM API failover,
+operation after token expiry, minority-member loss, majority-member loss with
+rejection, and rejoin/clean release. Token renewal used an acceptance-only
+12-second TTL, with proactive renewal, one refresh after an explicit server
+expiry rejection and denied prefix escape. Three-member authenticated health
+and peer identity positive/negative gates passed. Eight application harness
+checks passed through the installed Linux API/Node/worker. Physical hosts and
+host Docker daemons were not stopped; this does not close the independent-host
+availability gate.
+
+
+Live-episode service restart acceptance on 2026-10-12 passed nine checks on the
+two-host deployment. Restart combinations covered both API replicas,
+gateway/worker, and API/gateway/worker/Edge together. Physical VMM PID,
+`/proc` start ticks and boot ID matched before/after, while the persisted
+history/dialogue and held quota remained unchanged. Repeated committed action
+submission returned its journal result without another effect. Continued work
+and counter verification succeeded; authoritative stop released all resources.
+The portable tool records operator stop/start plans and separate Node physical
+inspection. Quorum and hosts survived throughout; in-flight crash boundaries
+and host-loss availability are separate gates.

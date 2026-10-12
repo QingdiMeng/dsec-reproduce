@@ -27,7 +27,7 @@ class Record:
 class EtcdStore:
     def __init__(self, endpoints, *, prefix='/dsec/v1/', ca_file=None,
                  cert_file=None, key_file=None, token=None, timeout=5,
-                 allow_loopback_http=False):
+                 allow_loopback_http=False, authentication=None):
         self.endpoints = tuple(endpoint.rstrip('/') for endpoint in endpoints)
         if not self.endpoints or not prefix.startswith('/') or not prefix.endswith('/'):
             raise ValueError('Explicit endpoints and isolated etcd prefix required')
@@ -55,6 +55,14 @@ class EtcdStore:
                 return None
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
             urllib.request.HTTPSHandler(context=self.context), NoRedirect())
+        self.credential = None
+        if authentication is not None:
+            from dsec.control.etcd_auth import EtcdCredential
+            if not isinstance(authentication,dict) or set(authentication)-{
+                    'username','password_file','renew_before_seconds','retry_seconds'}:
+                raise ValueError('Invalid etcd authentication configuration')
+            self.credential = EtcdCredential(self.endpoints,self.opener,token=token,
+                                            timeout=timeout,**authentication)
 
     def _rpc(self, path, payload):
         data = json.dumps(payload, separators=(',', ':')).encode()
@@ -62,24 +70,38 @@ class EtcdStore:
             preferred = self.preferred
         for index in list(range(preferred, len(self.endpoints))) + list(range(preferred)):
             endpoint = self.endpoints[index]
-            request = urllib.request.Request(endpoint + '/v3/' + path, data,
-                {'Content-Type':'application/json', **({'Authorization':self.token} if self.token else {})})
-            try:
-                with self.opener.open(request, timeout=self.timeout) as response:
-                    raw = response.read(4 * 1024**2 + 1)
-                if len(raw) > 4 * 1024**2:
-                    raise CoordinationUnavailable('Oversized etcd response')
-                result = json.loads(raw)
-                if 'error' in result or 'code' in result:
-                    raise CoordinationUnavailable('etcd rejected coordination request')
-                with self.endpoint_lock:
-                    self.preferred = index
-                return result
-            except urllib.error.HTTPError as exc:
-                if exc.code not in (429, 500, 502, 503, 504):
-                    raise CoordinationUnavailable('etcd authorization or request rejected') from exc
-            except (urllib.error.URLError, OSError, http.client.HTTPException, json.JSONDecodeError):
-                continue
+            for auth_attempt in range(2):
+                token = self.credential.get() if self.credential else self.token
+                request = urllib.request.Request(endpoint + '/v3/' + path, data,
+                    {'Content-Type':'application/json', **({'Authorization':token} if token else {})})
+                try:
+                    with self.opener.open(request, timeout=self.timeout) as response:
+                        raw = response.read(4 * 1024**2 + 1)
+                    if len(raw) > 4 * 1024**2:
+                        raise CoordinationUnavailable('Oversized etcd response')
+                    result = json.loads(raw)
+                    if 'error' in result or 'code' in result:
+                        raise CoordinationUnavailable('etcd rejected coordination request')
+                    with self.endpoint_lock:
+                        self.preferred = index
+                    return result
+                except urllib.error.HTTPError as exc:
+                    if exc.code == 401 and self.credential and auth_attempt == 0:
+                        try:
+                            rejected = json.loads(exc.read(65536)).get('code') == 16
+                        except (ValueError,AttributeError):
+                            rejected = False
+                        if rejected:
+                            # An explicit UNAUTHENTICATED rejection proves this
+                            # request had no authorized effects. Lost/5xx replies
+                            # never use this authentication resend path.
+                            self.credential.get(rejected=token)
+                            continue
+                    if exc.code not in (429, 500, 502, 503, 504):
+                        raise CoordinationUnavailable('etcd authorization or request rejected') from None
+                    break
+                except (urllib.error.URLError, OSError, http.client.HTTPException, json.JSONDecodeError):
+                    break
         # Repeating a conditional transaction can report false after a lost
         # successful response. Callers always reconcile by reading identities.
         raise CoordinationUnavailable('No etcd quorum response; outcome may be unknown')

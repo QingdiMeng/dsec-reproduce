@@ -7,11 +7,19 @@ benchmark, start a model or select an RL algorithm.
 The table distinguishes shipped entry points from historical experiments and
 from complete application launchers that are still missing.
 
+The product sandbox entry is `dsec.sdk.DSecClient` through the authenticated
+API Server, including single-node deployments. Direct Edge/worker sockets are
+development and Node-internal interfaces. TB2.1/Miles and MBPP/verl now use
+`RolloutAPIClient` with `DSEC_API_CONFIG`; their historical training scores used
+the earlier local-worker transport and are not a new API training run.
+Do not expose worker sockets to trainers. API-native sandbox calls
+are demonstrated in the [cluster SDK guide](CLUSTER_DEPLOYMENT.md#remote-native-sdk).
+
 | Use case | Shipped entry | Current scope |
 | --- | --- | --- |
 | UC-01: TB2.1 task execution and official verification | Optional `apps/tb21` package; fixed-trajectory acceptance tool | Task preparation and representative official-verifier execution validated. All 89 task files were checked; not all 89 tasks have passed a model episode. |
 | UC-02: API-driven agents without a GPU | Framework-independent environment and TB2.1 task adapter | The task/environment interfaces are shipped. A standalone full API benchmark CLI is not yet included; bring a model client and agent loop. |
-| UC-03: Miles RL rollouts | Packaged Miles agent/generate/reward adapters | Short real GRPO integration validated. Trainer, model and hardware-specific GPU patches are separate; no complete portable training launcher is claimed. |
+| UC-03: Miles RL rollouts | Packaged Miles agent/generate/reward adapters | Fixed-response Miles agent loop validated through the API. Short real GRPO evidence used the earlier local transport; trainer/model/GPU patches are separate, and the historical full-suite recipe launcher is not yet migrated. |
 | UC-04: Repeated episodes from prepared state | Baseline sealing/fork API; installed fork acceptance tool | State isolation, actual snapshot recovery and shared-object cleanup validated on an OverlayBD-backed case. |
 | UC-05: Custom tasks outside TB2.1 | Task adapter protocol; counter task and `dsec-host smoke` | Non-TB execution, scoring, restart recovery and cleanup validated. |
 | UC-06: MBPP GRPO with verl | Optional `apps/mbpp` data, verification, native training and comparison entry points | Qwen3.5-2B completed all 374 train tasks, 187 updates and eight responses per task. Full 500-task before/after evaluation improved mean sample success from 39.775% to 42.275%. |
@@ -47,24 +55,38 @@ device-count requirements. Neither command implicitly downloads task images.
 
 Configure an isolated instance with that catalog, the staged tasks and the
 verifier disk as documented in the application guide and
-[host configuration](DSEC_HOST_CONFIGURATION.md). Once it is ready:
+[host configuration](DSEC_HOST_CONFIGURATION.md). Deploy the
+[API/Node/worker bridge](CLUSTER_DEPLOYMENT.md#remote-native-sdk) with minimum
+resource demands for both `default` and the selected TB2.1 environment. The
+harness also exercises the Miles loop on the default counter task. Give the
+client its private API configuration and keep worker sockets on the Node.
+Once it is ready:
 
 ```sh
-python -I /data/dsec-source/tools/verify_installed_task.py \
-  --config /data/tb21-host.json --adapter tb2 \
-  --trajectory /data/dsec-source/tools/fixtures/tb21-openssl.json \
-  --expect-score 1 --out /data/evidence/tb21-fixed-trajectory.json
+python -I /data/dsec-source/tools/verify_rollout_api.py \
+  --api-config /run/dsec/api-client.json \
+  --tb21-tasks /data/tb21-case/tasks --tb21-catalog /data/tb21-catalog.json \
+  --tb21-trajectory /data/dsec-source/tools/fixtures/tb21-openssl.json \
+  --out /data/evidence/tb21-api-fixed-trajectory
 ```
 
 The shipped fixture contains a known successful solution. It is strictly a
 harness acceptance input, not model output, model-quality evidence or an RL
 training trajectory. The tool executes the staged task's official verifier,
 saves the verdict/observations and attempts sandbox/lease cleanup, preserving
-errors in the output JSON. Raw verifier logs are saved by the worker.
+errors in the output directory. Raw verifier logs are saved by the worker.
 
-Add `--restart-services` only on the dedicated acceptance instance; it restarts
-that instance's two user services and checks live/paused recovery and committed
-action deduplication. It does not restart the host Docker daemon.
+The `openssl-selfsigned-cert` verifier requires its dependency network or a
+complete task-specific prepared cache. A mounted shared tool disk alone is not
+an offline guarantee. The API migration acceptance used `regex-log` with its
+complete cache and original official script; see the
+[acceptance record](../reports/MBPP_VERL_FIRST_USE.md#api-migration-2026-10-12).
+
+For Node-local development recovery checks only, `verify_installed_task.py`
+retains its `--config` and direct-worker entry. Its optional
+`--restart-services` restarts the dedicated instance's two user services and
+checks live/paused recovery and action deduplication. This is an operator test,
+not the application entry; do not expose that worker socket to trainers.
 
 ## UC-02 — API-driven agents without a GPU
 
@@ -72,7 +94,7 @@ Use the same TB2.1 application with an external model API to evaluate agent
 quality. GPU training is not needed. The integration boundary is:
 
 1. Construct `TB2DSecEnvironment` from the staged tasks and registered catalog,
-   open `ScheduledDSecClient` for the worker socket and allocate a rollout ID.
+   open `RolloutAPIClient.from_config` for the API client configuration and allocate a rollout ID.
 2. Create `DSecAgentEnvironment` and call `reset(policy_prefix)`. The task
    instruction is appended by the task adapter; the returned dialogue is the
    starting model context.
@@ -91,7 +113,9 @@ training additionally needs exact tokens, logprobs, masks and weight versions.
 
 These interfaces are installed, but a complete API-client/parser/task-sweep
 CLI has not yet been exported as a supported example. Historical API harness
-experiments are not a substitute for that missing launcher. See the
+experiments are not a substitute for that missing launcher. The shipped
+`verify_rollout_api.py` validates fixed responses and official scoring; it does
+not call an external model API or sweep model performance. See the
 [environment contract](../architecture/AGENT_ENVIRONMENT_CONTRACT.md); exporting this application
 driver belongs with the benchmark entry points in roadmap `RM-104`.
 
@@ -103,7 +127,7 @@ dependencies and configure the sandbox connection:
 
 ```sh
 python -m pip install '.[miles]'
-export DSEC_ROLLOUT_WORKER_SOCKET=/srv/dsec/tb21/worker/worker.sock
+export DSEC_API_CONFIG=/run/dsec/api-client.json
 export DSEC_TB2_TASKS_DIR=/data/tb21-case/tasks
 export DSEC_TB2_ENVIRONMENT_CATALOG=/data/tb21-catalog.json
 ```

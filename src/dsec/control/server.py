@@ -11,7 +11,7 @@ from dsec.runtime.requests import MUTATING
 from dsec.runtime.resource_rpc import sandbox_resource_sample
 from dsec.runtime.admission_guard import AdmissionDenied, check_create
 from dsec.runtime.container_edge import CONTAINER_OPERATIONS, CONTAINER_MUTATING
-from dsec.contracts.native import NATIVE_FEATURE, NATIVE_MUTATING, STREAM_FEATURE
+from dsec.contracts.native import NATIVE_FEATURE, NATIVE_MUTATING, STREAM_FEATURE, SESSION_FILE_FEATURE, HTTP_FEATURE
 from dsec.contracts.errors import CommandOutcomeUnknown
 from dsec.runtime.sessions.service import dispatch_native
 from dsec.runtime.sessions.jobs import NativeJobs
@@ -171,7 +171,7 @@ class Handler(socketserver.StreamRequestHandler):
                         "rejected_requests":self.server.rejected_requests}
             return {"pid":os.getpid(),"recovery_events":manager.recovery_events,
                     "monitor_errors":manager.errors,"warm_pool":manager.warm_pool_status(),
-                    "protocol_features":["container-rpc-v1", "busy-nonadmission-v1", NATIVE_FEATURE, STREAM_FEATURE] + (
+                    "protocol_features":["container-rpc-v1", "busy-nonadmission-v1", NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_FEATURE, HTTP_FEATURE] + (
                         ["node-admission-v1"] if getattr(self.server, 'node_admission', None) else []),
                     "admission_worker_socket":self.server.admission_worker_socket,**counts}
         if op=="node_status":
