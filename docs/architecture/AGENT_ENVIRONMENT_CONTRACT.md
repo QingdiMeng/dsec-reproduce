@@ -2,7 +2,7 @@
 
 `AgentEnvironment` 是任务与训练框架之间的边界，定义在
 [dsec.rollout.environment](../../src/dsec/rollout/environment.py)，旧
-[agent_environment.py](../../agent_environment.py) 保留兼容入口。它不替代沙箱 SDK，也不依赖
+[agent_environment.py](../../src/dsec/rollout/environment.py) 保留兼容入口。它不替代沙箱 SDK，也不依赖
 OpenEnv 服务。
 
 ## 职责
@@ -19,7 +19,9 @@ DSec 管理沙箱资源。模型权重、KV cache、优化器、训练/推理显
 不会为取得资源而修改模型服务配置或卸载模型。
 
 `DSecClient` 的正式实现位于 [sdk.client](../../src/dsec/sdk/client.py)，
-`libdsec_compat` 与 `dsec.compat.libdsec` 保留同一实现的模块别名。
+它只接受 HTTPS API Server、IAM 凭据和项目，不从 `DSEC_SOCKET` 自动直连 Edge。
+本地开发客户端为 [DevEdgeClient](../../src/dsec/sdk/development.py)；
+`libdsec_compat` 与 `dsec.compat.libdsec` 保留这个开发实现的模块别名。
 容器后端、制品校验和生命周期 journal 由
 [容器 Edge](../../src/dsec/runtime/container_edge.py)管理；客户端不读取宿主制品或启动 Docker。
 原 `run_container`、`attach_container`、执行/查询/停止调用经同一沙箱服务传输。
@@ -30,8 +32,9 @@ DSec 管理沙箱资源。模型权重、KV cache、优化器、训练/推理显
 ```text
 Trainer agent loop
     → AgentEnvironment: reset → step* → evaluate → stop
-    → TaskEnvironmentAdapter / ScheduledDSecClient
-    → rollout worker → sandboxd → microVM or container
+    → TaskEnvironmentAdapter / RolloutAPIClient
+    → API Server → authenticated Node gateway
+    → private rollout worker → Edge → microVM or container
 ```
 
 ## 生命周期
@@ -157,10 +160,10 @@ ID，附着并对账；不得新建 ID 重放可能已经生效的副作用。�
 
 ## 实现与验证
 
-- [通用计数任务](../../dsec_adapters/counter_dsec_environment.py)
-- [TB2.1 任务插件](../../dsec_adapters/tb2_dsec_environment.py)
-- [任务注册表](../../dsec_adapters/dsec_task_registry.py)
-- [Miles agent 适配器](../../dsec_adapters/miles_dsec_agent_function.py)
+- [通用计数任务](../../src/dsec_adapters/counter_dsec_environment.py)
+- [TB2.1 任务插件](../../src/dsec_adapters/tb2_dsec_environment.py)
+- [任务注册表](../../src/dsec_adapters/dsec_task_registry.py)
+- [Miles agent 适配器](../../src/dsec_adapters/miles_dsec_agent_function.py)
 - [接口回归](../../tests/unit/test_agent_environment.py)
 
 当前实现使用单机 Unix socket。生命周期与论文的 libdsec 思路相近，但本 agent
@@ -187,7 +190,8 @@ protocol described below. Neither path manages policy/model state.
 
 ### Native sandbox SDK
 
-The Python SDK and Edge call one shared C agent, through native vsock port 5001
+The public SDK reaches Edge through the API Server and authenticated Node
+gateway. Edge calls one shared C agent, through native vsock port 5001
 in a microVM or a private UDS in a layered container. Port 5000 retains the
 original command framing. `native-sessions-files-v1` and `native-stream-v1`
 are explicit capabilities; a new SDK cannot silently emulate them on an old
@@ -197,7 +201,8 @@ OverlayBD/ublk path is unchanged.
 ```python
 from dsec.sdk import DSecClient
 
-async with DSecClient(socket_path) as client:
+async with DSecClient(api_endpoints, token=iam_token, project=project_id,
+                      ca_file=api_ca_file) as client:
     sandbox = await client.attach(sandbox_id)
     async with await sandbox.open_session() as session:
         await session.run_shell("cd /workspace; export MODE=test")
@@ -519,3 +524,41 @@ were not restarted by acceptance. This is a targeted single-host contract gate;
 it does not establish unbounded linearizability, every cancellation delivery
 window, child termination under arbitrary faults, 3FS/ublk recovery, network
 containment, scheduler lease correctness or a performance claim.
+
+## Aether/chronus execution extensions
+
+The [execution and isolation contract](EXECUTION_ISOLATION.md) records the current
+Linux proxy/session split and unfinished production backend paths. New Edge and
+guest capability checks gate `native-aether-chronus-v1` session-scoped files and
+optional `native-http-v1` HTTP requests. Legacy sandbox-wide files remain
+compatible. `session.request` returns binary body, raw response headers, HTTP
+status, timeout/truncation and session-reset flags; unknown outcomes remain
+query-only. These extensions use the existing Edge request journal.
+
+
+### Rollout API ownership and verification
+
+`RolloutAPIClient` reuses existing `ScheduledSandbox` semantics through the API;
+`ScheduledDSecClient` remains a local development/internal transport. TB2.1/Miles
+and MBPP/verl use the same API config and keep the existing policy messages,
+step/action identities, rewards and evidence. No task or trainer code enters the
+core API. Only operator-registered evaluators execute in the worker.
+
+IAM admission uses the public rollout ID as its stable key, canonical creation
+arguments and immutable Node. The gateway hashes project/rollout IDs into worker
+IDs, validates the worker's task/profile/resources and physical owner before
+effects, and projects only identity fields back to public IDs. It never rewrites
+model messages or command output. The API stores no trajectory; worker journals
+remain execution truth.
+
+`RolloutDispatch.tla` bounds one admitted episode, delayed arrival, one worker
+record and a separate cleanup proof. `Dispatch` maps to the IAM CAS before the
+one worker create send. `ReachWorker` maps to durable worker reservation;
+`ProveCleanup` maps to a matching sandbox status, and `Release` to IAM's CAS.
+Controlled regressions cover concurrent duplicate creates, committed reply loss,
+the dispatch-before-worker-record gap, namespace isolation, preserved verifier
+failure and refused cleanup release. Required code mutations re-send a create
+or remove its cleanup guard; they must fail those regressions, alongside the
+model's replay and unproved-release counterexamples. Existing `ClusterAdmission`
+continues to check quota and immutable placement. Neither model proves arbitrary
+implementation refinement, hash collision freedom or cluster availability.

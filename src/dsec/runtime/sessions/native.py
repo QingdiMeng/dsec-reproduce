@@ -3,6 +3,8 @@ import base64
 import errno
 import socket
 import time
+import re
+from urllib.parse import urlsplit
 
 from dsec.contracts.errors import CommandOutcomeUnknown, ServiceBusy
 from dsec.contracts.native import (CHUNK_BYTES, MAX_FILE_BYTES, NATIVE_FEATURE, STREAM_FEATURE,
@@ -15,9 +17,13 @@ class NativeSessionReset(RuntimeError):
 
 
 class NativeChannel:
-    def __init__(self, endpoint, *, vsock=False, max_timeout_ms=30000):
+    def __init__(self, endpoint=None, *, vsock=False, guest_cid=None, max_timeout_ms=30000):
+        if guest_cid is not None and (vsock or endpoint is not None or
+                type(guest_cid) is not int or not 3 <= guest_cid < 2**32-1):
+            raise ValueError("Direct vsock requires an exclusive valid guest CID")
         self.endpoint = str(endpoint)
         self.vsock = vsock
+        self.guest_cid = guest_cid
         self.max_timeout_ms = max_timeout_ms
 
     @staticmethod
@@ -31,9 +37,10 @@ class NativeChannel:
         return bytes(result)
 
     def _exchange(self, header, body=b"", *, timeout_ms=5000):
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        family = socket.AF_UNIX if self.guest_cid is None else socket.AF_VSOCK
+        with socket.socket(family, socket.SOCK_STREAM) as connection:
             connection.settimeout(timeout_ms / 1000 + 5)
-            connection.connect(self.endpoint)
+            connection.connect(self.endpoint if self.guest_cid is None else (self.guest_cid, 5001))
             with connection.makefile("rb") as stream:
                 if self.vsock:
                     connection.sendall(b"CONNECT 5001\n")
@@ -55,7 +62,8 @@ class NativeChannel:
                         raise ServiceBusy("Guest operation rejected before effects")
                     if reset:
                         raise NativeSessionReset("Native shell session is no longer available")
-                    exc = OSError(error, "Native guest operation failed")
+                    detail = err.decode(errors="replace")[:4096]
+                    exc = OSError(error, "Native guest operation failed" + (": " + detail if detail else ""))
                     exc.native_result = True
                     raise exc
                 return dict(exit_code=code if code >= 0 else None, timed_out=bool(timed_out),
@@ -74,7 +82,36 @@ class NativeChannel:
         return features
 
     def prepare(self, action, **args):
-        if action in ("open", "close", "run", "stream", "cancel"):
+        if action == "http":
+            sid = identifier(args["session_id"])
+            method, url = args["method"], args["url"]
+            timeout, limit = args.get("timeout_ms", 5000), args.get("response_limit", 65536)
+            if (method not in ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
+                    or not isinstance(url, str) or any(ord(c) <= 32 or ord(c) == 127 for c in url)
+                    or len(url.encode()) > 4096 or urlsplit(url).scheme not in ("http", "https")
+                    or not urlsplit(url).hostname or type(timeout) is not int
+                    or not 1 <= timeout <= self.max_timeout_ms or type(limit) is not int
+                    or not 1 <= limit <= 1048576 - 8192):
+                raise ValueError("Invalid native HTTP request bounds")
+            headers = args.get("headers", {})
+            if not isinstance(headers, dict) or len(headers) > 32:
+                raise ValueError("Invalid native HTTP headers")
+            lines = []
+            for name, value in headers.items():
+                if (not isinstance(name, str) or not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", name)
+                        or not isinstance(value, str) or any(ord(c) < 32 or ord(c) == 127 for c in value)):
+                    raise ValueError("Invalid native HTTP header")
+                lines.append(f"{name}: {value}\n")
+            packed = "".join(lines).encode("ascii")
+            data = base64.b64decode(args.get("body", ""), validate=True)
+            if len(packed) > 8192 or len(data) > CHUNK_BYTES:
+                raise ValueError("Native HTTP payload exceeds budget")
+            operation_id = identifier(args.get("operation_id", "0" * 32))
+            method, url = method.encode(), url.encode()
+            header = (f"HTTP {sid} {timeout} {limit} {len(method)} {len(url)} "
+                      f"{len(packed)} {len(data)} {operation_id}\n").encode()
+            payload = method + url + packed + data
+        elif action in ("open", "close", "run", "stream", "cancel"):
             sid = identifier(args["session_id"])
             if action in ("run", "stream"):
                 command = args["command"]
@@ -114,6 +151,8 @@ class NativeChannel:
                     or not 0 <= mode <= 0o777 or not 0 <= length <= CHUNK_BYTES):
                 raise ValueError("Invalid native file limits")
             header = f"{op} {transfer} {offset} {total} {length} {len(path)} {mode}\n".encode()
+            if args.get("session_id") is not None:
+                header = f"SFILE {identifier(args['session_id'])} ".encode() + header
             payload, timeout = path + data, 5000
         return header, payload, timeout
 
@@ -136,6 +175,11 @@ class NativeChannel:
         if action == "run":
             out, err = result.pop("stdout_bytes"), result.pop("stderr_bytes")
             return dict(result, stdout=out.decode(errors="replace"), stderr=err.decode(errors="replace"))
+        if action == "http":
+            out, headers = result.pop("stdout_bytes"), result.pop("stderr_bytes")
+            code = result.pop("exit_code")
+            return dict(result, status_code=code if code and 100 <= code <= 599 and not result["session_reset"] else None,
+                        body=base64.b64encode(out).decode(), headers=headers.decode(errors="replace"))
         return {"session_id": args["session_id"]} if action == "open" else {"ok": True}
 
     def stream(self, **args):
@@ -143,9 +187,10 @@ class NativeChannel:
         deadline = time.monotonic() + timeout / 1000 + 5
         captured = 0
         try:
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            family = socket.AF_UNIX if self.guest_cid is None else socket.AF_VSOCK
+            with socket.socket(family, socket.SOCK_STREAM) as connection:
                 connection.settimeout(timeout / 1000 + 5)
-                connection.connect(self.endpoint)
+                connection.connect(self.endpoint if self.guest_cid is None else (self.guest_cid, 5001))
                 with connection.makefile("rb") as reader:
                     if self.vsock:
                         connection.sendall(b"CONNECT 5001\n")

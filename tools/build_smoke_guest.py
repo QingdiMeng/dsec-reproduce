@@ -14,6 +14,8 @@ def build(image, source, output):
     source = Path(source).resolve(strict=True)
     native_digest = (hashlib.sha256(source.with_name('guest_native.c').read_bytes()).hexdigest()
                      if '#include "guest_native.c"' in source.read_text() else None)
+    native_sources = {str(p.relative_to(source.parent)):hashlib.sha256(p.read_bytes()).hexdigest()
+                      for p in (source.parent/"native").glob("*") if p.suffix in (".c", ".h")}
     output = Path(output).resolve()
     if output.exists():
         raise FileExistsError(output)
@@ -59,6 +61,7 @@ def build(image, source, output):
     return {'status':'passed', 'template':str(output), 'sha256':digest,
             'source_image_id':image, 'source_agent_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),
             'source_native_agent_sha256':native_digest,
+            'source_native_modules':native_sources,
             'bytes':output.stat().st_size, 'network':False, 'task':'counter-example'}
 
 

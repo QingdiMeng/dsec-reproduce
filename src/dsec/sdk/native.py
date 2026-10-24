@@ -6,7 +6,7 @@ import asyncio
 from dsec.sdk.sandbox_transport import ServiceError
 
 from dsec.contracts.native import (CHUNK_BYTES, MAX_FILE_BYTES, NATIVE_FEATURE, STREAM_FEATURE,
-                                   identifier, file_path)
+                                   required_extension, identifier, file_path)
 from dsec.contracts.sandbox import UnsupportedCapability
 
 
@@ -14,35 +14,7 @@ def _part_id(operation_id, part):
     return hashlib.sha256(f"native-v1:{operation_id}:{part}".encode()).hexdigest()[:32]
 
 
-class NativeSandboxMixin:
-    async def _native(self, action, *, request_id=None, _operation="native", **args):
-        if NATIVE_FEATURE not in getattr(self, "_features", ()):
-            raise UnsupportedCapability("Upgrade Edge for native sessions and files")
-        backend = "container" if self.backend in ("container", "tb2") else "microvm"
-        if backend == "container":
-            from dataclasses import asdict
-            args.update(spec=asdict(self._run_args), kind="tb2" if self.backend == "tb2" else "container")
-        # The transport sends one stable intent. Unknown outcomes are queried,
-        # never replayed automatically by a transfer/session wrapper.
-        operation_id = identifier(request_id or uuid.uuid4().hex)
-        for attempt in range(35):
-            try:
-                return await asyncio.to_thread(self._transport.call, _operation, self.id,
-                    request_id=operation_id, backend=backend, action=action, **args)
-            except ServiceError as exc:
-                if exc.kind != "ServiceBusy" or attempt == 34:
-                    raise
-                await asyncio.sleep(min(.05 * 2 ** attempt, 1.0))
-
-    async def open_session(self, *, request_id=None):
-        operation_id = identifier(request_id or uuid.uuid4().hex)
-        result = await self._native("open", session_id=operation_id, request_id=operation_id)
-        return DSecSession(self, result["session_id"])
-
-    def attach_session(self, session_id):
-        """Reconstruct a handle; availability is checked by the next operation."""
-        return DSecSession(self, identifier(session_id))
-
+class NativeFilesMixin:
     async def read_file(self, path, *, max_bytes=MAX_FILE_BYTES, request_id=None):
         path = file_path(path)
         if type(max_bytes) is not int or not 0 <= max_bytes <= MAX_FILE_BYTES:
@@ -86,11 +58,61 @@ class NativeSandboxMixin:
             transfer_id=identifier(transfer_id), request_id=request_id)
 
 
-class DSecSession:
+class NativeSandboxMixin(NativeFilesMixin):
+    async def _native(self, action, *, request_id=None, _operation="native", **args):
+        if NATIVE_FEATURE not in getattr(self, "_features", ()):
+            raise UnsupportedCapability("Upgrade Edge for native sessions and files")
+        backend = "container" if self.backend in ("container", "tb2") else "microvm"
+        if backend == "container":
+            from dataclasses import asdict
+            args.update(spec=asdict(self._run_args), kind="tb2" if self.backend == "tb2" else "container")
+        # The transport sends one stable intent. Unknown outcomes are queried,
+        # never replayed automatically by a transfer/session wrapper.
+        operation_id = identifier(request_id or uuid.uuid4().hex)
+        for attempt in range(35):
+            try:
+                return await asyncio.to_thread(self._transport.call, _operation, self.id,
+                    request_id=operation_id, backend=backend, action=action, **args)
+            except ServiceError as exc:
+                if exc.kind != "ServiceBusy" or attempt == 34:
+                    raise
+                await asyncio.sleep(min(.05 * 2 ** attempt, 1.0))
+
+    async def open_session(self, *, request_id=None):
+        operation_id = identifier(request_id or uuid.uuid4().hex)
+        result = await self._native("open", session_id=operation_id, request_id=operation_id)
+        return DSecSession(self, result["session_id"])
+
+    def attach_session(self, session_id):
+        """Reconstruct a handle; availability is checked by the next operation."""
+        return DSecSession(self, identifier(session_id))
+
+
+
+class DSecSession(NativeFilesMixin):
     def __init__(self, sandbox, session_id):
         self.sandbox = sandbox
         self.id = session_id
         self._run_lock = asyncio.Lock()
+
+    async def _native(self, action, **args):
+        required = required_extension(action, dict(args, session_id=self.id))
+        if required and required not in self.sandbox._features:
+            raise UnsupportedCapability("Upgrade Edge for session files and HTTP; no legacy fallback")
+        return await self.sandbox._native(action, session_id=self.id, **args)
+
+    async def request(self, method, url, *, headers=None, body=b"", timeout_ms=5000,
+                      response_limit=65536, request_id=None):
+        """Perform bounded HTTP inside this sandbox session, with no redirects
+        or automatic retries after uncertain execution. Returned body is bytes.
+        """
+        if not isinstance(body, bytes) or len(body) > CHUNK_BYTES:
+            raise ValueError("HTTP request body must be bytes within 64 KiB")
+        async with self._run_lock:
+            result = await self._native("http", method=method, url=url, headers={} if headers is None else headers,
+                body=base64.b64encode(body).decode(), timeout_ms=timeout_ms,
+                response_limit=response_limit, request_id=request_id)
+            return dict(result, body=base64.b64decode(result["body"], validate=True))
 
     async def run_shell(self, command, *, timeout_ms=5000, output_limit=65536, request_id=None):
         async with self._run_lock:
@@ -111,7 +133,8 @@ class DSecSession:
             lookup_id=identifier(operation_id), session_id=self.id, request_id=request_id)
 
     async def query(self, operation_id):
-        proof = await asyncio.to_thread(self.sandbox._transport.query_request, identifier(operation_id))
+        proof = await asyncio.to_thread(self.sandbox._transport.query_request,
+            identifier(operation_id), sandbox_id=self.sandbox.id)
         if (proof["state"] != "NOT_FOUND" and (proof.get("sandbox_id") != self.sandbox.id
                 or proof.get("args", {}).get("session_id") != self.id)):
             raise ValueError("Request belongs to another session")

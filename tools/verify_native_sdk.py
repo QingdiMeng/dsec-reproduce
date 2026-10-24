@@ -13,11 +13,11 @@ import traceback
 import uuid
 
 from dsec.contracts.sandbox import DSecContainerRunArgs, DSecMicroVMRunArgs
-from dsec.sdk.client import DSecClient
+from dsec.sdk.development import DevEdgeClient as DSecClient
 from dsec.sdk.sandbox_transport import ServiceError
 
 
-async def verify(socket, backend, environment, output):
+async def verify(socket, backend, environment, output, *, executor_gates=False):
     if output.exists():
         raise FileExistsError(output)
     report = dict(status="running", backend=backend, environment=environment,
@@ -52,6 +52,22 @@ async def verify(socket, backend, environment, output):
         assert (await result(session, command))["stdout"] == "/tmp/native-sdk:kept"
         assert (await result(separate, 'printf "%s" "${NATIVE_STATE-unset}"'))["stdout"] == "unset"
         passed("persistent_cwd_env_and_session_isolation")
+        if executor_gates:
+            await session.write_file('/tmp/native-sdk/scoped', b'\x00\xffscoped')
+            assert await session.read_file('/tmp/native-sdk/scoped') == b'\x00\xffscoped'
+            passed('chronus_scoped_binary_files')
+            roles = await result(session,
+                "for p in /proc/[0-9]*/comm; do cat \"$p\" 2>/dev/null || :; done")
+            assert 'dsec-aether' in roles['stdout'] and roles['stdout'].count('dsec-chronus') >= 2, roles
+            passed('aether_and_independent_chronus_processes')
+            temporary = await box.open_session()
+            await temporary.close()
+            try:
+                await temporary.read_file('/tmp/native-sdk/scoped')
+                raise AssertionError('Closed chronus performed file read')
+            except ServiceError as exc:
+                assert exc.kind == 'NativeSessionReset', exc
+            passed('closed_chronus_never_implicitly_recreated')
         data = b"\0\xff\r\n"*40000 + "binary中文".encode()
         transfer = uuid.uuid4().hex
         await box.write_file("/tmp/native-sdk/payload", data, request_id=transfer)
@@ -164,11 +180,13 @@ def main():
     parser.add_argument("--backend", choices=("microvm", "container"), default="microvm")
     parser.add_argument("--environment")
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--executor-gates", action="store_true", help="Require the new aether/chronus guest")
     args = parser.parse_args()
     if args.backend == "container" and not args.environment:
         parser.error("Container acceptance requires an explicitly prepared environment")
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    print(json.dumps(asyncio.run(verify(args.socket, args.backend, args.environment, args.out))))
+    print(json.dumps(asyncio.run(verify(args.socket, args.backend, args.environment, args.out,
+                                      executor_gates=args.executor_gates))))
 
 
 if __name__ == "__main__":

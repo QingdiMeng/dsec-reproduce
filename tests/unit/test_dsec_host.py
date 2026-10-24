@@ -1,5 +1,8 @@
 """Release contracts: portable config, isolated entry points, and safe daemon targeting."""
 import asyncio
+from contextlib import ExitStack, redirect_stdout
+from copy import deepcopy
+import io
 import json
 from pathlib import Path
 import shlex
@@ -8,6 +11,10 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 import dsec_host
+from dsec.host.configuration import normalize_config, initial_configuration
+from dsec.host.composition import plan_service
+from dsec.host.deployment import initialize_configuration
+from dsec.host.services import execute_service_plan
 from service_admin import matches_daemon
 
 
@@ -60,6 +67,96 @@ class HostConfigurationTests(unittest.TestCase):
         self.assertEqual(args[args.index('--root')+1], str(self.root/'state/sandboxes'))
         self.assertEqual(args[args.index('--node-budget')+1],
                          str(self.root/'state/worker/budget.json'))
+
+    def test_normalization_copies_input_and_does_not_require_a_written_config(self):
+        self.data['sandbox']['microvm_environment_catalog'] = 'catalog.json'
+        self.data['network'] = {'max_slots':2}
+        self.data['scheduler']['shared_services'] = {'storage':{'endpoint':'original'}}
+        before = deepcopy(self.data)
+        cfg = normalize_config(self.data, self.config)
+        self.assertEqual(self.data, before)
+        self.assertFalse(self.config.exists())
+        self.assertFalse((self.root/'state').exists())
+        self.assertEqual(cfg['network']['helper'], '/usr/local/libexec/dsec-pilot-netns-helper')
+        cfg['scheduler']['shared_services']['storage']['endpoint'] = 'changed'
+        self.assertEqual(self.data, before)
+
+    def test_loading_and_service_planning_have_no_host_mutation_or_process_effects(self):
+        import os
+        self.config.write_text(json.dumps(self.data))
+        contents = self.config.read_bytes()
+        environment = dict(os.environ)
+        with ExitStack() as guards:
+            for target in ('os.mkdir', 'os.chmod', 'os.chown', 'os.umask', 'os.putenv',
+                           'os.unsetenv', 'os.execv', 'subprocess.Popen', 'socket.socket'):
+                guards.enter_context(patch(target, side_effect=AssertionError(target)))
+            guards.enter_context(patch.object(Path, 'write_text', side_effect=AssertionError('write')))
+            cfg = dsec_host.load_config(self.config)
+            sandbox = plan_service(cfg, 'sandbox')
+            worker = plan_service(cfg, 'worker')
+            validation = plan_service(cfg, 'sandbox', validate_only=True)
+        self.assertEqual(dict(os.environ), environment)
+        self.assertEqual(self.config.read_bytes(), contents)
+        self.assertFalse((self.root/'state').exists())
+        self.assertIn('sandboxd', sandbox.command)
+        self.assertIn('rollout_workerd', worker.command)
+        self.assertEqual(validation.command[-1], '--validate-only')
+        self.assertEqual(validation.directories, ())
+        self.assertIsNone(validation.budget_file)
+
+    def test_plans_capture_configuration_without_sharing_mutable_budget_or_task_data(self):
+        self.data['scheduler']['shared_services'] = {'storage':{'endpoint':'original'}}
+        cfg = self.load()
+        plan = plan_service(cfg, 'worker')
+        template = cfg['sandbox']['template']
+        cfg['scheduler']['shared_services']['storage']['endpoint'] = 'changed'
+        cfg['sandbox']['template'] = '/different/template'
+        self.assertEqual(plan.budget_settings['shared_services']['storage']['endpoint'], 'original')
+        self.assertEqual(plan.worker_configuration['template'], template)
+
+    def test_validate_only_executes_validator_without_writing_state_budget_or_environment(self):
+        import os
+        cfg = self.load()
+        plan = plan_service(cfg, 'sandbox', validate_only=True)
+        environment = dict(os.environ)
+        with patch('os.umask'), patch('os.execv') as execute, \
+                patch('dsec.host.services.private_directory', side_effect=AssertionError('mkdir')), \
+                patch('dsec.host.services.atomic_json', side_effect=AssertionError('budget')):
+            execute_service_plan(plan)
+        execute.assert_called_once_with(plan.command[0], list(plan.command))
+        self.assertEqual(dict(os.environ), environment)
+        self.assertFalse((self.root/'state').exists())
+
+    def test_help_routes_without_reading_configuration_or_starting_services(self):
+        with patch.object(dsec_host.sys, 'argv', ['dsec-host', '--help']), \
+                patch.object(dsec_host, 'load_config', side_effect=AssertionError('read config')), \
+                patch.object(dsec_host, 'run_service', side_effect=AssertionError('run service')), \
+                redirect_stdout(io.StringIO()) as output:
+            with self.assertRaises(SystemExit) as ended:
+                dsec_host.main()
+        self.assertEqual(ended.exception.code, 0)
+        self.assertIn('render-privileges', output.getvalue())
+
+    def test_explicit_init_writes_exclusively_and_keeps_existing_schema_defaults(self):
+        options = dict(binary='firecracker', kernel='kernel', template='guest.ext4',
+                       state_root=self.root/'state', network_interface='eth0')
+        cfg = initial_configuration(**options)
+        self.assertFalse(self.config.exists())
+        result = initialize_configuration(self.config, **options)
+        saved = self.config.read_bytes()
+        self.assertEqual(json.loads(saved), cfg)
+        normalized = dsec_host.load_config(self.config)
+        self.assertEqual(result['configuration'], str(self.config))
+        self.assertEqual(normalized['schema'], 1)
+        self.assertEqual(normalized['scheduler']['min_disk_free_mb'], 4096)
+        self.assertEqual(normalized['sandbox']['capacity'], 2)
+        self.assertEqual(self.config.stat().st_mode & 0o777, 0o600)
+        self.assertFalse((self.root/'state').exists())
+        with self.assertRaises(FileExistsError):
+            initialize_configuration(self.config, **options)
+        with self.assertRaises(FileExistsError):
+            initialize_configuration(self.config, unsupported_option=True)
+        self.assertEqual(self.config.read_bytes(), saved)
 
     def test_proxy_bypass_host_reaches_daemon_arguments(self):
         self.data['sandbox']['egress_proxy_bypass_host'] = ['archive.ubuntu.com', 'security.ubuntu.com']

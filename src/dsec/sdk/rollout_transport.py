@@ -3,16 +3,7 @@
 import json
 import socket
 
-
-class RolloutServiceError(RuntimeError):
-    def __init__(self, kind, message):
-        super().__init__(message)
-        self.kind = kind
-
-
-class RolloutOutcomeUnknown(RuntimeError):
-    """Connection failed after submission; query by rollout/step before retrying."""
-
+from dsec.contracts.rpc import RolloutServiceError, RolloutOutcomeUnknown
 
 class RolloutClient:
     def __init__(self, socket_path, timeout_s=60):
@@ -37,5 +28,5 @@ class RolloutClient:
         response = json.loads(line)
         if not response["ok"]:
             error = response["error"]
-            raise RolloutServiceError(error["type"], error["message"])
+            raise RolloutServiceError(error["type"], error["message"], error.get("details"))
         return response["result"]

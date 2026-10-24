@@ -116,7 +116,7 @@ def overrides(args, agent_config):
         "reward.num_workers": 8,
         "reward.custom_reward_function.path": reward.__file__,
         "reward.custom_reward_function.name": "compute_score",
-        "+reward.custom_reward_function.reward_kwargs.worker_socket": args.worker_socket,
+        "+reward.custom_reward_function.reward_kwargs.api_config": args.api_config,
         "+reward.custom_reward_function.reward_kwargs.environment_id": args.environment_id,
         "+reward.custom_reward_function.reward_kwargs.evidence_dir": str(args.out / "execution-evidence"),
         "trainer.n_gpus_per_node": 1, "trainer.nnodes": 1,
@@ -146,7 +146,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("verl-root", "model", "data", "out"):
         parser.add_argument("--" + name, type=Path, required=True)
-    for name in ("worker-socket", "environment-id"):
+    for name in ("api-config", "environment-id"):
         parser.add_argument("--" + name, required=True)
     duration = parser.add_mutually_exclusive_group()
     duration.add_argument("--steps", type=int, help="bounded pilot; default one update")
@@ -180,6 +180,8 @@ def main():
         parser.error("GPU memory utilization must be between zero and one, Mamba cache slots positive")
     for name in ("verl_root", "model", "data"):
         setattr(args, name, getattr(args, name).resolve(strict=True))
+    args.api_config = str(Path(args.api_config).resolve(strict=True))
+    reward.RolloutAPIClient.from_config(args.api_config)  # credential/TLS preflight before any GPU launch
     args.out = args.out.resolve()
     verify_source(args.verl_root)
     for name in ("train.parquet", args.evaluation_split + ".parquet"):

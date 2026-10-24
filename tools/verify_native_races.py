@@ -29,7 +29,7 @@ from dsec.runtime.edge import open_edge
 from dsec.runtime.requests import RequestJournal
 from dsec.runtime.sessions import service
 from dsec.runtime.sessions.native import NativeChannel
-from dsec.sdk.client import DSecClient
+from dsec.sdk.development import DevEdgeClient as DSecClient
 
 
 def digest(path):

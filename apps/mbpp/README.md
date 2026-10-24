@@ -120,7 +120,7 @@ needed for this networkless instance. Do not reuse another application's state
 root or modify its services.
 
 ```sh
-dsec-mbpp-verify --worker-socket "$HOME/dsec-state/mbpp/worker/worker.sock" \
+dsec-mbpp-verify --api-config /run/dsec/api-client.json \
   --environment-id python-mbpp --out ./mbpp-acceptance \
   --samples 32 --concurrency 8 16 32
 ```
@@ -129,6 +129,14 @@ This executes correct/wrong/timeout/early-exit fixtures and checks that a file
 created by one sample is absent in the next VM. It saves each execution receipt.
 Concurrency runs reuse one fixed synthetic cohort: these numbers verify system
 execution, not MBPP model accuracy or independent RL samples.
+
+Operators also deploy the [API/Node/worker bridge](../../docs/guides/CLUSTER_DEPLOYMENT.md#remote-native-sdk)
+and register `python-mbpp` with minimum demands matching the recipe. Applications
+receive `/run/dsec/api-client.json` with API endpoints, IAM project, token-file
+and CA-file references. The reward hook accepts `api_config`, and has no worker
+socket fallback. Unknown execution/verdict outcomes preserve the episode ID;
+status reads the same Node's worker evidence. The training results above remain
+historical measurements with the former local-worker transport.
 
 ## Native verl integration
 
@@ -139,7 +147,7 @@ its supported model/inference backend separately; do not change the running
 Miles environment to install it.
 
 ```sh
-export DSEC_ROLLOUT_WORKER_SOCKET=/srv/dsec/mbpp/worker/worker.sock
+export DSEC_API_CONFIG=/run/dsec/api-client.json
 export DSEC_MBPP_ENVIRONMENT_ID=python-mbpp
 export DSEC_MBPP_EVIDENCE_DIR=/data/mbpp-run/execution-evidence
 ```
@@ -158,10 +166,10 @@ export MAX_JOBS=2
 uv pip install --python .venv/bin/python --no-deps /path/to/dsec_reproduce-0.1.0.dev0-py3-none-any.whl \
   /path/to/dsec_mbpp_case-0.1.0.dev0-py3-none-any.whl
 .venv/bin/dsec-mbpp-train --verl-root "$PWD" --model /models/Qwen3.5-2B \
-  --data /data/mbpp-prepared --worker-socket "$DSEC_ROLLOUT_WORKER_SOCKET" \
+  --data /data/mbpp-prepared --api-config "$DSEC_API_CONFIG" \
   --environment-id "$DSEC_MBPP_ENVIRONMENT_ID" --out /data/mbpp-config-check --dry-run
 .venv/bin/dsec-mbpp-train --verl-root "$PWD" --model /models/Qwen3.5-2B \
-  --data /data/mbpp-prepared --worker-socket "$DSEC_ROLLOUT_WORKER_SOCKET" \
+  --data /data/mbpp-prepared --api-config "$DSEC_API_CONFIG" \
   --environment-id "$DSEC_MBPP_ENVIRONMENT_ID" --out /data/mbpp-pilot --steps 4
 ```
 
@@ -202,7 +210,7 @@ Both evaluations use these same limits.
 
 ```sh
 .venv/bin/dsec-mbpp-train --verl-root "$PWD" --model /models/Qwen3.5-2B \
-  --data /data/mbpp-prepared --worker-socket "$DSEC_ROLLOUT_WORKER_SOCKET" \
+  --data /data/mbpp-prepared --api-config "$DSEC_API_CONFIG" \
   --environment-id "$DSEC_MBPP_ENVIRONMENT_ID" --out /data/mbpp-full \
   --epochs 1 --batch-size 2 --prompt-length 4096 --seed 42 \
   --response-length 8192 --generation-concurrency 32 \
@@ -314,7 +322,7 @@ To replay a fixed generated cohort, supply JSONL records containing
 check means the original verdict was reproduced, including original zeros.
 
 ```sh
-dsec-mbpp-verify --worker-socket "$DSEC_ROLLOUT_WORKER_SOCKET" \
+dsec-mbpp-verify --api-config "$DSEC_API_CONFIG" \
   --environment-id "$DSEC_MBPP_ENVIRONMENT_ID" --out /data/mbpp-generated-load \
   --candidates /data/fixed-candidates.jsonl --concurrency 8 16 32 48 \
   --host-interface YOUR_INTERFACE --disk-device YOUR_BLOCK_DEVICE

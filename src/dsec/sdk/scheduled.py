@@ -11,6 +11,7 @@ from dataclasses import asdict
 import re
 import time
 import uuid
+import math
 
 from dsec.contracts.profiles import FrameworkProfile
 from dsec.sdk.rollout_transport import RolloutClient, RolloutOutcomeUnknown
@@ -102,12 +103,7 @@ class ScheduledSandbox:
         """Obtain the official TB2 verdict from the same worker-owned VM."""
         # Official task budgets reach 12,000 s. A generic 60 s RPC timeout
         # would turn a valid verdict into an unknown client outcome.
-        transport = RolloutClient(self._transport.socket_path, timeout_s=12100)
-        try:
-            self._view = await asyncio.to_thread(transport.call, "tb2_evaluate",
-                                                 rollout_id=self.id)
-        except RolloutOutcomeUnknown as exc:
-            raise ScheduledOutcomeUnknown(self.id, "tb2_evaluate") from exc
+        self._view = await self._call('tb2_evaluate', timeout_s=12100)
         return self._view["reward"]
 
     async def evaluate_counter(self, expected_counter: int):
@@ -188,8 +184,12 @@ class ScheduledDSecClient:
                      profile: FrameworkProfile | dict,
                      resources: ResourceDemand | dict | None = None,
                      ttl_running_stop: int | None = None,
-                     baseline_rollout_id: str | None = None) -> ScheduledSandbox:
+                     baseline_rollout_id: str | None = None,
+                     timeout_s: float | None = None) -> ScheduledSandbox:
         self._require_open()
+        if timeout_s is not None and (isinstance(timeout_s,bool) or
+                not isinstance(timeout_s,(int,float)) or not math.isfinite(timeout_s) or timeout_s<=0):
+            raise ValueError('Create RPC timeout must be finite and positive')
         if not isinstance(rollout_id, str) or not ROLLOUT_ID.fullmatch(rollout_id):
             raise ValueError("rollout_id must be 32 lowercase hex characters")
         if isinstance(profile, dict):
@@ -213,7 +213,8 @@ class ScheduledDSecClient:
             args["ttl_running_stop"] = ttl_running_stop
         try:
             view = await asyncio.to_thread(self._transport.call, "create",
-                                           timeout_s=self._create_timeout_s, **args)
+                                           timeout_s=(self._create_timeout_s if timeout_s is None else
+                                                      min(self._create_timeout_s,timeout_s)), **args)
         except RolloutOutcomeUnknown as exc:
             raise ScheduledOutcomeUnknown(rollout_id, "create") from exc
         return ScheduledSandbox(self._transport, view)

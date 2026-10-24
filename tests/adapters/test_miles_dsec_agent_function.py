@@ -112,7 +112,7 @@ class MilesAdapterTest(unittest.IsolatedAsyncioTestCase):
                                 "completion_tokens": 1, "output_token_logprobs": [[-0.1, 2, None]]}}]}}]}
 
                 with patch.dict(os.environ, {
-                        "DSEC_ROLLOUT_WORKER_SOCKET": "/tmp/unused.sock",
+                        "DSEC_API_CONFIG": "/tmp/unused.sock",
                         "DSEC_AGENT_STEP_TIMEOUT_MS": "30000", "OPENENV_MAX_TURNS": "2",
                         "DSEC_QWEN35_THINKING": "0", "OPENENV_MAX_ROLLOUT_TIME_SECONDS": "5",
                         "DSEC_TITO_AUDIT_DIR": directory}), patch.object(
@@ -162,7 +162,7 @@ class MilesAdapterTest(unittest.IsolatedAsyncioTestCase):
                         message=message, finish_reason="stop")])
 
                 with patch.dict(os.environ, {
-                        "DSEC_ROLLOUT_WORKER_SOCKET": "/tmp/unused.sock",
+                        "DSEC_API_CONFIG": "/tmp/unused.sock",
                         "DSEC_AGENT_STEP_TIMEOUT_MS": "30000", "OPENENV_MAX_TURNS": "2",
                         "DSEC_QWEN35_THINKING": "0"}):
                     await adapter.run_episode(None, "model", [], {}, {
@@ -176,13 +176,13 @@ class MilesAdapterTest(unittest.IsolatedAsyncioTestCase):
             async def create(self, **kwargs):
                 record = Path(directory) / (kwargs["rollout_id"] + ".json")
                 self_record = json.loads(record.read_text())
-                if self_record["worker_socket"] != "/tmp/formal.sock":
+                if self_record["api_config"] != "/tmp/formal.sock":
                     raise AssertionError("Ownership was not bound to the worker")
                 raise RuntimeError("lost create reply")
 
         with tempfile.TemporaryDirectory() as directory:
             with patch.dict(os.environ, {
-                    "DSEC_ROLLOUT_WORKER_SOCKET": "/tmp/formal.sock",
+                    "DSEC_API_CONFIG": "/tmp/formal.sock",
                     "DSEC_EPISODE_REGISTRY_DIR": directory,
                     "DSEC_AGENT_STEP_TIMEOUT_MS": "30000"}):
                 with self.assertRaisesRegex(RuntimeError, "lost create reply"):
@@ -238,7 +238,7 @@ class MilesAdapterTest(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             with patch.dict(os.environ, {
-                    "DSEC_ROLLOUT_WORKER_SOCKET": "/tmp/unused.sock",
+                    "DSEC_API_CONFIG": "/tmp/unused.sock",
                     "DSEC_AGENT_STEP_TIMEOUT_MS": "30000", "OPENENV_MAX_TURNS": "2",
                     "DSEC_QWEN35_THINKING": "1", "DSEC_MODEL_OUTPUT_DIR": directory}):
                 reward, metrics = await adapter.run_episode(None, "model", [], {}, {
@@ -287,7 +287,7 @@ class MilesAdapterTest(unittest.IsolatedAsyncioTestCase):
                     message=ReplyMessage(content), finish_reason="stop")])
 
             env = {"OPENENV_TB2_TASKS_DIR": directory,
-                   "DSEC_ROLLOUT_WORKER_SOCKET": "/tmp/unused.sock",
+                   "DSEC_API_CONFIG": "/tmp/unused.sock",
                    "DSEC_QWEN35_THINKING": "1",
                    "OPENENV_MAX_TURNS": "2"}
             with patch.dict(os.environ, env):
@@ -334,7 +334,7 @@ class MilesAdapterTest(unittest.IsolatedAsyncioTestCase):
                     message=Message(), finish_reason="stop")])
 
             env = {"OPENENV_TB2_TASKS_DIR": directory,
-                   "DSEC_ROLLOUT_WORKER_SOCKET": "/tmp/unused.sock",
+                   "DSEC_API_CONFIG": "/tmp/unused.sock",
                    "OPENENV_MAX_TURNS": "1",
                    "DSEC_AGENT_STEP_TIMEOUT_MS": "30000"}
             with patch.dict(os.environ, env):
@@ -379,7 +379,7 @@ class MilesAdapterTest(unittest.IsolatedAsyncioTestCase):
                 message=message, finish_reason="stop")])
 
         with patch.dict(os.environ, {
-                "DSEC_ROLLOUT_WORKER_SOCKET": "/tmp/unused.sock",
+                "DSEC_API_CONFIG": "/tmp/unused.sock",
                 "OPENENV_MAX_TURNS": "1",
                 "DSEC_AGENT_STEP_TIMEOUT_MS": "30000"}):
             reward, metrics = await adapter.run_episode(
@@ -431,7 +431,7 @@ class MilesAdapterTest(unittest.IsolatedAsyncioTestCase):
                     message=Message(), finish_reason="stop")])
 
             env = {"OPENENV_TB2_TASKS_DIR": directory,
-                   "DSEC_ROLLOUT_WORKER_SOCKET": "/tmp/unused.sock",
+                   "DSEC_API_CONFIG": "/tmp/unused.sock",
                    "OPENENV_MAX_TURNS": "1",
                    "DSEC_AGENT_STEP_TIMEOUT_MS": "30000"}
             with patch.dict(os.environ, env):
@@ -491,7 +491,7 @@ class MilesAdapterTest(unittest.IsolatedAsyncioTestCase):
                                           "completion_tokens": 2}}}]}
 
             env = {"OPENENV_TB2_TASKS_DIR": directory,
-                   "DSEC_ROLLOUT_WORKER_SOCKET": "/tmp/unused.sock",
+                   "DSEC_API_CONFIG": "/tmp/unused.sock",
                    "DSEC_MODEL_OUTPUT_DIR": str(output_dir),
                    "DSEC_TITO_AUDIT_DIR": str(tito_dir),
                    "OPENENV_MAX_TURNS": "1"}
@@ -536,7 +536,7 @@ class MilesAdapterTest(unittest.IsolatedAsyncioTestCase):
 
             with patch.dict(os.environ, {
                     "OPENENV_TB2_TASKS_DIR": directory,
-                    "DSEC_ROLLOUT_WORKER_SOCKET": "/tmp/unused.sock",
+                    "DSEC_API_CONFIG": "/tmp/unused.sock",
                     "OPENENV_MAX_TURNS": "1"}):
                 reward, metrics = await adapter.run_episode(
                     None, "model", [], {}, {"task_id": "regex-log"},
@@ -574,7 +574,7 @@ class MilesAdapterTest(unittest.IsolatedAsyncioTestCase):
 
                     with patch.dict(os.environ, {
                             "OPENENV_TB2_TASKS_DIR": directory,
-                            "DSEC_ROLLOUT_WORKER_SOCKET": "/tmp/unused.sock",
+                            "DSEC_API_CONFIG": "/tmp/unused.sock",
                             "OPENENV_MAX_TURNS": "2"}):
                         reward, metrics = await adapter.run_episode(
                             None, "model", [], {}, {"task_id": "regex-log"},
@@ -604,7 +604,7 @@ class MilesAdapterTest(unittest.IsolatedAsyncioTestCase):
 
             with patch.dict(os.environ, {
                     "OPENENV_TB2_TASKS_DIR": directory,
-                    "DSEC_ROLLOUT_WORKER_SOCKET": "/tmp/unused.sock",
+                    "DSEC_API_CONFIG": "/tmp/unused.sock",
                     "DSEC_QWEN35_THINKING": "1", "OPENENV_MAX_TURNS": "1"}):
                 reward, metrics = await adapter.run_episode(
                     None, "model", [], {}, {"task_id": "regex-log"},

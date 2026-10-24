@@ -59,7 +59,7 @@ class CaseTests(unittest.TestCase):
             self.assertEqual(train.plan(args)["generation_concurrency"], 32)
             args.prompt_length = 4096
             args.model, args.out = root, root / "run"
-            args.worker_socket, args.environment_id = "worker.sock", "python-mbpp"
+            args.api_config, args.environment_id = "worker.sock", "python-mbpp"
             args.evaluation_batch_size, args.checkpoint_every = 32, 20
             args.evaluate_before_train = True
             settings = dict(item.split("=", 1) for item in train.overrides(args, root / "agent.json"))
@@ -207,6 +207,10 @@ class FakeSandbox:
 
 
 class FakeClient:
+    @classmethod
+    def from_config(cls, path):
+        return cls(path)
+
     instances = []
     failure = None
 
@@ -300,11 +304,11 @@ class RewardTests(unittest.IsolatedAsyncioTestCase):
 
     async def score(self, path, solution='```python\ndef add(a,b): return a+b\n```'):
         return await reward.compute_score('mbpp-dsec', solution, truth(), {"task_id": 601},
-                                          worker_socket='/test.sock', environment_id='python-mbpp',
+                                          api_config='/test.sock', environment_id='python-mbpp',
                                           evidence_dir=path)
 
     async def test_samples_use_separate_episodes_and_cleanup_with_receipts(self):
-        with tempfile.TemporaryDirectory() as tmp, patch.object(reward, 'ScheduledDSecClient', FakeClient):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(reward, 'RolloutAPIClient', FakeClient):
             a, b = await asyncio.gather(self.score(tmp), self.score(tmp))
             self.assertNotEqual(a['dsec_rollout_id'], b['dsec_rollout_id'])
             self.assertEqual([c.create_args['task_id'] for c in FakeClient.instances], ['mbpp-601'] * 2)
@@ -313,14 +317,14 @@ class RewardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(a['score'], 1)
 
     async def test_invalid_model_format_records_zero_without_executing_thinking(self):
-        with tempfile.TemporaryDirectory() as tmp, patch.object(reward, 'ScheduledDSecClient', FakeClient):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(reward, 'RolloutAPIClient', FakeClient):
             d = await self.score(tmp, '<think>unfinished')
             self.assertEqual(d['score'], 0)
             self.assertEqual(d['dsec_reward_source'], 'model_format')
             self.assertEqual(FakeClient.instances, [])
 
     async def test_unknown_action_preserves_id_and_does_not_retry_or_hide_as_zero(self):
-        with tempfile.TemporaryDirectory() as tmp, patch.object(reward, 'ScheduledDSecClient', FakeClient):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(reward, 'RolloutAPIClient', FakeClient):
             FakeClient.failure = ScheduledOutcomeUnknown('a' * 32, 'step')
             with self.assertRaises(ScheduledOutcomeUnknown):
                 await self.score(tmp)
@@ -332,7 +336,7 @@ class RewardTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('score', receipt)
 
     async def test_infrastructure_failure_releases_vm_and_preserves_error(self):
-        with tempfile.TemporaryDirectory() as tmp, patch.object(reward, 'ScheduledDSecClient', FakeClient):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(reward, 'RolloutAPIClient', FakeClient):
             FakeClient.failure = RuntimeError('verifier failed')
             with self.assertRaisesRegex(RuntimeError, 'verifier failed'):
                 await self.score(tmp)

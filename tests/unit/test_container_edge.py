@@ -18,7 +18,8 @@ from dsec.control.server import BoundedServer, Handler
 from dsec.runtime.container_edge import ContainerRuntime
 from dsec.runtime.container_journal import ContainerLifecycleJournal
 from dsec.runtime.requests import RequestJournal
-from dsec.sdk.client import DSecClient, DSecSandbox
+from dsec.sdk.development import DevEdgeClient as DSecClient
+from dsec.sdk.client import DSecSandbox
 from dsec.sdk.sandbox_transport import RequestOutcomeUnknown, ServiceError
 
 
@@ -379,8 +380,10 @@ class BlockBackends(importlib.abc.MetaPathFinder):
             raise AssertionError('client loaded host backend: ' + fullname)
 sys.meta_path.insert(0, BlockBackends())
 from dsec.sdk import DSecClient
+from dsec.sdk.development import DevEdgeClient
 from libdsec_compat import DSecClient as LegacyClient
-assert LegacyClient is DSecClient
+assert LegacyClient is DevEdgeClient
+assert DSecClient is not DevEdgeClient
 '''
         result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)

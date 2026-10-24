@@ -25,7 +25,7 @@ from typing import Any
 
 from agent_environment import DSecAgentEnvironment, EnvironmentAction
 from .dsec_task_registry import EVALUATORS, environment_kind, task_adapter
-from scheduled_dsec import ScheduledDSecClient, ScheduledOutcomeUnknown
+from dsec.sdk import RolloutAPIClient, ScheduledOutcomeUnknown
 
 
 _FENCE = re.compile(r"```bash[ \t]*\n(.*?)\n?```", re.DOTALL | re.IGNORECASE)
@@ -151,7 +151,7 @@ def _final_reply(reply: str, reasoning_content: str | None = None) -> str | None
 
 async def run_episode(policy, model_name: str, messages: list[dict],
                       request_kwargs: dict, metadata: dict,
-                      *, client_factory=ScheduledDSecClient, policy_call=None,
+                      *, client_factory=RolloutAPIClient.from_config, policy_call=None,
                       tito_fetch=None):
     task_id = metadata.get("task_id") or metadata.get("task_name")
     if not isinstance(task_id, str):
@@ -160,7 +160,7 @@ async def run_episode(policy, model_name: str, messages: list[dict],
     rollout_id = metadata.get("dsec_rollout_id") or uuid.uuid4().hex
     if not isinstance(rollout_id, str) or not re.fullmatch(r"[0-9a-f]{32}", rollout_id):
         raise ValueError("dsec_rollout_id must be 32 lowercase hex characters")
-    socket_path = os.environ["DSEC_ROLLOUT_WORKER_SOCKET"]
+    api_config = os.environ["DSEC_API_CONFIG"]
     adapter = task_adapter(kind)
     max_turns = int(os.getenv("OPENENV_MAX_TURNS", "30"))
     if max_turns < 1:
@@ -180,11 +180,11 @@ async def run_episode(policy, model_name: str, messages: list[dict],
         # before their first model response. Cleanup must never scan all work.
         _private_json(Path(registry), rollout_id + ".json", {
             "rollout_id": rollout_id, "task_id": task_id,
-            "dsec_environment": kind, "worker_socket": socket_path})
+            "dsec_environment": kind, "api_config": api_config})
     gen_times, tool_times = [], []
     normalized_thinking_steps = []
     reset_started = time.monotonic()
-    async with client_factory(socket_path) as client:
+    async with client_factory(api_config) as client:
         episode = DSecAgentEnvironment(client, adapter, task_id, rollout_id)
         context = await episode.reset(messages)
         resumed = bool(context["next_step"] or context.get("pending") or
@@ -316,7 +316,7 @@ async def run_episode(policy, model_name: str, messages: list[dict],
     if registry:
         _private_json(Path(registry), rollout_id + ".json", {
             "rollout_id": rollout_id, "task_id": task_id,
-            "dsec_environment": kind, "worker_socket": socket_path,
+            "dsec_environment": kind, "api_config": api_config,
             "training_result": {
                 "reward": training_reward,
                 "exit_status": ("incomplete" if training_reward is None else

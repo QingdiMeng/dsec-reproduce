@@ -12,7 +12,7 @@
 
 ```bash
 cd /home/xiaoxiaohu/dsec-reproduce/firecracker
-python3 sandboxd.py \
+python3 -m sandboxd \
   --root /home/xiaoxiaohu/dsec-reproduce/firecracker/service \
   --binary /home/xiaoxiaohu/dsec-reproduce/firecracker/release-v1.17.0-x86_64/firecracker-v1.17.0-x86_64 \
   --kernel /home/xiaoxiaohu/dsec-reproduce/firecracker/vmlinux-6.1.186 \

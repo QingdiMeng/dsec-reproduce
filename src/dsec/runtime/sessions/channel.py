@@ -9,8 +9,12 @@ from dsec.contracts.execution import ShellRequest, ShellResult
 
 
 class VsockCommandChannel:
-    def __init__(self, endpoint, *, max_timeout_ms=30000, socket_factory=None):
+    def __init__(self, endpoint=None, *, guest_cid=None, max_timeout_ms=30000, socket_factory=None):
+        if guest_cid is not None and (endpoint is not None or type(guest_cid) is not int
+                                     or not 3 <= guest_cid < 2**32-1):
+            raise ValueError("Direct vsock requires an exclusive valid guest CID")
         self.endpoint = endpoint
+        self.guest_cid = guest_cid
         self.max_timeout_ms = max_timeout_ms
         self.socket_factory = socket_factory or socket.socket
 
@@ -22,13 +26,15 @@ class VsockCommandChannel:
         if not (1 <= timeout_ms <= self.max_timeout_ms and 1 <= output_limit <= 1048576
                 and len(data) <= 65536):
             raise ValueError("Request outside protocol limits")
-        with self.socket_factory(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        family = socket.AF_UNIX if self.guest_cid is None else socket.AF_VSOCK
+        with self.socket_factory(family, socket.SOCK_STREAM) as sock:
             sock.settimeout(timeout_ms/1000+3)
-            sock.connect(str(self.endpoint))
+            sock.connect(str(self.endpoint) if self.guest_cid is None else (self.guest_cid, 5000))
             with sock.makefile("rb") as reader:
-                sock.sendall(b"CONNECT 5000\n")
-                if not reader.readline(128).startswith(b"OK "):
-                    raise EOFError("Vsock connection rejected")
+                if self.guest_cid is None:
+                    sock.sendall(b"CONNECT 5000\n")
+                    if not reader.readline(128).startswith(b"OK "):
+                        raise EOFError("Vsock connection rejected")
                 sock.sendall(f"{timeout_ms} {output_limit} {len(data)}\n".encode()+data)
                 header = reader.readline(128)
                 if not header:

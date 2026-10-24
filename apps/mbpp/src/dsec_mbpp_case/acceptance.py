@@ -45,7 +45,7 @@ async def verify(args):
         cohort = [dict(solution_str="```python\n"+FIXTURES[-1][1]+"\n```", ground_truth=TRUTH,
                        expected_score=1) for _ in range(args.samples)]
     args.out.mkdir(parents=True, exist_ok=False)
-    common = dict(worker_socket=args.worker_socket, environment_id=args.environment_id,
+    common = dict(api_config=args.api_config, environment_id=args.environment_id,
                   candidate_timeout=.25)
     results = []
     for name, code, expected in FIXTURES:
@@ -121,7 +121,7 @@ async def verify(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--worker-socket", required=True)
+    parser.add_argument("--api-config", required=True)
     parser.add_argument("--environment-id", required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--samples", type=int, default=32)
