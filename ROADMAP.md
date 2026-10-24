@@ -1,6 +1,6 @@
 # Roadmap: reproducing DSec as a usable elastic sandbox system
 
-Updated: 2026-10-12. Baseline: `0.1.0.dev0`, with modular R3 functional acceptance complete.
+Updated: 2026-10-24. Baseline: `0.1.0.dev0`, with modular R3 functional acceptance complete.
 
 The goal is a general elastic sandbox system for agent workloads and RL, with
 reproducible evidence for the mechanisms described in the
@@ -30,6 +30,52 @@ the durable registry owns directory locking and recovery, with a composed Edge
 service entry point. Bounded shell dispatch and guest/Docker command channels
 now share an explicit execution contract while retaining existing journals and
 wire protocols.
+
+The 2026-10-21 refactor also treats deployment as an acceptance boundary
+([CPH-008](docs/architecture/MODULAR_REFACTOR_DESIGN.md#control-host-decisions)).
+The generator now separates read-only planning from private artifact generation
+and accepts batch Node inventories through shared role configuration. It creates
+per-Node credentials and host-scoped exports; this does not constitute automatic
+cluster installation. Before further feature
+expansion, Node preflight and scoped network-helper initialization now have local
+implementation and controlled permission-failure tests. Linux read-only preflight
+has been checked using an isolated core wheel against existing file/OverlayBD
+Host configurations. On 2026-10-24, a fresh isolated instance on the existing Linux
+host passed 9 administrator installation checks, 13 ordinary-account helper/VM
+checks and 3 final retirement checks. These cover partial-publication continuation,
+repeat installation, live capability/NoNewPrivs/namespace rejection, a real
+512 MiB VM and SDK cleanup. Temporary privileges and five added firewall rules
+were retired; existing host network configuration and container process/start
+identities matched the original baseline. This is bounded single-instance
+acceptance, not clean-host automatic provisioning or adversarial isolation
+certification. The workflow checks actual devices/capabilities rather than provider
+names, rejects blocked Nodes before writing, and rechecks the live platform and
+fixed runtime identity inside the reviewed installer. It does not provision
+accounts, packages, modules or storage services. Dynamic enrollment, drain,
+maintenance/resume and retirement now use the management API with root-policy
+authorization, expected versions and retained request identities. New Nodes use
+private CA-issued bundles and are discovered without controller configuration
+changes or restarts. Membership and in-flight counts share the IAM CAS;
+retirement requires zero held admissions and owning Edge/episode cleanup proof.
+UNKNOWN or unreachable owners cannot be retired. Two-host acceptance used two
+Linux container Nodes, two API replicas and three etcd members colocated on the
+Mac. It checked discovery, real work while draining, maintenance/resume/retirement,
+gateway recovery, one-API/one-member loss and fail-closed quorum loss. It is not
+independent-host HA or clean-host provisioning evidence. Compatible core-runtime
+upgrades now stage verified wheels in separate environments and reuse the Node
+maintenance CAS for pending source/target releases. Commit and rollback require
+the actual gateway, Edge and configured episode service to prove the requested
+loaded build. Bounded two-host acceptance covered successful Node upgrade,
+candidate startup failure with explicit source recovery, a new transaction back
+to a retained version, preserved stopped episode/reward history, and per-replica
+API image upgrade/rollback without rebuilding etcd members. The baseline and
+candidate were controlled test builds; this is not evidence for arbitrary older
+releases, state-format migration, privileged/VMM updates or independent-host HA.
+Certificate/key rotation and clean-host operator workflows remain next.
+CPU/GPU mixed deployment keeps trainers/model servers
+external and gives DSec explicit sandbox budgets. These operational flows remain
+open where their corresponding real-host evidence is not yet recorded.
+
 Runtime storage now has a shared interface for catalog preparation, private
 disks, checkpoints, integrity and device cleanup over the existing file and
 OverlayBD components. Live identities/commit state remain Edge-owned.
@@ -282,7 +328,7 @@ Node physical resources and execution truth remain owned by the existing Edge.
 See [cluster design and acceptance](docs/architecture/CLUSTER_CONTROL_DESIGN.md)
 and [deployment guide](docs/guides/CLUSTER_DEPLOYMENT.md). Local process/member
 failure and a real Linux Node have been exercised; independent-host availability,
-operator recovery for indefinitely unknown dispatches, quota resizing and key
+operator recovery for indefinitely unknown dispatches, quota resizing and long-lived route-signing key
 rotation remain open. This preview does not replace existing milestone gates.
 
 ## Cluster management console preview
@@ -293,6 +339,27 @@ operations through the authorized cluster API. It owns no new VM registry.
 Browse reads validate IAM at the return boundary, missing Nodes remain visible,
 and BOUND is not presented as RUNNING. The preview has portable authorization
 and HTTP gates; browser simulation is distinct from real KVM acceptance.
-Production ingress/independent failure domains, certificate/key rotation, indefinite
+Production ingress/independent failure domains, long-lived route-signing and
+etcd peer/JWT root rotation, indefinite
 unknown-dispatch recovery, indexed inventories above 4,096 records and final
 release-artifact live acceptance remain release gates.
+
+
+The CPH-011 rotation extension separates independent Node authentication keys
+from persistent route signatures, adds explicit IAM access-token overlap and
+completion/cancellation, and supports reloadable versioned TLS trust/identity
+and prefix-limited etcd service identities. Operators publish/distribute private
+material explicitly and verify each peer before retirement; no unknown mutation
+is automatically replayed. See the [rotation guide](docs/guides/CLUSTER_DEPLOYMENT.md#certificate-and-credential-rotation).
+The bounded safety gates cover 48 finite-model cases and five dedicated security
+mutations in addition to the twelve cluster controls. Automated fleet-wide
+credential distribution/acknowledgement, long-lived route-key migration and
+etcd peer CA/JWT signing-root migration remain separate work.
+
+Installed-wheel rotation acceptance passed 21 checks on the two available hosts:
+an existing container and SDK object remained usable through Node key, API token,
+API/Node CA and leaf, etcd client leaf and restricted service-account rotation.
+Old identities were rejected and all five control-plane plus three Node service
+processes remained unchanged. Cleanup returned held work to zero; existing host
+containers were unaffected. This is bounded transport/credential evidence,
+not independent-host HA or the remaining root-key migration mechanisms.

@@ -6,7 +6,7 @@ import tarfile
 import tempfile
 import unittest
 
-from tools.package_release_source import package, SECRET
+from tools.package_release_source import package, source_files, SECRET
 from tools.check_docs import check
 
 
@@ -44,7 +44,16 @@ class SourceReleaseTests(unittest.TestCase):
                              'apps/mbpp/pyproject.toml', 'apps/mbpp/src/dsec_mbpp_case/reward.py'):
                     self.assertIn(name, manifest['files'])
                 self.assertFalse(any(' ' in Path(name).name for name in manifest['files']))
-                for name in ('src/dsec/contracts/resources.py', 'src/dsec/storage/overlaybd.py',
+                for name in ('deploy/cluster/planning.py', 'deploy/cluster/configuration.py',
+                             'deploy/cluster/enroll_node.py', 'deploy/cluster/pki.py',
+                             'deploy/cluster/upgrade.py', 'src/dsec/host/releases.py',
+                             'src/dsec/contracts/release.py', 'verification/NodeUpgrade.tla',
+                             'src/dsec/control/node_lifecycle.py', 'src/dsec/host/node_directory.py',
+                             'src/dsec/host/fleet.py', 'verification/NodeLifecycle.tla',
+                             'deploy/cluster/nodes.example.json',
+                             'src/dsec/host/node_probe.py', 'src/dsec/host/node_setup.py',
+                             'tests/unit/test_node_preflight.py',
+                             'src/dsec/contracts/resources.py', 'src/dsec/storage/overlaybd.py',
                              'src/dsec/runtime/backends/qemu.py', 'src/dsec/runtime/backends/qmp.py',
                              'tests/unit/test_qemu_backend.py', 'verification/QemuLifecycle.tla',
                              'src/dsec/runtime/isolation/vsock.py', 'tests/unit/test_qemu_cid_pool.py',
@@ -94,6 +103,28 @@ class SourceReleaseTests(unittest.TestCase):
                 self.assertEqual(check(exported), [])
             with self.assertRaises(FileExistsError):
                 package(root, a)
+
+    def test_new_portable_tests_are_exported_without_a_filename_registration(self):
+        root = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as tmp:
+            exported = Path(tmp)
+            _, names = source_files(root)
+            for name in names:
+                target = exported / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((root / name).read_bytes())
+            new_test = exported / 'tests/unit/test_new_component.py'
+            new_test.write_text('import unittest\n')
+            (new_test.parent / 'test_new_component 2.py').write_text('private copy\n')
+            private = exported / 'tests/integration/test_live_machine.py'
+            private.parent.mkdir(parents=True)
+            private.write_text('not a portable regression\n')
+            output = exported / 'source.tar.gz'
+            package(exported, output)
+            with tarfile.open(output) as archive:
+                self.assertIn('tests/unit/test_new_component.py', archive.getnames())
+                self.assertNotIn('tests/unit/test_new_component 2.py', archive.getnames())
+                self.assertNotIn('tests/integration/test_live_machine.py', archive.getnames())
 
     def test_secret_guard_recognizes_tokens_and_private_keys(self):
         for value in (b'-----BEGIN OPENSSH '+b'PRIVATE KEY-----',

@@ -4,10 +4,7 @@ import socket
 import uuid
 import re
 from dsec.contracts.errors import RequestOutcomeUnknown
-
-class ServiceError(RuntimeError):
-    def __init__(self, kind, message, details=None):
-        super().__init__(message); self.kind=kind; self.details=details or {}
+from dsec.contracts.rpc import ServiceError
 
 
 class SandboxClient:

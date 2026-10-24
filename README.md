@@ -125,9 +125,16 @@ contracts and historical acceptance reports. The [roadmap](ROADMAP.md) records
 paper alignment and future work with explicit acceptance gates.
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) for package checks and contribution
-requirements. Runtime modules remain at the repository root to preserve their
-installed import paths; task/trainer plugins are in `dsec_adapters/`, optional
-applications in `apps/`, and build/acceptance tools in `tools/`.
+requirements. Core mechanisms live in `src/dsec/`; framework adapters and image
+preparation live in `src/dsec_adapters/` and `src/dsec_image/`. Optional task
+applications stay in `apps/`. Historical top-level Python imports are maintained
+in `compat/python/`, without a second copy of core implementations. Build and
+acceptance tools live in `tools/`; experiment outputs are not source code.
+
+Install the packages before development instead of adding repository directories
+to `PYTHONPATH`. Run portable regressions with
+`python -m unittest discover -s tests -t . -v`; see the contribution guide for
+optional application and Linux/KVM acceptance checks.
 
 ## License
 

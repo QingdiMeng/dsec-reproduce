@@ -13,6 +13,7 @@ import urllib.error
 from dsec.contracts.cluster import CoordinationUnavailable
 from dsec.control.coordination import EtcdStore
 from dsec.control.etcd_auth import EtcdCredential
+from dsec._persistence import atomic_json
 
 
 def jwt(exp,marker='test'):
@@ -99,6 +100,56 @@ class CredentialTests(unittest.TestCase):
                 else:
                     with self.assertRaises(CoordinationUnavailable):store.read('object')
                     self.assertEqual((o.login,o.kv),(0,1))
+
+    def test_selected_identity_change_discards_the_old_unexpired_token(self):
+        identity=self.password.parent/'identity.json'
+        atomic_json(identity,dict(generation=1,username='dsec',password_file=str(self.password)))
+        class Opener:
+            reject=False
+            def open(self,request,timeout):
+                if self.reject:raise urllib.error.HTTPError(request.full_url,400,'denied',{},io.BytesIO(b'{}'))
+                return Reply({'token':jwt(3000)})
+        opener=Opener()
+        with patch('dsec.control.etcd_auth.time.time',return_value=1000):
+            provider=EtcdCredential(['https://etcd.example:2379'],opener,identity_file=str(identity))
+            self.assertEqual(provider.get(),jwt(3000))
+            atomic_json(identity,dict(generation=2,username='dsec-r2',password_file=str(self.password)))
+            opener.reject=True
+            with self.assertRaises(CoordinationUnavailable):provider.get()
+            self.assertIsNone(provider.token)
+
+    def test_nonconditional_administration_never_retries_an_unknown_mutation(self):
+        store=EtcdStore(['https://one.example:2379','https://two.example:2379'])
+        class Offline:
+            calls=0
+            def open(self,*args,**kwargs):self.calls+=1;raise urllib.error.URLError('lost response')
+        opener=Offline();store.opener=opener
+        with self.assertRaises(CoordinationUnavailable):store._rpc('auth/user/add',{'name':'dsec-r2'},retry_unknown=False)
+        self.assertEqual(opener.calls,1)
+
+    def test_auth_revision_retirement_renews_once_but_other_invalid_arguments_do_not(self):
+        for message in ('etcdserver: revision of auth store is old','etcdserver: key is not provided'):
+            class Opener:
+                login=0;mutations=0
+                def open(inner,request,timeout):
+                    if request.full_url.endswith('authenticate'):
+                        inner.login+=1;return Reply({'token':jwt(2000,'replacement')})
+                    inner.mutations+=1
+                    if inner.mutations==1:
+                        raise urllib.error.HTTPError(request.full_url,400,'bad request',{},
+                            io.BytesIO(json.dumps(dict(code=3,message=message)).encode()))
+                    return Reply({})
+            with patch('dsec.control.etcd_auth.time.time',return_value=1000):
+                store=EtcdStore(['https://etcd.example:2379'],token=jwt(2000),
+                    authentication=dict(username='dsec',password_file=str(self.password)))
+                opener=Opener();store.opener=opener;store.credential.opener=opener
+                if message.endswith('is old'):
+                    store._rpc('auth/user/delete',dict(name='dsec-old'),retry_unknown=False)
+                    self.assertEqual((opener.login,opener.mutations),(1,2))
+                else:
+                    with self.assertRaises(CoordinationUnavailable):
+                        store._rpc('auth/user/delete',dict(name='dsec-old'),retry_unknown=False)
+                    self.assertEqual((opener.login,opener.mutations),(0,1))
 
 
 if __name__=='__main__':unittest.main()

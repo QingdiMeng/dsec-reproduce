@@ -41,7 +41,7 @@ verity 的文件系统中准备只读文件，调用 `dsec-artifact-integrity se
 
 ## 既有发布路径与历史验收
 
-2026-10-03。通用环境现在可通过 [`artifact_publisher.py`](../../artifact_publisher.py) 发布，不再逐环境手工拼接文件路径和 SHA-256。输入是现有格式的 microVM 环境目录；发布器将 boot ext4、guest kernel、EROFS 层、可选 DAX VMM 与 OverlayBD lower 复制到本地内容寻址对象池。OverlayBD root-image JSON 会改写为新 lower 路径并重新固定摘要。可选 `--threefs-mount` 与 `--threefs-store` 在发布时把非 DAX 层复制到 3FS 内容寻址目录；创建时仍由环境目录选择 `local` 或 `threefs_lazy`。
+2026-10-03。通用环境现在可通过 [`artifact_publisher.py`](../../src/dsec/storage/publication.py) 发布，不再逐环境手工拼接文件路径和 SHA-256。输入是现有格式的 microVM 环境目录；发布器将 boot ext4、guest kernel、EROFS 层、可选 DAX VMM 与 OverlayBD lower 复制到本地内容寻址对象池。OverlayBD root-image JSON 会改写为新 lower 路径并重新固定摘要。可选 `--threefs-mount` 与 `--threefs-store` 在发布时把非 DAX 层复制到 3FS 内容寻址目录；创建时仍由环境目录选择 `local` 或 `threefs_lazy`。
 
 发布器对源内容做完整 SHA-256 校验，拷贝期间检查源文件身份，fsync 新对象，并以不覆盖现有对象的硬链接提交。已存在对象需再次核对摘要，发现污染即拒绝发布；第二个环境引用相同字节时不会再生成一份对象。最后持锁重新读取目标目录，拒绝覆盖已有环境 ID，验证新条目的本地/远端解析，再原子替换目录文件。失败可能留下**未引用**的内容寻址对象，但不会发布半成品目录。部署目录后，daemon 需要在无活跃任务时按运行时版本收敛 (`ELASTIC_RUNTIME_CONVERGENCE.md`; historical source not included)的整套发布流程重启，才能加载新环境；工具本身不重启服务。
 

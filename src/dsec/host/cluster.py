@@ -12,15 +12,16 @@ from pathlib import Path
 import signal
 import threading
 
-from dsec._credentials import secret_file
-from dsec.contracts.cluster import Quota
+from dsec._credentials import secret_file, NodeCredentials
+from dsec.contracts.cluster import Quota, node_credential
 from dsec.control.cluster_api import ClusterAPI
 from dsec.control.coordination import EtcdStore
 from dsec.control.iam import IAM
 from dsec.control.placement import PlacementEngine
 from dsec.control.watcher import Watcher
 from dsec.host.cluster_http import ClusterHTTPServer
-from dsec.host.cluster_node import NodeGateway, RemoteNode
+from dsec.control.node_gateway import NodeGateway
+from dsec.host.node_transport import NodeRPC, RemoteNode
 from dsec.sdk.cluster import JSONRPC
 from dsec.sdk.sandbox_transport import SandboxClient
 from dsec.sdk.rollout_transport import RolloutClient
@@ -30,7 +31,7 @@ def components(config, role):
     options = dict(config['coordination'])
     if options.get('token_file'):
         options['token'] = secret_file(options.pop('token_file'))
-    iam = IAM(EtcdStore(**options))
+    iam = IAM(EtcdStore(**options), managed_nodes=config.get('node_lifecycle',False))
     if role == 'bootstrap':
         iam.bootstrap(secret_file(config['bootstrap_token_file']), Quota(**config['root_quota']))
         return iam
@@ -49,12 +50,22 @@ def components(config, role):
             worker_inspection=RolloutClient(spec['worker_socket'], timeout_s=3) if spec.get('worker_socket') else None)
     nodes = {}
     for node, spec in config['nodes'].items():
+        legacy=secret_file(spec['token_file'])
         nodes[node] = RemoteNode(JSONRPC(spec['endpoints'], **spec['tls']),
-            token=secret_file(spec['token_file']), route_key=key)
-    watcher = Watcher({node:remote.probe for node, remote in nodes.items()},
+            token=NodeCredentials(config['node_auth_keys_file'],node,legacy_token=legacy) if config.get('node_auth_keys_file') else legacy, route_key=key)
+    membership = None
+    if iam.managed_nodes:
+        from dsec.control.node_lifecycle import NodeLifecycle
+        from dsec.host.node_directory import NodeDirectory, NodeProbes
+        membership = NodeLifecycle(iam)
+        nodes = NodeDirectory(nodes, membership, config['dynamic_node_tls'], key,auth_keys_file=config.get('node_auth_keys_file'))
+        probes = NodeProbes(nodes)
+    else:
+        probes = {node:remote.probe for node, remote in nodes.items()}
+    watcher = Watcher(probes,
                       max_age=config.get('watcher_max_age', 10))
     placement = PlacementEngine(watcher, choices=config.get('placement_choices', 2),
-                               overlay_seconds=config.get('watcher_max_age', 10))
+                               overlay_seconds=config.get('watcher_max_age', 10), membership=membership)
     return ClusterAPI(iam, placement, nodes, route_key=key)
 
 
@@ -64,6 +75,12 @@ def main():
     parser.add_argument('--config', type=Path, required=True)
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
+    if args.role == 'node' and 'microvm' in config['node'].get('backends', ['microvm']):
+        # Fail before umask, gateway directories, owner locks or client creation.
+        from dsec.host.node_probe import observe, require_eligible
+        require_eligible(observe())
+        if os.geteuid() == 0:
+            raise ValueError('MicroVM Node gateway requires an unprivileged service account')
     os.umask(0o077)
     owner = None
     if args.role == 'node':
@@ -81,8 +98,16 @@ def main():
     options = dict(config['server'])
     address = (options.pop('host'), options.pop('port'))
     if args.role == 'node':
-        options['node_token'] = secret_file(options.pop('node_token_file'))
-    server = ClusterHTTPServer(address, value.dispatch if args.role == 'node' else value.call, **options)
+        mode = options.pop('node_token_mode',None)
+        if mode is None:
+            options['node_token'] = secret_file(options.pop('node_token_file'))
+        elif mode == 'derived-v1' and 'node_token_file' not in options:
+            options['node_token'] = node_credential(bytes.fromhex(secret_file(config['route_key_file'])),config['node']['id'])
+        else:
+            raise ValueError('Invalid Node gateway credential configuration')
+        if config.get('node_auth_keys_file'):
+            options['node_token']=NodeCredentials(config['node_auth_keys_file'],config['node']['id'],legacy_token=options['node_token'])
+    server = ClusterHTTPServer(address, NodeRPC(value).dispatch if args.role == 'node' else value.call, **options)
     stop = threading.Event()
     def signal_stop(*_):
         stop.set()
@@ -104,14 +129,10 @@ def main():
         interval = config.get('watcher_poll_seconds', 2)
         if not 0 < interval < value.placement.watcher.max_age:
             raise ValueError('Watcher probe interval must be shorter than freshness window')
-        def probe(node):
-            while not stop.is_set():
-                value.placement.watcher.probe(node)
-                stop.wait(interval)
-        # Separate probe workers keep one slow node from blocking the fleet.
-        for node in value.placement.watcher.probes:
-            thread = threading.Thread(target=probe, args=(node,))
-            thread.start(); threads.append(thread)
+        from dsec.host.node_polling import poll_nodes
+        thread = threading.Thread(target=poll_nodes,args=(value.placement.watcher,stop,interval),
+            kwargs={'workers':config.get('watcher_probe_workers',16)})
+        thread.start();threads.append(thread)
     service = threading.Thread(target=server.serve_forever, kwargs={'poll_interval':.1})
     service.start()
     print(json.dumps({'status':'serving', 'role':args.role, 'address':server.server_address}), flush=True)

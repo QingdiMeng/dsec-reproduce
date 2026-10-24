@@ -5,6 +5,19 @@ is required in the first cluster release. Development runs on macOS; the Linux
 experiment machine is a real Edge node. This is not a production release or a
 claim of independent-host availability.
 
+The accepted [control-plane and Host CLI refactoring decisions](MODULAR_REFACTOR_DESIGN.md#control-host-decisions)
+(CPH-001 through CPH-008) govern the next structural changes. They preserve
+ownership, durable admission/failure semantics and HA requirements; acceptance
+of the decisions does not mean that their implementation is complete.
+
+The current [module ownership map](MODULAR_REFACTOR_DESIGN.md#控制面决策与传输边界)
+separates Node admission/recovery decisions (`control.node_gateway` and
+`control.rollout_gateway`) from Node RPC adapters (`host.node_transport`) and
+HTTP/TLS (`host.cluster_http`). `host.cluster` composes these with etcd and private
+UDS clients. The old Host gateway constructor is a compatibility facade only;
+its decision methods are inherited from the canonical control implementation.
+This separation adds no service or protocol and does not expand HA acceptance.
+
 ## Ownership and deployment
 
 The design follows [DSec §3.2 and §8](https://arxiv.org/html/2609.22978): IAM
@@ -189,10 +202,43 @@ The worker-health regression is paired with a required guard-removal mutation.
 The follow-up finite-model campaign has 35 cases; implementation refinement has
 seven required unsafe mutations. These checks are bounded safety evidence.
 
+The Node membership extension adds `NodeLifecycle` and three required unsafe
+variants: stale ACTIVE admission, retirement without checking held admissions,
+and delayed transitions reviving a retired identity. The current campaign has
+39 model cases and ten implementation guard-removal controls at that boundary. Its code mapping
+is `node_lifecycle.admit` plus `IAM.admit/release` for the shared CAS,
+`NodeLifecycle._transition` for expected-version/state fences and held counts,
+and `NodeGateway.lifecycle_proof`/`EpisodeService.drain_status` for owning-service
+quiescence. Controlled regressions in `test_node_lifecycle.py` order competing
+admission and drain commits in both directions. These are targeted safety checks,
+not whole-program equivalence, liveness, or independent physical HA. See
+[fleet deployment and recovery](../guides/CLUSTER_DEPLOYMENT.md#dynamic-membership-maintenance-and-retirement).
+
+`NodeUpgrade` adds two invariants and required counterexamples: completion must
+have the requested loaded-release proof, and a pending plan must prevent ACTIVE
+admission. They map to the `observed != expected` and pending-plan guards in
+`NodeLifecycle._transition`; `test_node_upgrade.py` also orders commit versus
+rollback with a controlled CAS barrier. The full campaign now has 42 model cases
+and twelve implementation mutations. Artifact byte hashing/installation and
+process startup are outside this small model and have separate controlled
+regressions and Linux acceptance. The compatibility contract declares reviewed
+format support; matching labels alone do not prove arbitrary code compatibility.
+
+The security extension adds `CredentialRotation` (completion needs the new
+credential; cancellation cannot resurrect a completed credential) and
+`TransportRotation` (trust at request acceptance; no late publication regression).
+The full finite campaign has 48 cases. The existing twelve cluster mutation
+controls are joined by five security guard removals in
+`tools/check_security_refinement.py`. Controlled tests order completion/cancel,
+concurrent publication and a TLS handshake preceding trust retirement. Code
+boundaries map to IAM CAS, `VersionedFile.read`, publication CAS and
+`TLSFiles.fence`; cryptography, distributed dissemination and unbounded liveness
+remain outside these finite models. See [rotation operations](../guides/CLUSTER_DEPLOYMENT.md#certificate-and-credential-rotation).
+
 `EtcdCredential` serializes service login and renewal within each process. JWT
 expiry is only a scheduling hint; verified HTTPS and etcd enforce authenticity
-and permissions. Only an explicit 401/code-16 rejection can refresh and resend
-once. Permission denial and unknown replies preserve the original coordination
+and permissions. Only an explicit 401/code-16 rejection or the exact 400/code-3 stale-auth-store
+revision rejection can refresh and resend once. Permission denial and unknown replies preserve the original coordination
 semantics. Expired tokens never provide an availability fallback.
 
 Cross-host exports retain TLS and peer identity checks behind Docker NAT,

@@ -16,7 +16,7 @@ import urllib.request
 from dsec.contracts.cluster import Quota
 from dsec.control.coordination import EtcdStore
 from dsec.control.iam import IAM
-from dsec.host.cluster import secret_file
+from dsec._credentials import secret_file
 
 
 class EtcdError(RuntimeError):
@@ -28,7 +28,15 @@ class EtcdError(RuntimeError):
             'etcdserver: user name not found', 'etcdserver: role name not found')
 
 
+def token_exports(config):
+    enabled = config.get('export_node_token', True)
+    if type(enabled) is not bool:
+        raise ValueError('export_node_token must be boolean')
+    return ('/secrets', '/node-secrets') if enabled else ('/secrets',)
+
+
 def initialize(config):
+    exports = token_exports(config)
     context = ssl.create_default_context(cafile='/initialize/ca.crt')
     context.load_cert_chain('/initialize/client.crt', '/initialize/client.key')
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
@@ -105,7 +113,7 @@ def initialize(config):
         rpc('auth/user/grant', {'user':'dsec','role':'dsec-cluster'})
     credential = rpc('auth/authenticate', {'name':'dsec',
         'password':secret_file('/initialize/dsec-password')})['token']
-    for directory in ('/secrets', '/node-secrets'):
+    for directory in exports:
         path = Path(directory)/'etcd-token'
         temp = path.with_suffix('.pending')
         temp.write_text(credential+'\n'); temp.chmod(0o600); temp.replace(path)

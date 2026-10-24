@@ -5,6 +5,7 @@ import json
 import socketserver
 import ssl
 import threading
+from dsec._tls import TLSFiles
 
 
 class ClusterHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
@@ -14,22 +15,20 @@ class ClusterHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
 
     def __init__(self, address, dispatch, *, cert_file=None, key_file=None,
                  client_ca_file=None, node_token=None, max_requests=32,
-                 allow_loopback_http=False, console=False):
+                 allow_loopback_http=False, console=False, security_file=None):
         if type(max_requests) is not int or not 1 <= max_requests <= 512:
             raise ValueError('Invalid request bound')
-        if not cert_file and not (allow_loopback_http and address[0] in ('localhost', '127.0.0.1', '::1')):
+        if not (cert_file or security_file) and not (allow_loopback_http and address[0] in ('localhost', '127.0.0.1', '::1')):
             raise ValueError('Remote server requires TLS')
         if bool(cert_file) != bool(key_file):
             raise ValueError('TLS certificate/key pair required')
         self.context = None
-        if cert_file:
-            self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-            self.context.minimum_version = ssl.TLSVersion.TLSv1_2
-            self.context.load_cert_chain(cert_file, key_file)
-            if client_ca_file:
-                self.context.load_verify_locations(cafile=client_ca_file)
-                self.context.verify_mode = ssl.CERT_REQUIRED
-        if node_token is not None and (not client_ca_file or len(node_token) < 32):
+        self.tls=None
+        if cert_file or security_file:
+            self.tls=TLSFiles(server=True,cert_file=cert_file,key_file=key_file,client_ca_file=client_ca_file,security_file=security_file)
+            self.context=self.tls.snapshot().context
+        if node_token is not None and (self.context is None or self.context.verify_mode!=ssl.CERT_REQUIRED or
+                (not hasattr(node_token,'accepts') and (not isinstance(node_token,str) or len(node_token)<32))):
             raise ValueError('Node gateway requires controller mTLS and a strong internal credential')
         if type(console) is not bool or (console and node_token is not None):
             raise ValueError('Console may only be enabled on a controller')
@@ -54,12 +53,19 @@ class ClusterHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
         finally:
             self.slots.release()
 
+    def security_status(self):
+        view=self.tls.snapshot() if self.tls else None
+        return dict(tls_generation=view.generation if view else 0,leaf_sha256=view.leaf if view else None,
+            trust_sha256=view.trust if view else None,peer_sha256=list(view.peers) if view else [],
+            node_auth_generation=getattr(getattr(self.node_token,'reader',None),'generation',None))
+
 
 class Handler(BaseHTTPRequestHandler):
     def setup(self):
         self.request.settimeout(10)
-        if self.server.context:
-            self.request = self.server.context.wrap_socket(self.request, server_side=True)
+        self.tls_view=self.server.tls.snapshot() if self.server.tls else None
+        if self.tls_view:
+            self.request = self.tls_view.context.wrap_socket(self.request, server_side=True)
         super().setup()
 
     def finish(self):
@@ -109,8 +115,6 @@ class Handler(BaseHTTPRequestHandler):
             if len(credentials) != 1 or not credentials[0].startswith('Bearer '):
                 raise PermissionError('Authentication required')
             token = credentials[0][7:]
-            if self.server.node_token is not None and not hmac.compare_digest(token, self.server.node_token):
-                raise PermissionError('Controller identity rejected')
             raw = self.rfile.read(length)
             if len(raw) != length:
                 raise ValueError('Incomplete request body')
@@ -118,7 +122,15 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(payload, dict):
                 raise ValueError('Object request required')
             operation_id = payload.get('request_id')
-            result = self.server.dispatch(token, payload)
+            if self.tls_view:self.server.tls.fence(self.tls_view,self.request.getpeercert(binary_form=True))
+            verifier=self.server.node_token
+            if verifier is not None and not (verifier.accepts(token) if hasattr(verifier,'accepts') else hmac.compare_digest(token,verifier)):
+                raise PermissionError('Controller identity rejected')
+            if verifier is not None and payload.get('operation')=='node_security':
+                result=self.server.security_status()
+            else:result = self.server.dispatch(token, payload)
+            if payload.get('operation')=='health' and isinstance(result,dict):
+                result=dict(result,transport_security=self.server.security_status())
             response = dict(request_id=operation_id, ok=True, result=result)
         except Exception as exc:
             kind = getattr(exc, 'kind', type(exc).__name__)

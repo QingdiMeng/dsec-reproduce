@@ -41,7 +41,9 @@ def browse(iam, token, project, operation, args, route_key):
             prefix = 'audit/'
             selected = lambda value: any(key == 'projects/' + project or
                 key.startswith(f'admissions/{project}/') or (project == 'root' and
-                    'iam.credentials' in permissions and key.startswith('credentials/'))
+                    'iam.credentials' in permissions and key.startswith('credentials/')) or
+                (project == 'root' and 'iam.policy' in permissions and
+                    key.startswith(('fleet/', 'fleet-routes/')))
                 for key in value['changed_keys'])
         # etcd's scan is revision-pinned and bounded. Individual record reads
         # join the same CAS guard as the credential and ancestor policies.

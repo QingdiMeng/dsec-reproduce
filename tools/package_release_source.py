@@ -23,68 +23,16 @@ DOCS = (
     'docs/reports/DSEC_V01_GRPO_ACCEPTANCE.md',
     'docs/reports/MBPP_VERL_FIRST_USE.md',
 )
-TESTS = (
-    'tests/unit/test_etcd_auth.py',
-    'tests/packaging/test_cluster_compose.py',
-    'tests/contracts/test_module_boundaries.py',
-    'tests/unit/test_admission_guard.py',
-    'tests/unit/test_agent_environment.py',
-    'tests/unit/test_api_sdk.py',
-    'tests/unit/test_rollout_api.py',
-    'tests/unit/test_artifact_integrity.py',
-    'tests/unit/test_artifact_publisher.py',
-    'tests/unit/test_container_lifecycle_journal.py',
-    'tests/unit/test_container_edge.py',
-    'tests/unit/test_edge_assembly.py',
-    'tests/unit/test_command_sessions.py',
-    'tests/unit/test_native_guest.py',
-    'tests/unit/test_native_sdk.py',
-    'tests/unit/test_native_races.py',
-    'tests/unit/test_qemu_backend.py',
-    'tests/unit/test_qemu_cid_pool.py',
-    'tests/unit/test_cluster_control.py',
-    'tests/unit/test_cluster_console.py',
-    'tests/unit/test_runtime_storage.py',
-    'tests/unit/test_task_application_boundary.py',
-    'tests/unit/test_node_admission.py',
-    'tests/unit/test_dsec_host.py',
-    'tests/unit/test_egress_proxy.py',
-    'tests/unit/test_elastic_resource_monitor.py',
-    'tests/unit/test_environment_catalog.py',
-    'tests/unit/test_image_prepare.py',
-    'tests/unit/test_overlaybd_daemon_permissions.py',
-    'tests/unit/test_overlaybd_root_store.py',
-    'tests/unit/test_overlaybd_ublk_client.py',
-    'tests/unit/test_prepared_fork_concurrency.py',
-    'tests/unit/test_privileged_netns_helper.py',
-    'tests/unit/test_rollout_dialogue.py',
-    'tests/unit/test_rollout_scheduler.py',
-    'tests/unit/test_rollout_step_options.py',
-    'tests/unit/test_sandbox_directory_permissions.py',
-    'tests/unit/test_sandbox_parallel_create.py',
-    'tests/unit/test_scheduled_dsec.py',
-    'tests/unit/test_shared_service_monitor.py',
-    'tests/unit/test_shared_snapshot_layers.py',
-    'tests/unit/test_snapshot_concurrency.py',
-    'tests/unit/test_snapshot_fork.py',
-    'tests/unit/test_tb2_netns.py',
-    'tests/unit/test_tb2_network_pool.py',
-    'tests/unit/test_tb2_offline_verifier.py',
-    'tests/unit/test_tb2_task_verifier_selection.py',
-    'tests/unit/test_tb2_verifier_artifact.py',
-    'tests/unit/test_work_journal.py',
-    'tests/unit/test_work_scheduler.py',
-    'tests/unit/test_worker_evaluators.py',
-    'tests/adapters/test_counter_dsec_environment.py',
-    'tests/adapters/test_miles_dsec_agent_function.py',
-    'tests/adapters/test_miles_dsec_generate.py',
-    'tests/adapters/test_tb2_dsec_environment.py',
-    'tests/adapters/test_tb2_evidence_export.py',
-    'tests/adapters/test_tb2_verifier_command.py',
-)
+# These directories contain portable regression suites. Discovery is independent
+# of release construction; a new regression needs no parallel filename list.
+REGRESSION_DIRS = ('tests/unit', 'tests/contracts', 'tests/adapters', 'tests/packaging')
 
 TOOLS = (
-    'deploy/cluster/prepare.py', 'deploy/cluster/initialize.py',
+    'deploy/cluster/prepare.py', 'deploy/cluster/planning.py', 'deploy/cluster/configuration.py', 'deploy/cluster/initialize.py',
+    'deploy/cluster/pki.py','deploy/cluster/enroll_node.py',
+    'deploy/cluster/upgrade.py',
+    'deploy/cluster/rotate.py',
+    'deploy/cluster/nodes.example.json',
     'deploy/cluster/compose.yaml', 'deploy/cluster/Dockerfile',
     'deploy/cluster/export_hosts.py',
     '.github/workflows/ci.yml',
@@ -103,6 +51,7 @@ TOOLS = (
     'tools/verify_rollout_api.py',
     'tools/verify_rollout_restart.py',
     'tools/check_cluster_refinement.py',
+    'tools/check_security_refinement.py',
     'tools/check_concurrency_model.py',
     'tools/check_shutdown_refinement.py',
     'tools/check_native_race_refinement.py',
@@ -115,6 +64,10 @@ TOOLS = (
     'verification/ContainerNativeGate.tla', 'verification/ContainerNativeGate.cfg',
     'verification/RaceReplay.tla',
     'verification/ClusterAdmission.tla', 'verification/ClusterAdmission.cfg',
+    'verification/NodeLifecycle.tla', 'verification/NodeLifecycle.cfg',
+    'verification/NodeUpgrade.tla', 'verification/NodeUpgrade.cfg',
+    'verification/CredentialRotation.tla','verification/CredentialRotation.cfg',
+    'verification/TransportRotation.tla','verification/TransportRotation.cfg',
     'verification/NativeLifecycle.tla', 'verification/NativeLifecycle.cfg',
     'verification/ShutdownSignal.tla', 'verification/ShutdownSignal.cfg',
     'verification/ShutdownReplay.tla', 'verification/native_shutdown_probe.h',
@@ -128,9 +81,14 @@ def source_files(root):
     config = tomllib.loads((root/'pyproject.toml').read_text())
     settings = config['tool']['setuptools']
     files = {'pyproject.toml', 'guest_agent.c', 'guest_native.c', 'native/protocol.h',
-             'native/aether.c', 'native/chronus.c', 'native/files.c', 'native/http.c', '.gitignore', *DOCS, *TESTS, *TOOLS,
+             'native/aether.c', 'native/chronus.c', 'native/files.c', 'native/http.c', '.gitignore', *DOCS, *TOOLS,
              *config['project']['license-files']}
-    files.update(module+'.py' for module in settings['py-modules'])
+    module_root = Path(settings.get('package-dir', {}).get('', ''))
+    files.update(str(module_root / (module+'.py')) for module in settings['py-modules'])
+    for directory in REGRESSION_DIRS:
+        files.update(str(path.relative_to(root)) for path in (root/directory).rglob('*.py')
+                     if all(part.isidentifier() for part in
+                            path.relative_to(root/directory).with_suffix('').parts))
     for package in settings['packages']:
         parts = package.split('.')
         mappings = settings.get('package-dir', {})

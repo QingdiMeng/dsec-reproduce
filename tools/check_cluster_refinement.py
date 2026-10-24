@@ -15,20 +15,23 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT/'src'), str(ROOT)]
+sys.path[:0] = [str(ROOT/'src'),str(ROOT/'compat/python'), str(ROOT)]
 from dsec.control import iam
-from dsec.host import cluster_node
+from dsec.control import node_gateway as cluster_node
 from tests.unit import test_cluster_control as regression
 from tests.unit import test_rollout_api as rollout_regression
-from dsec.host import rollout_gateway
+from dsec.control import rollout_gateway
+from dsec.control import node_lifecycle
+from tests.unit import test_node_lifecycle as fleet_regression
+from tests.unit import test_node_upgrade as upgrade_regression
 
 CONTROLS = (
     ('quota_guard', iam, 'IAM', 'admit',
      "if not usage.plus(Quota(**record['delegated'])).fits(Quota(**record['quota'])):",
      'if False:', 'test_concurrent_admissions_never_exceed_quota_and_keep_one_target', 'QuotaBounded'),
     ('unknown_replacement', iam, 'IAM', 'admit',
-     'return old, {}\n            usage =',
-     "return dict(old, node=node), {key:dict(old, node=node)}\n            usage =",
+     'return old, {}\n            from dsec.control import node_lifecycle',
+     "return dict(old, node=node), {key:dict(old, node=node)}\n            from dsec.control import node_lifecycle",
      'test_concurrent_admissions_never_exceed_quota_and_keep_one_target', 'UniqueWritableOwner'),
     ('health_release', cluster_node, 'NodeGateway', 'reconcile',
      '# arrive. UNKNOWN/PENDING never permit quota release.\n                        continue',
@@ -121,13 +124,71 @@ def main():
             if not passed:
                 raise AssertionError('Rollout code mutation did not produce its required failure: ' + fault)
         report['rollout_tests'] = canonical_rollout.testsRun
+        canonical_fleet = run(root/'fleet-canonical',test_class=fleet_regression.NodeLifecycleTests)
+        if not canonical_fleet.wasSuccessful() or canonical_fleet.skipped:
+            raise AssertionError('Canonical fleet regressions must pass without skips')
+        fleet_controls = (
+            ('node_stale_admission', 'admit',
+             "if record['state'] not in ('ACTIVE', 'UNMANAGED') or (required and record['state'] != 'ACTIVE'):",
+             'if False:', 'test_drain_wins_against_a_controller_with_stale_active_snapshot', 'AdmissionRequiresActive'),
+            ('node_missing_held', '_transition',
+             "if action in ('maintain', 'retire', 'withdraw', 'upgrade', 'commit', 'rollback') and current['held'] != 0:",
+             'if False:', 'test_unknown_dispatch_and_unreachable_node_do_not_authorize_retirement', 'QuiescentRequiresNoWork'),
+            ('node_stale_transition', '_transition',
+             "if current['version'] != version:", 'if False:',
+             'test_empty_proof_and_version_are_both_required', 'RetiredIsFinal'),
+        )
+        for fault,method,before,after,test,invariant in fleet_controls:
+            source=Path(node_lifecycle.__file__).read_text()
+            if source.count(before)!=1:raise AssertionError('Fleet code/model boundary changed: '+fault)
+            mutated=source.replace(before,after,1)
+            if fault=='node_stale_transition':
+                gate='if state not in allowed[action]:'
+                if mutated.count(gate)!=1:raise AssertionError('Fleet transition state gate changed')
+                mutated=mutated.replace(gate,'if False:',1)
+            case=root/fault;case.mkdir();path=case/'node_lifecycle.py';path.write_text(mutated)
+            namespace=dict(node_lifecycle.__dict__);exec(compile(mutated,str(path),'exec'),namespace)
+            target=node_lifecycle if method=='admit' else node_lifecycle.NodeLifecycle
+            replacement=namespace['admit'] if method=='admit' else namespace['NodeLifecycle']._transition
+            with patch.object(target,method,replacement):
+                result=run(case/'test',test,test_class=fleet_regression.NodeLifecycleTests)
+            passed=len(result.failures)==1 and not result.errors and not result.skipped
+            report['controls'].append(dict(fault=fault,invariant=invariant,regression=test,passed=passed))
+            if not passed:raise AssertionError('Fleet guard removal did not produce the required regression failure: '+fault)
+        report['fleet_tests']=canonical_fleet.testsRun
+        upgraded=run(root/'upgrade-canonical',test_class=upgrade_regression.NodeUpgradeTests)
+        if not upgraded.wasSuccessful() or upgraded.skipped:raise AssertionError('Upgrade regressions must pass')
+        upgrade_controls=(
+            ('upgrade_unproved',"if observed != expected:",'if False:',
+             'test_rollback_requires_old_runtime_and_delayed_commit_cannot_undo_it','CompletionHasLoadedProof'),
+            ('upgrade_pending_resume',"if pending and action not in ('commit','rollback'):",'if False:',
+             'test_pending_upgrade_fences_resume_retirement_and_competing_plans','PendingBlocksAdmission'),
+        )
+        for fault,before,after,test,invariant in upgrade_controls:
+            source=Path(node_lifecycle.__file__).read_text()
+            if source.count(before)!=1:raise AssertionError('Upgrade correspondence changed: '+fault)
+            mutated=source.replace(before,after,1);case=root/fault;case.mkdir()
+            namespace=dict(node_lifecycle.__dict__);exec(compile(mutated,str(case/'node_lifecycle.py'),'exec'),namespace)
+            with patch.object(node_lifecycle.NodeLifecycle,'_transition',namespace['NodeLifecycle']._transition):
+                result=run(case/'test',test,test_class=upgrade_regression.NodeUpgradeTests)
+            passed=len(result.failures)==1 and not result.errors and not result.skipped
+            report['controls'].append(dict(fault=fault,invariant=invariant,regression=test,passed=passed))
+            if not passed:raise AssertionError('Upgrade mutation did not fail its regression: '+fault)
+        report['upgrade_tests']=upgraded.testsRun
         report['status'] = 'passed'
     finally:
-        sources = ['src/dsec/control/iam.py','src/dsec/host/cluster_node.py',
+        sources = ['src/dsec/control/iam.py','src/dsec/control/node_gateway.py','src/dsec/host/cluster_node.py',
+            'src/dsec/control/node_lifecycle.py','src/dsec/control/node_admin.py',
+            'src/dsec/host/node_directory.py','src/dsec/host/node_polling.py',
+            'src/dsec/host/cluster.py','src/dsec/contracts/cluster.py','src/dsec/rollout/episodes.py',
+            'tests/unit/test_node_lifecycle.py','verification/NodeLifecycle.tla','verification/NodeLifecycle.cfg',
+            'tests/unit/test_node_upgrade.py','verification/NodeUpgrade.tla','verification/NodeUpgrade.cfg',
+            'src/dsec/contracts/release.py','src/dsec/_release.py','src/dsec/host/releases.py','src/dsec/host/release_artifacts.py',
+            'src/dsec/host/node_transport.py','src/dsec/contracts/rpc.py',
             'src/dsec/control/cluster_api.py','src/dsec/control/watcher.py',
             'tests/unit/test_cluster_control.py','verification/ClusterAdmission.tla',
             'verification/ClusterAdmission.cfg', 'tools/check_cluster_refinement.py',
-            'src/dsec/control/rollout_api.py','src/dsec/host/rollout_gateway.py',
+            'src/dsec/control/rollout_api.py','src/dsec/control/rollout_gateway.py','src/dsec/host/rollout_gateway.py',
             'src/dsec/contracts/rollout.py','src/dsec/sdk/rollout_api.py',
             'tests/unit/test_rollout_api.py','verification/RolloutDispatch.tla','verification/RolloutDispatch.cfg']
         report['source_sha256'] = {name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in sources}

@@ -19,7 +19,7 @@ from dsec.control.iam import IAM
 from dsec.control.placement import PlacementEngine
 from dsec.control.watcher import Watcher
 from dsec.host.cluster_http import ClusterHTTPServer
-from dsec.host.cluster_node import NodeGateway, edge_request_id
+from dsec.control.node_gateway import NodeGateway, edge_request_id
 from dsec.sdk.cluster import ClusterTransport, JSONRPC
 from dsec.sdk.sandbox_transport import ServiceError
 

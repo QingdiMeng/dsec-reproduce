@@ -32,7 +32,8 @@ def permission(operation, args):
 
 class ClusterAPI:
     def __init__(self, iam, placement, nodes, *, route_key):
-        self.iam, self.placement, self.nodes = iam, placement, dict(nodes)
+        self.iam, self.placement = iam, placement
+        self.nodes = dict(nodes) if isinstance(nodes, dict) else nodes
         if not isinstance(route_key, bytes) or len(route_key) < 32:
             raise ValueError('Strong shared route key required')
         self.route_key = route_key
@@ -50,6 +51,16 @@ class ClusterAPI:
         args = envelope.get('args', {})
         if not isinstance(args, dict):
             raise ValueError('Object arguments required')
+        from dsec.control.node_admin import OPERATIONS as NODE_OPERATIONS, dispatch as administer_node
+        if operation in NODE_OPERATIONS:
+            return administer_node(self, credential, project, operation_id, operation, args)
+        if isinstance(operation,str) and operation.startswith('credential.rotation.'):
+            if project!='root':raise AuthorizationDenied('Credential rotation requires the root project')
+            from dsec.control.credential_rotation import rotate
+            action=operation.removeprefix('credential.rotation.')
+            expected={'rotation_id','new_token'} if action=='prepare' else {'rotation_id'}
+            if set(args)!=expected:raise ValueError('Explicit rotation identity required')
+            return rotate(self.iam,credential,args['rotation_id'],action,new_token=args.get('new_token'))
         if isinstance(operation, str) and operation.startswith('rollout.'):
             if envelope.get('sandbox_id') is not None or envelope.get('resource_demand') is not None:
                 raise ValueError('Rollout operations use episode identity/resources in args')
@@ -75,12 +86,22 @@ class ClusterAPI:
             return self.iam.revoke(credential, args['token'])
         self.iam.authorize(credential, project, permission(operation, args))
         if operation == 'health':
+            from dsec._release import installed_release
             return dict(protocol=PROTOCOL, protocol_features=[PROTOCOL, 'container-rpc-v1',
-                'busy-nonadmission-v1', 'node-admission-v1', ROLLOUT_FEATURE, NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_FEATURE, HTTP_FEATURE])
+                'busy-nonadmission-v1', 'node-admission-v1', 'node-upgrade-v1', ROLLOUT_FEATURE, NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_FEATURE, HTTP_FEATURE],release=installed_release())
         if operation == 'node.list':
             if args:
                 raise ValueError('Node inventory takes no arguments')
-            return {'scope':'cluster-derived-view', 'nodes':self.placement.watcher.inventory()}
+            items = self.placement.watcher.inventory()
+            if self.iam.managed_nodes:
+                from dsec.control.node_lifecycle import NodeLifecycle
+                members = {member['id']:member for member in NodeLifecycle(self.iam).records()}
+                for item in items:
+                    member = members.get(item['node_id'])
+                    item['membership'] = ({key:member[key] for key in ('state','version','held')}
+                                          if member else None)
+                    item['schedulable'] = item['schedulable'] and member is not None and member['state']=='ACTIVE'
+            return {'scope':'cluster-derived-view', 'nodes':items}
         if operation == 'node_status':
             return {'scope':'cluster-derived-view', 'nodes':{
                 name:asdict(view) for name, view in self.placement.watcher.snapshot().items()}}

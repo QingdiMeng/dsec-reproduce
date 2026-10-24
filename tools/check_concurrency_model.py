@@ -18,6 +18,19 @@ TLC_VERSION = "1.7.4"
 TLC_URL = f"https://github.com/tlaplus/tlaplus/releases/download/v{TLC_VERSION}/tla2tools.jar"
 TLC_SHA256 = "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 CASES = (
+    ("credential-rotation", "CredentialRotation", "none", None),
+    ("credential-unproved", "CredentialRotation", "unproved", "CompletionHasNewProof"),
+    ("credential-stale-cancel", "CredentialRotation", "stale_cancel", "NoCredentialLockout"),
+    ("transport-rotation", "TransportRotation", "none", None),
+    ("transport-stale-peer", "TransportRotation", "stale_peer", "TrustedAtAcceptance"),
+    ("transport-stale-publication", "TransportRotation", "stale_publication", "PublicationNeverRegresses"),
+    ("node-upgrade", "NodeUpgrade", "none", None),
+    ("node-upgrade-unproved", "NodeUpgrade", "unproved", "CompletionHasLoadedProof"),
+    ("node-upgrade-pending-resume", "NodeUpgrade", "pending_resume", "PendingBlocksAdmission"),
+    ("node-lifecycle", "NodeLifecycle", "none", None),
+    ("node-stale-admission", "NodeLifecycle", "stale_admit", "AdmissionRequiresActive"),
+    ("node-missing-held", "NodeLifecycle", "missing_held", "QuiescentRequiresNoWork"),
+    ("node-stale-transition", "NodeLifecycle", "stale_transition", "RetiredIsFinal"),
     ("rollout-dispatch", "RolloutDispatch", "none", None),
     ("rollout-create-replay", "RolloutDispatch", "replay", "NoCreateReplay"),
     ("rollout-unproved-release", "RolloutDispatch", "unproved_release", "ReleasedHasCleanupProof"),

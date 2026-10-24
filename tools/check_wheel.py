@@ -16,7 +16,8 @@ def main() -> None:
     config = tomllib.loads(args.project.read_text())
     settings = config['tool']['setuptools']
     allowed = {name + ".py" for name in settings.get("py-modules", [])}
-    source_paths = {name: name for name in allowed}
+    module_root = Path(settings.get('package-dir', {}).get('', ''))
+    source_paths = {name: str(module_root / name) for name in allowed}
     data = set()
     root = args.project.resolve().parent
     packages = settings.get('packages', [])

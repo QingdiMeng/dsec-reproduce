@@ -37,7 +37,7 @@ packages = [
     "dsec.runtime.backends", "dsec.runtime.sessions", "dsec.control", "dsec.host", "dsec.compat",
     "dsec_adapters", "dsec_image",
 ]
-package-dir = {dsec = "src/dsec"}
+package-dir = {"" = "compat/python", dsec = "src/dsec", dsec_adapters = "src/dsec_adapters", dsec_image = "src/dsec_image"}
 py-modules = [
     "admission_guard", "artifact_publisher", "artifact_integrity", "container_backend",
     "container_lifecycle_journal", "container_runtime_agent", "container_supervisord",

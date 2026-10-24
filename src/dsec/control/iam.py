@@ -35,8 +35,11 @@ class Snapshot:
 
 
 class IAM:
-    def __init__(self, store):
+    def __init__(self, store, *, managed_nodes=False):
         self.store = store
+        if type(managed_nodes) is not bool:
+            raise ValueError('managed_nodes must be boolean')
+        self.managed_nodes = managed_nodes
 
     def _change(self, function, *, action='coordination.write', actor=None):
         audit_key = 'audit/' + uuid.uuid4().hex
@@ -213,13 +216,16 @@ class IAM:
                 # The existing target wins, even if another API chose a different
                 # candidate. Losing a response never authorizes re-placement.
                 return old, {}
+            from dsec.control import node_lifecycle
+            member = node_lifecycle.admit(snapshot, node, required=self.managed_nodes)
             usage = Quota(**record['usage']).plus(demand)
             if not usage.plus(Quota(**record['delegated'])).fits(Quota(**record['quota'])):
                 raise QuotaExceeded('Project quota exceeded')
             receipt = dict(project=project, request_id=operation_id, principal=principal,
                 digest=digest, node=node, backend=backend, demand=asdict(demand),
-                state='ADMITTED', sandbox_id=None, args=args)
-            return receipt, {key:receipt, 'projects/' + project:dict(record, usage=asdict(usage))}
+                state='ADMITTED', sandbox_id=None, args=args, node_accounted=True)
+            return receipt, {key:receipt, 'projects/' + project:dict(record, usage=asdict(usage)),
+                             node_lifecycle.PREFIX + node:member}
         return self._change(change, action='sandbox.admit')
 
     def lookup(self, project, operation_id):
@@ -279,5 +285,9 @@ class IAM:
             record = snapshot.read('projects/' + project)
             usage = Quota(**record['usage']).minus(Quota(**old['demand']))
             result = dict(old, state='RELEASED')
-            return result, {key:result, 'projects/' + project:dict(record, usage=asdict(usage))}
+            writes = {key:result, 'projects/' + project:dict(record, usage=asdict(usage))}
+            if old.get('node_accounted'):
+                from dsec.control import node_lifecycle
+                writes[node_lifecycle.PREFIX + node] = node_lifecycle.release(snapshot, node)
+            return result, writes
         return self._change(change, action='sandbox.release', actor='node:' + node)

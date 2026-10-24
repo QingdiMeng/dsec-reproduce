@@ -39,6 +39,14 @@ def request_id(value):
     return value
 
 
+def node_credential(route_key, node):
+    """Internal gateway credential; mTLS remains independently mandatory."""
+    identifier(node)
+    if not isinstance(route_key, bytes) or len(route_key) < 32:
+        raise ValueError('Strong cluster key required')
+    return hmac.new(route_key, ('dsec-node-auth-v1:'+node).encode(), hashlib.sha256).hexdigest()
+
+
 @dataclass(frozen=True)
 class Quota:
     concurrency: int

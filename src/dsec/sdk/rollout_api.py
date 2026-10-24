@@ -14,6 +14,7 @@ from dsec.sdk.client import DSecClient
 from dsec.sdk.rollout_transport import RolloutOutcomeUnknown, RolloutServiceError
 from dsec.sdk.sandbox_transport import RequestOutcomeUnknown, ServiceError
 from dsec.sdk.scheduled import ScheduledDSecClient, ScheduledOutcomeUnknown, ScheduledSandbox
+from dsec._credentials import FileCredential
 
 
 def api_configuration(path):
@@ -21,20 +22,14 @@ def api_configuration(path):
     path = Path(path).resolve(strict=True)
     value = json.loads(path.read_text())
     if (not isinstance(value, dict) or set(value) - {
-            'endpoints','project','token_file','ca_file','cert_file','key_file'}
+            'endpoints','project','token_file','ca_file','cert_file','key_file','security_file'}
             or not {'endpoints','project','token_file'} <= set(value)):
         raise ValueError('API config requires endpoints, project and token_file')
-    for name in ('token_file','ca_file','cert_file','key_file'):
+    for name in ('token_file','ca_file','cert_file','key_file','security_file'):
         if value.get(name) is not None:
             target = Path(value[name])
             value[name] = str(target if target.is_absolute() else path.parent/target)
-    fd = os.open(value.pop('token_file'), os.O_RDONLY | os.O_NOFOLLOW)
-    with os.fdopen(fd) as stream:
-        info = os.fstat(stream.fileno())
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-                or info.st_mode & 0o077 or not 32 <= info.st_size <= 4096):
-            raise ValueError('API token file must be private and owned by this client user')
-        value['token'] = stream.read().strip()
+    value['token'] = FileCredential(value.pop('token_file'))
     return value
 
 
@@ -65,12 +60,12 @@ class RolloutAPITransport:
 class RolloutAPIClient(ScheduledDSecClient):
     """Application entry through API Server; no worker socket or local fallback."""
     def __init__(self, endpoints, *, token, project, ca_file=None, cert_file=None,
-                 key_file=None, create_timeout_s=1810):
+                 key_file=None, security_file=None, create_timeout_s=1810):
         if (isinstance(create_timeout_s, bool) or not isinstance(create_timeout_s,(int,float))
                 or not math.isfinite(create_timeout_s) or not 0 < create_timeout_s <= 1810):
             raise ValueError('create_timeout_s must be in (0, 1810]')
         client = DSecClient(endpoints, token=token, project=project, ca_file=ca_file,
-                            cert_file=cert_file, key_file=key_file)
+                            cert_file=cert_file, key_file=key_file,security_file=security_file)
         self._transport = RolloutAPITransport(client._transport)
         self._create_timeout_s = create_timeout_s
         self._opened = False

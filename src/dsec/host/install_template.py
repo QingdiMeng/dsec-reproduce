@@ -1,10 +1,34 @@
 """Template for a reviewed, standalone root installer; never imports runtime code."""
 
 INSTALLER = '''#!/usr/bin/python3
-import argparse, hashlib, json, os, pathlib, stat, subprocess, tempfile
+import argparse, grp, hashlib, json, os, pathlib, pwd, stat, subprocess, sys, tempfile
 
 SPECS = __SPECS__
 STATE = __STATE__
+GUARD_SOURCE = __GUARD_SOURCE__
+RUNTIME_IDENTITY = __RUNTIME_IDENTITY__
+
+def check_node_platform():
+    namespace = {}
+    exec(compile(GUARD_SOURCE, 'embedded-node-probe.py', 'exec'), namespace)
+    namespace['require_eligible'](namespace['observe'](administrator=True))
+    user, uid, gid = RUNTIME_IDENTITY
+    account = pwd.getpwnam(user)
+    if (account.pw_uid != uid or account.pw_uid <= 0 or grp.getgrnam('kvm').gr_gid != gid
+            or gid not in os.getgrouplist(user, account.pw_gid)):
+        raise RuntimeError('Reviewed runtime account or kvm group membership changed')
+    # Execute pinned standard-library-only code after dropping to the real
+    # service identity. Root access alone does not prove runtime device access.
+    code = GUARD_SOURCE + '\\nimport json, pwd\\n' + (
+        'account = pwd.getpwnam(%r)\\n'
+        'if account.pw_uid != %d or %d not in os.getgrouplist(account.pw_name, account.pw_gid):\\n'
+        '    raise RuntimeError("Reviewed runtime identity changed")\\n'
+        'os.initgroups(account.pw_name, account.pw_gid)\\n'
+        'os.setgid(account.pw_gid)\\nos.setuid(account.pw_uid)\\n'
+        'report = observe()\\nprint(json.dumps(report))\\nrequire_eligible(report)\\n') % (user, uid, gid)
+    result = subprocess.run([sys.executable, '-I', '-c', code], capture_output=True, text=True, timeout=20)
+    if result.returncode:
+        raise RuntimeError('Runtime account lacks Node prerequisites; run preflight as that account')
 
 def directory(path, mode=0o755):
     path = pathlib.Path(path)
@@ -22,6 +46,7 @@ def main():
     args = parser.parse_args()
     if os.geteuid() != 0:
         raise RuntimeError('Administrator execution is required')
+    check_node_platform()
     root = pathlib.Path(__file__).resolve().parent
     blobs = {}
     for source, target, mode, expected in SPECS:

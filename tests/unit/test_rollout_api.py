@@ -19,7 +19,8 @@ from dsec.control.cluster_api import ClusterAPI
 from dsec.control.iam import IAM
 from dsec.control.placement import PlacementEngine
 from dsec.control.watcher import Watcher
-from dsec.host.cluster_node import NodeGateway, RemoteNode
+from dsec.control.node_gateway import NodeGateway
+from dsec.host.node_transport import NodeRPC, RemoteNode
 from dsec.host.cluster_http import ClusterHTTPServer
 from dsec.rollout.worker import RolloutWorker, error_response
 from dsec.sdk import RolloutAPIClient, DSecClient, ScheduledOutcomeUnknown
@@ -301,6 +302,7 @@ class RolloutAPITests(unittest.IsolatedAsyncioTestCase):
         subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes',
             '-keyout',str(key),'-out',str(cert),'-days','1','-subj','/CN=localhost',
             '-addext','subjectAltName=DNS:localhost,IP:127.0.0.1'],check=True,capture_output=True)
+        key.chmod(0o600)
         servers=[]
         def server(dispatch, node=False):
             options = dict(cert_file=str(cert),key_file=str(key))
@@ -313,7 +315,7 @@ class RolloutAPITests(unittest.IsolatedAsyncioTestCase):
                 value.shutdown();thread.join(5);value.server_close()
                 self.assertFalse(thread.is_alive())
         self.addCleanup(cleanup)
-        remote=RemoteNode(JSONRPC([server(self.node.dispatch,True)],ca_file=str(cert),
+        remote=RemoteNode(JSONRPC([server(NodeRPC(self.node).dispatch,True)],ca_file=str(cert),
             cert_file=str(cert),key_file=str(key)),token='internal-'+'b'*48,route_key=self.key)
         first=ClusterAPI(self.iam,self.api.placement,{'n1':remote},route_key=self.key)
         second=ClusterAPI(IAM(self.store),self.api.placement,{'n1':remote},route_key=self.key)

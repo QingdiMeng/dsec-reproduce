@@ -70,6 +70,172 @@ class ModuleBoundaryTests(unittest.TestCase):
         scripts = tomllib.loads((ROOT / 'pyproject.toml').read_text())['project']['scripts']
         self.assertEqual(scripts, BASELINE['entry_points'])
 
+    def test_repository_owns_python_sources_in_packages_or_compatibility_directory(self):
+        settings = tomllib.loads((ROOT / 'pyproject.toml').read_text())['tool']['setuptools']
+        self.assertEqual(list(ROOT.glob('*.py')), [],
+                         'Place new implementation in src/, not at the repository root')
+        self.assertEqual(settings['package-dir'][''], 'compat/python')
+        for package in ('dsec', 'dsec_adapters', 'dsec_image'):
+            directory = ROOT / settings['package-dir'][package]
+            self.assertTrue(directory.is_relative_to(ROOT / 'src'))
+            self.assertTrue((directory / '__init__.py').is_file())
+        for module in settings['py-modules']:
+            self.assertTrue((ROOT / 'compat/python' / (module + '.py')).is_file())
+
+    def test_episode_components_keep_legacy_transport_and_task_setup_at_the_boundary(self):
+        from dsec.rollout.episode import Episode
+        from dsec.rollout.episodes import EpisodeService
+        from dsec.rollout.store import EpisodeStore
+        from dsec.rollout.worker import Rollout, RolloutWorker, RolloutStore
+        self.assertIs(Rollout, Episode)
+        self.assertIs(RolloutStore, EpisodeStore)
+        for method in ('dispatch', 'initialize', '_reconcile', '_step', '_plugin_evaluate'):
+            self.assertIs(getattr(RolloutWorker, method), getattr(EpisodeService, method))
+        for module in ('episode', 'episodes', 'actions', 'dialogue', 'evaluation', 'store'):
+            source = ROOT / 'src/dsec/rollout' / (module + '.py')
+            for node in ast.walk(ast.parse(source.read_text())):
+                names = ([n.name for n in node.names] if isinstance(node, ast.Import)
+                         else [node.module or ''] if isinstance(node, ast.ImportFrom) else [])
+                for name in names:
+                    self.assertFalse(name.startswith(('dsec.compat', 'dsec_adapters',
+                        'dsec_tb21_case', 'dsec_mbpp_case', 'dsec.rollout.worker',
+                        'dsec.rollout.server')), f'{source.name} imports {name}')
+        code = """
+import importlib.abc, sys
+class NoApplicationsOrLegacySetup(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.startswith(('dsec.compat', 'dsec_adapters', 'dsec_tb21_case', 'dsec_mbpp_case')):
+            raise ModuleNotFoundError('domain service must be independent', name=fullname)
+sys.meta_path.insert(0, NoApplicationsOrLegacySetup())
+from dsec.rollout.episodes import EpisodeService
+EpisodeService(None)
+"""
+        subprocess.run([sys.executable, '-c', code], cwd=ROOT, check=True, capture_output=True)
+
+    def test_action_evaluation_and_transport_components_cannot_write_episode_state(self):
+        for module in ('actions', 'evaluation', 'dialogue', 'server'):
+            path = ROOT / 'src/dsec/rollout' / (module + '.py')
+            for node in ast.walk(ast.parse(path.read_text())):
+                if (isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store)
+                        and isinstance(node.value, ast.Name)
+                        and node.value.id in ('rollout', 'episode')):
+                    self.fail(f'{path.name} mutates {node.value.id}.{node.attr}; '
+                              'state changes belong to EpisodeService')
+
+    def test_host_configuration_and_composition_do_not_depend_on_execution_or_cli(self):
+        for module, allowed in (
+                ('configuration', ('dsec.contracts.',)),
+                ('composition', ('dsec.host.configuration',))):
+            path = ROOT / 'src/dsec/host' / (module + '.py')
+            for node in ast.walk(ast.parse(path.read_text())):
+                names = ([n.name for n in node.names] if isinstance(node, ast.Import)
+                         else [node.module or ''] if isinstance(node, ast.ImportFrom) else [])
+                for name in names:
+                    self.assertTrue(name.split('.')[0] in sys.stdlib_module_names or
+                                    name.startswith(allowed), f'{path.name} imports {name}')
+        from dsec.host import cli, configuration, composition, services, deployment
+        from dsec.contracts.network import validate_proxy_bypass_hosts
+        from dsec.runtime.isolation import proxy
+        self.assertIs(proxy.validate_proxy_bypass_hosts, validate_proxy_bypass_hosts)
+        for name, module in (('load_config', configuration),
+                             ('sandbox_arguments', composition), ('worker_arguments', composition),
+                             ('run_service', services), ('wait_ready', services),
+                             ('render_units', deployment), ('render_privileges', deployment)):
+            self.assertIs(getattr(cli, name), getattr(module, name))
+        code = """
+import importlib.abc, sys
+class NoExecution(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.startswith(('dsec.runtime', 'dsec.sdk', 'dsec.rollout', 'dsec.control',
+                                'dsec.compat', 'dsec_adapters', 'dsec_tb21_case', 'dsec_mbpp_case')):
+            raise ModuleNotFoundError('configuration/planning cannot require execution', name=fullname)
+sys.meta_path.insert(0, NoExecution())
+from dsec.host.configuration import normalize_config, initial_configuration
+from dsec.host.composition import plan_service
+"""
+        subprocess.run([sys.executable, '-c', code], cwd=ROOT, check=True, capture_output=True)
+
+    def test_host_components_do_not_import_cli_and_cli_does_not_apply_effects(self):
+        forbidden = ('dsec.host.cli', 'dsec_host')
+        for path in (ROOT / 'src/dsec').rglob('*.py'):
+            if not path.stem.isidentifier() or path == ROOT/'src/dsec/host/cli.py':
+                continue
+            for node in ast.walk(ast.parse(path.read_text())):
+                names = ([n.name for n in node.names] if isinstance(node, ast.Import)
+                         else [node.module or ''] if isinstance(node, ast.ImportFrom) else [])
+                for name in names:
+                    self.assertFalse(name.startswith(forbidden),
+                                     f'{path.relative_to(ROOT)} imports {name}')
+        effects = {'open', 'mkdir', 'read_text', 'read_bytes', 'write_text', 'write_bytes',
+                   'chmod', 'chown', 'execv', 'Popen'}
+        for node in ast.walk(ast.parse((ROOT/'src/dsec/host/cli.py').read_text())):
+            if isinstance(node, ast.Call):
+                called = (node.func.attr if isinstance(node.func, ast.Attribute)
+                          else node.func.id if isinstance(node.func, ast.Name) else '')
+                self.assertNotIn(called, effects, 'CLI must delegate host effects')
+
+    def test_cluster_decisions_do_not_import_host_sdk_or_transport_implementations(self):
+        for module in ('cluster_api', 'cluster_inventory', 'rollout_api', 'iam',
+                       'placement', 'watcher', 'node_gateway', 'rollout_gateway'):
+            path = ROOT / 'src/dsec/control' / (module + '.py')
+            for node in ast.walk(ast.parse(path.read_text())):
+                names = ([n.name for n in node.names] if isinstance(node, ast.Import)
+                         else [node.module or ''] if isinstance(node, ast.ImportFrom) else [])
+                for name in names:
+                    self.assertFalse(name.startswith(('dsec.host', 'dsec.sdk', 'dsec.runtime',
+                        'dsec.control.coordination', 'dsec.control.etcd_auth', 'socket',
+                        'http', 'urllib', 'ssl', 'dsec_adapters', 'dsec.compat')),
+                        f'{path.name} imports transport/composition implementation {name}')
+        # Domain construction works even when deployment and SDKs are absent.
+        code = """
+import importlib.abc, sys
+class NoTransport(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.startswith(('dsec.host', 'dsec.sdk', 'dsec.runtime',
+            'dsec.control.coordination', 'dsec.control.etcd_auth')):
+            raise ModuleNotFoundError('domain must depend on injected interfaces', name=fullname)
+sys.meta_path.insert(0, NoTransport())
+from dsec.control.cluster_api import ClusterAPI
+from dsec.control.iam import IAM
+from dsec.control.placement import PlacementEngine
+from dsec.control.watcher import Watcher
+from dsec.control.node_gateway import NodeGateway
+from dsec.control.rollout_gateway import RolloutGateway
+ClusterAPI(IAM(None), PlacementEngine(Watcher({})), {}, route_key=b'k'*32)
+NodeGateway('n1', None, IAM(None), route_key=b'k'*32, boot_id='boot', environments=())
+"""
+        subprocess.run([sys.executable, '-c', code], cwd=ROOT, check=True, capture_output=True)
+        for module in ('node_transport', 'cluster_http'):
+            source = ROOT/'src/dsec/host'/(module + '.py')
+            for node in ast.walk(ast.parse(source.read_text())):
+                names = ([n.name for n in node.names] if isinstance(node, ast.Import)
+                         else [node.module or ''] if isinstance(node, ast.ImportFrom) else [])
+                for name in names:
+                    self.assertFalse(name.startswith(('dsec.control', 'dsec.runtime')),
+                                     f'{source.name} must use injected dispatch, not own decisions')
+
+    def test_legacy_cluster_imports_delegate_and_share_exception_identities(self):
+        from dsec.control import node_gateway, rollout_gateway
+        from dsec.host import cluster_node, node_transport
+        from dsec.contracts import rpc
+        from dsec.sdk import sandbox_transport, rollout_transport
+        self.assertIs(importlib.import_module('dsec.host.rollout_gateway'), rollout_gateway)
+        self.assertIs(cluster_node.RemoteNode, node_transport.RemoteNode)
+        self.assertIs(cluster_node.edge_request_id, node_gateway.edge_request_id)
+        for name in ('create', 'query_create', 'call', 'health', 'reconcile',
+                     '_admission', 'create_rollout', 'call_rollout'):
+            self.assertIs(getattr(cluster_node.NodeGateway, name), getattr(node_gateway.NodeGateway, name))
+        self.assertFalse(hasattr(node_gateway.NodeGateway, 'dispatch'))
+        legacy = cluster_node.NodeGateway('n1', None, None, route_key=b'k'*32,
+            boot_id='boot', environments=())
+        with patch.object(node_transport.NodeRPC, 'dispatch', return_value={'ok': True}) as dispatch:
+            self.assertEqual(legacy.dispatch('token', {'operation': 'node_probe'}), {'ok': True})
+            dispatch.assert_called_once_with('token', {'operation': 'node_probe'})
+        for module, names in ((sandbox_transport, ('ServiceError',)),
+                              (rollout_transport, ('RolloutServiceError', 'RolloutOutcomeUnknown'))):
+            for name in names:
+                self.assertIs(getattr(module, name), getattr(rpc, name))
+
     def test_existing_request_identity_and_pending_recovery(self):
         self.assertEqual(sorted(MUTATING), BASELINE['mutating_operations'])
         for sample in BASELINE['requests']:
@@ -188,11 +354,11 @@ class ModuleBoundaryTests(unittest.TestCase):
     def test_task_implementation_and_data_are_only_in_optional_application(self):
         for name in ('tb2_dsec_environment','tb2_microvm_env','tb2_task_runtime',
                      'tb2_verifier_command','tb2_offline_verifier'):
-            source = (ROOT/'dsec_adapters'/f'{name}.py').read_text()
+            source = (ROOT/'src/dsec_adapters'/f'{name}.py').read_text()
             self.assertIn('sys.modules[__name__] = require_tb21', source)
             self.assertFalse(any(isinstance(node, (ast.ClassDef, ast.FunctionDef))
                                  for node in ast.walk(ast.parse(source))))
-        self.assertEqual(list((ROOT/'dsec_adapters').glob('tb2*.json')), [])
+        self.assertEqual(list((ROOT/'src/dsec_adapters').glob('tb2*.json')), [])
         for filename in ('local_api.py','environments.py'):
             source = (ROOT/'src/dsec/control'/filename).read_text()
             self.assertNotIn('task_toml_sha256', source)
@@ -202,7 +368,7 @@ class ModuleBoundaryTests(unittest.TestCase):
     def test_privileged_and_guest_agents_remain_standalone_sources(self):
         # These sources are embedded into a root-owned helper or guest image.
         # They must not require an installed DSec Python package in that context.
-        for relative in ('host/privileged_helper.py', 'runtime/backends/container_agent.py'):
+        for relative in ('host/privileged_helper.py', 'host/node_probe.py', 'runtime/backends/container_agent.py'):
             source = ROOT / 'src' / 'dsec' / relative
             for node in ast.walk(ast.parse(source.read_text())):
                 names = ([n.name for n in node.names] if isinstance(node, ast.Import)
@@ -223,10 +389,20 @@ class ModuleBoundaryTests(unittest.TestCase):
                             continue
                         allowed = (name.startswith('dsec.contracts.') or
                                    (layer != 'contracts' and (
-                                    (layer == 'sdk' and name.startswith('dsec.sdk.')) or
+                                    (layer == 'sdk' and (name.startswith('dsec.sdk.') or name in
+                                        ('dsec._credentials','dsec._security_files','dsec._tls'))) or
                                     (layer == 'storage' and
                                      (name.startswith('dsec.storage.') or name == 'dsec._persistence')))))
                         self.assertTrue(allowed, f'{path.relative_to(ROOT)} imports {name}')
+
+    def test_shared_security_primitives_have_no_host_runtime_or_control_dependencies(self):
+        for filename in ('_credentials.py','_security_files.py','_tls.py'):
+            for node in ast.walk(ast.parse((ROOT/'src/dsec'/filename).read_text())):
+                names=([n.name for n in node.names] if isinstance(node,ast.Import)
+                       else [node.module or ''] if isinstance(node,ast.ImportFrom) else [])
+                for name in names:
+                    self.assertTrue(name=='__future__' or name.split('.')[0] in sys.stdlib_module_names or
+                        name.startswith('dsec.contracts.') or name=='dsec._security_files',name)
 
 
 if __name__ == '__main__':

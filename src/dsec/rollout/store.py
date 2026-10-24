@@ -1,4 +1,4 @@
-"""Small fsync-backed rollout journal for the single-host worker prototype."""
+"""Exclusive fsync-backed episode records; version-1 wire identity is preserved."""
 
 import json
 import os
@@ -8,7 +8,7 @@ import uuid
 import fcntl
 
 
-class RolloutStore:
+class EpisodeStore:
     def __init__(self, root):
         self.root = Path(root).resolve()
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -74,3 +74,7 @@ class RolloutStore:
             os.fsync(fd)
         finally:
             os.close(fd)
+
+
+# Historical import identity, not another journal implementation.
+RolloutStore = EpisodeStore

@@ -2,7 +2,7 @@
 
 `AgentEnvironment` 是任务与训练框架之间的边界，定义在
 [dsec.rollout.environment](../../src/dsec/rollout/environment.py)，旧
-[agent_environment.py](../../agent_environment.py) 保留兼容入口。它不替代沙箱 SDK，也不依赖
+[agent_environment.py](../../src/dsec/rollout/environment.py) 保留兼容入口。它不替代沙箱 SDK，也不依赖
 OpenEnv 服务。
 
 ## 职责
@@ -160,10 +160,10 @@ ID，附着并对账；不得新建 ID 重放可能已经生效的副作用。�
 
 ## 实现与验证
 
-- [通用计数任务](../../dsec_adapters/counter_dsec_environment.py)
-- [TB2.1 任务插件](../../dsec_adapters/tb2_dsec_environment.py)
-- [任务注册表](../../dsec_adapters/dsec_task_registry.py)
-- [Miles agent 适配器](../../dsec_adapters/miles_dsec_agent_function.py)
+- [通用计数任务](../../src/dsec_adapters/counter_dsec_environment.py)
+- [TB2.1 任务插件](../../src/dsec_adapters/tb2_dsec_environment.py)
+- [任务注册表](../../src/dsec_adapters/dsec_task_registry.py)
+- [Miles agent 适配器](../../src/dsec_adapters/miles_dsec_agent_function.py)
 - [接口回归](../../tests/unit/test_agent_environment.py)
 
 当前实现使用单机 Unix socket。生命周期与论文的 libdsec 思路相近，但本 agent

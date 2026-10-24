@@ -6,6 +6,7 @@ Never copy the master private directory to every host.
 """
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -13,14 +14,27 @@ import shutil
 import subprocess
 
 if __package__:
-    from .prepare import topology_file,private_json
+    from .planning import NAME, topology_file
+    from .prepare import private_json
 else:
-    from prepare import topology_file,private_json
+    from planning import NAME, topology_file
+    from prepare import private_json
 
 
 def export(root,out,docker='docker'):
     root=root.resolve(strict=True)
     topology=topology_file(root/'topology.json')
+    deployment=json.loads((root/'deployment.json').read_text())
+    batch = deployment.get('node_layout') == 'batch-v1'
+    nodes = deployment.get('nodes', {}) if batch else {}
+    if batch and (not isinstance(nodes, dict) or not nodes):
+        raise ValueError('Prepared batch deployment requires Nodes')
+    # Only generated Node paths may be copied, never arbitrary manifest paths.
+    for identity,node in nodes.items():
+        if not NAME.fullmatch(identity) or node['export_directory'] != 'nodes/'+identity:
+            raise ValueError('Invalid prepared Node export identity/path')
+        if str(ipaddress.IPv4Address(node['address'])) != node['address']:
+            raise ValueError('Invalid prepared Node address')
     result=subprocess.run([docker,'compose','-f',str(root/'compose.yaml'),'--env-file',str(root/'.env'),
                            'config','--format','json'],cwd=root,capture_output=True,text=True)
     if result.returncode:raise RuntimeError('Compose template render failed; no services were started')
@@ -33,6 +47,11 @@ def export(root,out,docker='docker'):
             for member in topology[kind]:hosts.setdefault(member['address'],dict(etcd=[],controllers=[]))
         for kind in ('etcd','controllers'):
             for index,member in enumerate(topology[kind],1):hosts[member['address']][kind].append(index)
+        if batch:
+            for roles in hosts.values():
+                roles['nodes']=[]
+            for identity,node in nodes.items():
+                hosts.setdefault(node['address'],dict(etcd=[],controllers=[],nodes=[]))['nodes'].append(identity)
         peers=','.join(f"etcd{n}=https://{m['address']}:{m['peer_port']}" for n,m in enumerate(topology['etcd'],1))
         bootstrap_host=topology['controllers'][0]['address']
         for address,roles in hosts.items():
@@ -75,17 +94,23 @@ def export(root,out,docker='docker'):
                 # only exported to the designated administrator host.
                 if address==bootstrap_host:
                     copytree('secrets/initialize','secrets/initialize')
-                    (target/'node/secrets').mkdir(mode=0o700,parents=True)
+                    if not batch:
+                        (target/'node/secrets').mkdir(mode=0o700,parents=True)
                     service=template['services']['initialize'];service.pop('depends_on',None)
                     member=topology['controllers'][0];service['user']=f"{member['uid']}:{member['gid']}"
                     service['build']['context']='./image'
                     service['volumes']=[dict(type='bind',source='./config',target='/config',read_only=True),
                         dict(type='bind',source='./secrets/initialize',target='/initialize',read_only=True),
-                        dict(type='bind',source='./secrets/controllers',target='/secrets'),
-                        dict(type='bind',source='./node/secrets',target='/node-secrets')]
+                        dict(type='bind',source='./secrets/controllers',target='/secrets')]
+                    if not batch:
+                        service['volumes'].append(dict(type='bind',source='./node/secrets',target='/node-secrets'))
                     services['initialize']=service
-            private_json(target/'compose.yaml',dict(name=template['name'],services=services,volumes=volumes))
+            for identity in roles.get('nodes', []):
+                copytree('nodes/'+identity,'nodes/'+identity)
+            if services:
+                private_json(target/'compose.yaml',dict(name=template['name'],services=services,volumes=volumes))
             private_json(target/'host.json',dict(address=address,roles=roles,
+                node_destinations={identity:nodes[identity]['directory'] for identity in roles.get('nodes', [])},
                 administrator_bootstrap=address==bootstrap_host,
                 exporter_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                 source_deployment_sha256=hashlib.sha256((root/'deployment.json').read_bytes()).hexdigest()))

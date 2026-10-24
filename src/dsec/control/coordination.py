@@ -11,6 +11,7 @@ import urllib.parse
 import urllib.request
 
 from dsec.contracts.cluster import CoordinationUnavailable
+from dsec._tls import TLSFiles, ReloadingOpener
 
 
 def encode(value):
@@ -27,7 +28,7 @@ class Record:
 class EtcdStore:
     def __init__(self, endpoints, *, prefix='/dsec/v1/', ca_file=None,
                  cert_file=None, key_file=None, token=None, timeout=5,
-                 allow_loopback_http=False, authentication=None):
+                 allow_loopback_http=False, authentication=None, security_file=None):
         self.endpoints = tuple(endpoint.rstrip('/') for endpoint in endpoints)
         if not self.endpoints or not prefix.startswith('/') or not prefix.endswith('/'):
             raise ValueError('Explicit endpoints and isolated etcd prefix required')
@@ -43,28 +44,19 @@ class EtcdStore:
         if isinstance(timeout, bool) or not math.isfinite(timeout) or not 0 < timeout <= 60:
             raise ValueError('Finite etcd timeout in (0, 60] required')
         self.endpoint_lock, self.preferred = threading.Lock(), 0
-        self.context = ssl.create_default_context(cafile=ca_file)
-        if bool(cert_file) != bool(key_file):
-            raise ValueError('Both TLS client certificate and key required')
-        if cert_file:
-            self.context.load_cert_chain(cert_file, key_file)
-        # Do not inherit application proxy configuration or follow redirects
-        # carrying a coordination credential to another authority.
-        class NoRedirect(urllib.request.HTTPRedirectHandler):
-            def redirect_request(self, *args, **kwargs):
-                return None
-        self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
-            urllib.request.HTTPSHandler(context=self.context), NoRedirect())
+        tls=TLSFiles(ca_file=ca_file,cert_file=cert_file,key_file=key_file,security_file=security_file)
+        self.context=tls.snapshot().context
+        self.opener=ReloadingOpener(tls)
         self.credential = None
         if authentication is not None:
             from dsec.control.etcd_auth import EtcdCredential
             if not isinstance(authentication,dict) or set(authentication)-{
-                    'username','password_file','renew_before_seconds','retry_seconds'}:
+                    'username','password_file','identity_file','renew_before_seconds','retry_seconds'}:
                 raise ValueError('Invalid etcd authentication configuration')
             self.credential = EtcdCredential(self.endpoints,self.opener,token=token,
                                             timeout=timeout,**authentication)
 
-    def _rpc(self, path, payload):
+    def _rpc(self, path, payload, *, retry_unknown=True):
         data = json.dumps(payload, separators=(',', ':')).encode()
         with self.endpoint_lock:
             preferred = self.preferred
@@ -86,21 +78,27 @@ class EtcdStore:
                         self.preferred = index
                     return result
                 except urllib.error.HTTPError as exc:
-                    if exc.code == 401 and self.credential and auth_attempt == 0:
+                    if exc.code in (400,401) and self.credential and auth_attempt == 0:
                         try:
-                            rejected = json.loads(exc.read(65536)).get('code') == 16
+                            error=json.loads(exc.read(65536))
+                            rejected = ((exc.code==401 and error.get('code')==16) or
+                                (exc.code==400 and error.get('code')==3 and
+                                 error.get('message')=='etcdserver: revision of auth store is old'))
                         except (ValueError,AttributeError):
                             rejected = False
                         if rejected:
-                            # An explicit UNAUTHENTICATED rejection proves this
-                            # request had no authorized effects. Lost/5xx replies
-                            # never use this authentication resend path.
+                            # Both exact etcd auth rejections precede effects:
+                            # invalid token or stale auth-store revision. Other
+                            # code-3 validation errors, denied permissions and
+                            # unknown replies never use this resend path.
                             self.credential.get(rejected=token)
                             continue
                     if exc.code not in (429, 500, 502, 503, 504):
                         raise CoordinationUnavailable('etcd authorization or request rejected') from None
+                    if not retry_unknown:raise CoordinationUnavailable('etcd administration reply unknown; inspect before retrying') from None
                     break
                 except (urllib.error.URLError, OSError, http.client.HTTPException, json.JSONDecodeError):
+                    if not retry_unknown:raise CoordinationUnavailable('etcd administration outcome unknown; mutation not retried') from None
                     break
         # Repeating a conditional transaction can report false after a lost
         # successful response. Callers always reconcile by reading identities.

@@ -1,0 +1,64 @@
+{
+  "schema": 1,
+  "root_quota": {
+    "concurrency": 16,
+    "cpu": 32,
+    "memory_mb": 32768,
+    "disk_mb": 65536,
+    "network_mbps": 1000
+  },
+  "nodes": [
+    {
+      "address": "192.0.2.20",
+      "port": 18444,
+      "directory": "/srv/dsec/first-gateway",
+      "spec": {
+        "id": "node1",
+        "edge_socket": "/srv/dsec/edge/service.sock",
+        "worker_socket": "/srv/dsec/worker/worker.sock",
+        "max_sandboxes": 2,
+        "backends": [
+          "microvm"
+        ],
+        "environments": [
+          "default"
+        ],
+        "minimum_demands": {
+          "default": {
+            "concurrency": 1,
+            "cpu": 1,
+            "memory_mb": 512,
+            "disk_mb": 1024,
+            "network_mbps": 1
+          }
+        }
+      }
+    },
+    {
+      "address": "192.0.2.40",
+      "port": 8444,
+      "directory": "/srv/dsec/second-gateway",
+      "spec": {
+        "id": "node2",
+        "edge_socket": "/srv/dsec/edge/service.sock",
+        "max_sandboxes": 8,
+        "backends": [
+          "microvm",
+          "container"
+        ],
+        "environments": [
+          "python"
+        ],
+        "minimum_demands": {
+          "python": {
+            "concurrency": 1,
+            "cpu": 2,
+            "memory_mb": 1024,
+            "disk_mb": 2048,
+            "network_mbps": 0
+          }
+        }
+      }
+    }
+  ]
+}

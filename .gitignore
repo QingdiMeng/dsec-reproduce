@@ -30,3 +30,6 @@ dist/
 .env.*
 *.pem
 *.key
+
+# Generated for an exported source archive, never maintained by hand.
+/SOURCE_MANIFEST.json

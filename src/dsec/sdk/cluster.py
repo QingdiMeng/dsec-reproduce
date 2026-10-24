@@ -12,11 +12,12 @@ import uuid
 from dsec.contracts.cluster import identifier, request_id as checked_id
 from dsec.contracts.errors import RequestOutcomeUnknown
 from dsec.sdk.sandbox_transport import ServiceError
+from dsec._tls import TLSFiles, ReloadingOpener
 
 
 class JSONRPC:
     def __init__(self, endpoints, *, ca_file=None, cert_file=None, key_file=None,
-                 allow_loopback_http=False):
+                 allow_loopback_http=False, security_file=None):
         self.endpoints = tuple(url.rstrip('/') for url in endpoints)
         if not self.endpoints:
             raise ValueError('Explicit cluster endpoints required')
@@ -28,18 +29,10 @@ class JSONRPC:
             if parsed.scheme != 'https' and not (allow_loopback_http and parsed.scheme == 'http'
                     and parsed.hostname in ('localhost', '127.0.0.1', '::1')):
                 raise ValueError('Verified TLS required for remote endpoints')
-        context = ssl.create_default_context(cafile=ca_file)
-        if bool(cert_file) != bool(key_file):
-            raise ValueError('Both client certificate and key required')
-        if cert_file:
-            context.load_cert_chain(cert_file, key_file)
-        class NoRedirect(urllib.request.HTTPRedirectHandler):
-            def redirect_request(self, *args, **kwargs):
-                return None
-        self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
-            urllib.request.HTTPSHandler(context=context), NoRedirect())
+        self.opener = ReloadingOpener(TLSFiles(ca_file=ca_file,cert_file=cert_file,key_file=key_file,security_file=security_file))
 
     def send(self, token, payload, *, readonly=False, timeout=330):
+        if callable(token):token=token()
         if not isinstance(token, str) or '\n' in token or '\r' in token:
             raise ValueError('Invalid authentication credential')
         data = json.dumps(payload, separators=(',', ':')).encode()
@@ -93,7 +86,7 @@ class ClusterTransport:
         if resource_demand is not None:
             envelope['resource_demand'] = resource_demand
         readonly = operation in ('project.get', 'project.list', 'admission.list', 'sandbox.list',
-            'audit.list', 'node.list', 'health', 'node_status', 'status', 'container_status',
+            'audit.list', 'node.list', 'node.get', 'node.security', 'credential.rotation.get', 'health', 'node_status', 'status', 'container_status',
             'query_request', 'container_query_request', 'container_query_action', 'native_events') or (
             operation == 'native' and args.get('action') in ('read', 'capabilities'))
         return self.rpc.send(self.token, envelope, readonly=readonly)

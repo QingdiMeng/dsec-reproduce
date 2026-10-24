@@ -6,6 +6,8 @@ hint only; etcd, not this client, verifies token authenticity and permissions.
 import base64
 import http.client
 import json
+import hashlib
+from pathlib import Path
 import math
 import re
 import threading
@@ -14,14 +16,17 @@ import urllib.error
 import urllib.request
 
 from dsec._credentials import secret_file
+from dsec._security_files import VersionedFile
 from dsec.contracts.cluster import CoordinationUnavailable
 
 
 class EtcdCredential:
-    def __init__(self, endpoints, opener, *, username, password_file, token=None,
+    def __init__(self, endpoints, opener, *, username=None, password_file=None, identity_file=None, token=None,
                  timeout=5, renew_before_seconds=300, retry_seconds=5):
-        if not isinstance(username,str) or not re.fullmatch(r'[A-Za-z0-9._-]{1,128}',username):
+        if identity_file is None and (not isinstance(username,str) or not re.fullmatch(r'[A-Za-z0-9._-]{1,128}',username) or not password_file):
             raise ValueError('Explicit etcd service username required')
+        if identity_file is not None and (username is not None or password_file is not None):
+            raise ValueError('Use a versioned etcd identity or fixed username/password paths')
         if not endpoints or any(not value.startswith('https://') for value in endpoints):
             raise ValueError('Password authentication requires verified HTTPS')
         for value in (renew_before_seconds,retry_seconds):
@@ -29,6 +34,9 @@ class EtcdCredential:
                 raise ValueError('Finite authentication renewal/retry interval required')
         self.endpoints,self.opener,self.username=tuple(endpoints),opener,username
         self.password_file,self.timeout=password_file,timeout
+        self.identity=VersionedFile(identity_file) if identity_file else None
+        self.identity_signature=None
+        if self.identity is not None:token=None
         self.renew_before,self.retry_seconds=renew_before_seconds,retry_seconds
         self.lock=threading.Lock();self.retry_after=0
         self.token=token;self.expires=self.expiry(token,time.time()) if token else 0
@@ -47,12 +55,18 @@ class EtcdCredential:
             # assuming they live forever. Rejection still invalidates them.
             return now+600 if token else 0
 
-    def _login(self):
-        try:
-            password=secret_file(self.password_file)
-        except (OSError,ValueError):
-            raise CoordinationUnavailable('etcd credential file unavailable or unsafe') from None
-        data=json.dumps(dict(name=self.username,password=password)).encode()
+    def _selected_identity(self):
+        def validate(value):
+            if (set(value)!={'generation','username','password_file'} or not isinstance(value['username'],str)
+                    or not re.fullmatch(r'[A-Za-z0-9._-]{1,128}',value['username'])
+                    or not isinstance(value['password_file'],str) or not Path(value['password_file']).is_absolute()):
+                raise ValueError('Invalid etcd service identity')
+            return value['username'],secret_file(value['password_file'])
+        try:return self.identity.read(validate) if self.identity else (self.username,secret_file(self.password_file))
+        except (OSError,ValueError):raise CoordinationUnavailable('etcd credential file unavailable or unsafe') from None
+
+    def _login(self,username,password):
+        data=json.dumps(dict(name=username,password=password)).encode()
         for endpoint in self.endpoints:
             request=urllib.request.Request(endpoint+'/v3/auth/authenticate',data,
                                             {'Content-Type':'application/json'})
@@ -76,6 +90,13 @@ class EtcdCredential:
 
     def get(self, *, rejected=None):
         with self.lock:
+            username,password=self._selected_identity()
+            signature=hashlib.sha256((username+'\0'+password).encode()).digest()
+            if self.identity_signature is not None and signature!=self.identity_signature:
+                # Never authenticate with the old cached token after selecting
+                # a new identity, even when the replacement login is unavailable.
+                self.token=None;self.expires=0;self.refresh_at=0;self.retry_after=0
+            self.identity_signature=signature
             now=time.time()
             forced=rejected is not None and rejected==self.token
             if forced:
@@ -86,7 +107,7 @@ class EtcdCredential:
                 if self.token and now<self.expires:return self.token
                 raise CoordinationUnavailable('etcd authentication renewal deferred')
             try:
-                token=self._login()
+                token=self._login(username,password)
             except CoordinationUnavailable:
                 self.retry_after=now+self.retry_seconds
                 if self.token and now<self.expires:return self.token

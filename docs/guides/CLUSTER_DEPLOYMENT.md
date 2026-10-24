@@ -85,6 +85,25 @@ read-only roots and dropped capabilities; there is no privileged mode, host
 networking or Docker socket mount. Initialization alone has writable credential
 exports.
 
+Before generating that directory, run the same `prepare.py` command with
+`--plan` appended to validate inputs and inspect the proposed controller/etcd
+listeners, Node destination, wheel digest and physical etcd failure-domain count.
+Planning reads the topology, Node specification and wheel only: it generates no
+credentials, writes no files and needs neither OpenSSL, Docker nor an installed
+DSec runtime. Run without `--plan` to generate the private deployment files;
+generation remains separate from installation and service startup. The Python
+`read_plan(args)` / `render(plan)` interface also rejects a changed wheel before
+creating output. Plans are in-memory descriptions, not install receipts.
+
+The single-Node arguments above remain compatible. For multiple external Nodes,
+use the [batch inventory](#batch-node-inventory-and-shared-role-configuration)
+below. Each microVM Node now has a read-only preflight and reviewed scoped
+network-helper initialization workflow; see [Node setup](#node-setup).
+Versioned Node registration, maintenance and retirement are available through
+the management API as described below. Upgrade/rollback automation remains planned.
+For CPU/GPU clusters, GPU training/inference services are external API clients;
+GPU scheduling and sandbox GPU passthrough are not configured by this generator.
+
 Transfer the contents of `node/` securely to the exact `--node-directory` on
 Linux. Its secrets must be owned by the Node service user and mode `0600`.
 Start the existing Edge and worker, then the installed gateway:
@@ -139,6 +158,91 @@ saved episode and original Node. The formal readiness invariant and controlled
 implementation regressions cover this boundary; `NOT_FOUND` alone never proves
 a dispatched request safe to resend.
 
+## Batch Node inventory and shared role configuration
+
+Use `--nodes /path/nodes.json` instead of `--node-address`, `--node-directory`,
+`--node-spec` and `--node-port`. They cannot be combined. Start from the shipped
+[inventory example](../../deploy/cluster/nodes.example.json). Its format is:
+
+```json
+{
+  "schema": 1,
+  "root_quota": {"concurrency": 16, "cpu": 32, "memory_mb": 32768, "disk_mb": 65536, "network_mbps": 1000},
+  "nodes": [
+    {
+      "address": "192.0.2.20", "port": 8444,
+      "directory": "/srv/dsec/node1-gateway",
+      "spec": {
+        "id": "node1", "edge_socket": "/srv/dsec/node1-edge/service.sock",
+        "max_sandboxes": 8, "backends": ["microvm"], "environments": ["default"],
+        "minimum_demands": {
+          "default": {"concurrency": 1, "cpu": 1, "memory_mb": 512, "disk_mb": 1024, "network_mbps": 1}
+        }
+      }
+    }
+  ]
+}
+```
+
+Add one entry per Edge, with its actual IPv4 listener, private gateway directory
+and already provisioned spec. Nodes can have different capacity, environments,
+minimum demands and an optional `worker_socket`. GPU-only model servers are API
+clients, not entries in this inventory unless they also run a sandbox Edge.
+The schema has no GPU scheduling or model configuration fields.
+`root_quota` is an optional IAM policy ceiling, not the sum of Node capacity.
+Omitting it retains the preview defaults: concurrency 4, CPU 8, memory 8192 MiB,
+disk 16384 MiB and network 1000 Mbps. The initializer and controllers receive the
+same quota. Edge physical admission remains authoritative.
+
+The planner rejects duplicate IDs, listener collisions with other Nodes or the
+declared control/etcd roles, malformed resource fields and overlapping
+gateway/Edge/worker roots between Nodes on the same address. Different addresses
+may use the same paths. Validation is structural; it does not establish remote
+host readiness, networking or available capacity.
+
+```bash
+python deploy/cluster/prepare.py \
+  --out "$DSEC_PREVIEW_DIR" \
+  --wheel dist/core/dsec_reproduce-0.1.0.dev0-py3-none-any.whl \
+  --python-image "$DSEC_PYTHON_IMAGE" --etcd-image "$DSEC_ETCD_IMAGE" \
+  --project dsec-cluster --host-address 192.0.2.10 \
+  --nodes /path/nodes.json --plan
+```
+
+Append `--topology /path/topology.json` for the cross-host control/etcd layout
+described below; without it, the control plane remains a single-Docker-host
+preview. Run without `--plan` to generate a new private directory. One pure
+`configuration.role_configurations` implementation builds the controller routes,
+Node configurations, initializer, SDK configuration and Compose environment from
+the validated plan. Both input modes use it; there is no separate batch runtime.
+
+Batch output contains `nodes/<id>/node.json` and `nodes/<id>/secrets/` per Node;
+the legacy input still produces `node/`. Every Node has a distinct server
+certificate and internal token, and controller routing points to its matching
+token file. Nodes receive no other Node's server key/token, controller private
+key, bootstrap/root password or CA signing key. The existing trusted-node model
+still shares the route key and prefix-limited etcd service identity; this is not
+mutually distrustful Node/tenant isolation. Batch Nodes authenticate and renew
+etcd credentials themselves, so no static Node token-export mount or subsequent
+manual etcd-token copying is required.
+
+Securely transfer the **contents** of each `nodes/<id>/` to its `directory` on
+the corresponding Linux host, owned by its provisioned service account with
+private modes preserved. Start its prepared Edge and optional worker first, then:
+
+```bash
+python -m dsec.host.cluster node --config /srv/dsec/node1-gateway/node.json
+```
+
+This completes initial configuration generation only. The generator refuses an
+existing output directory and generates new identities: do not rerun it as an
+in-place join or upgrade mechanism for an existing cluster. The scoped
+microVM initialization commands below do not provision accounts, kernel modules,
+packages or storage services. Complete automatic provisioning and
+upgrade/rollback remain separate workflows requiring implementation and real-host
+acceptance. Fleet enrollment changes membership through the management API;
+it never regenerates an existing cluster's credentials.
+
 ## Cross-host role exports
 
 Install Docker Engine and Docker Compose v2 or later on each host. The generator
@@ -170,9 +274,14 @@ python deploy/cluster/export_hosts.py --prepared "$DSEC_PREVIEW_DIR" \
   --out /private/dsec-host-exports
 ```
 
-Securely transfer only each address's directory to that host. Transfer the
-separate `node/` export to its configured Node directory, and `client.json` with
-only its referenced API CA/IAM credential to callers. Preserve private modes;
+Securely transfer only each address's directory to that host. For legacy input,
+transfer the separate `node/` export to its configured Node directory. For batch
+input, each host export contains only its local `nodes/<id>/` directories;
+`host.json` maps these to their configured destinations. Move each Node's
+contents to that destination under the Node service account. A Node-only host
+gets no controller credentials, initializer or Compose service: its gateway is
+the installed Linux process above. Transfer `client.json` with only its
+referenced API CA/IAM credential to callers. Preserve private modes;
 on each host the deployment directory, credentials and `data/` must be owned by
 its configured account. Do not copy the master `pki/` or root password to every
 machine. Only the first controller host receives the initializer's credentials.
@@ -242,6 +351,24 @@ rotation is not implemented.
 
 ## Node setup
 
+Newly generated configurations enable `node_lifecycle` on controllers and Nodes.
+Nodes must be explicitly joined and activated after startup; a healthy Node alone
+is not schedulable. Existing configurations without this setting retain their
+legacy behavior. Upgrade all controllers, Node gateways and episode services
+before enabling managed membership. Do not mix old admission code with this mode.
+Finish pre-upgrade admissions before enrolling an old Node; unresolved work must
+retain its original identity and quota. This is an explicit migration, not an
+automatic reset of fleet state.
+
+Before starting a microVM Node, follow the
+[Host preflight and scoped initialization sequence](DSEC_HOST_CONFIGURATION.md#commands-and-acceptance)
+with its generated `node.json` and prepared Host configuration. This detects
+missing KVM/TUN access and required network capabilities in restricted containers
+before preparing administrator material. The gateway also repeats the platform
+guard before creating its state/lock or connecting to coordination when it
+advertises `microvm`. Controller/bootstrap roles do not require KVM. A successful
+preflight does not replace the execution and isolation acceptance below.
+
 Start an existing Edge with its own root and `--node-budget` configuration.
 Verify `health` advertises `node-admission-v1` before adding a gateway. Edge
 budgets must reserve host pressure floors and accommodate guest/artifact costs.
@@ -292,6 +419,407 @@ Edge directory, even if another configuration chooses a different gateway
 root. The gateway has no new Docker/KVM/storage driver and makes no firewall
 changes. Health inspection uses bounded read timeouts; receipt reconciliation
 runs independently so a delayed journal query does not occupy a health probe.
+
+## Dynamic membership, maintenance and retirement
+
+Fleet mutations require `iam.policy` on the **root project**. A tenant's policy
+permission does not grant infrastructure administration. The operator client
+below uses the generated private `client.json`; it never runs SSH, sudo or a
+direct Edge operation. Every mutation saves its public intent and request ID to
+a new `0600` result file before contacting an API Server. Keep these files when
+a reply is lost. There is no automatic mutation replay or choice of another owner.
+
+For an initial Node, use its generated `registration.json`. With the prepared
+Edge/optional episode service and Node gateway already started:
+
+```sh
+python -m dsec.host.fleet --client /private/deployment/client.json --out join.json \
+  join --spec /private/deployment/node/registration.json
+python -m dsec.host.fleet --client /private/deployment/client.json --out activate.json \
+  activate --node node1 --version 1
+```
+
+Read actual versions from the responses; the numbers here describe a fresh Node.
+`JOINING` does not accept work. Activation requires an authenticated proof from
+that Node, including usable Edge health. New quota admissions check ACTIVE in
+the same etcd transaction as project usage and the Node's in-flight count; stale
+Watcher observations cannot bypass a concurrent drain.
+
+To add a completely new Node without updating or restarting controllers, create
+one JSON entry in the batch inventory format (`address`, `port`, `directory`,
+`spec`), with a fresh identity and disjoint host paths. On the administrator
+machine holding the **original private master deployment and CA key**:
+
+```sh
+python deploy/cluster/enroll_node.py --deployment /private/deployment \
+  --node /private/new-node-entry.json --out /private/new-node-bundle
+```
+
+Transfer that bundle privately to its declared Linux directory. Install the
+same validated core wheel, complete Host preflight/scoped initialization, and
+start Edge, the optional episode service and `node.json` gateway. Use the bundle's
+`registration.json` in the join/activate commands. The issuing tool reuses the
+existing CA and limited coordination credentials. It exports no CA private key,
+bootstrap token or controller identity, and changes no controller configuration.
+The controllers discover registered routes through etcd with bounded parallel
+probes. The new gateway uses `node_token_mode: derived-v1`; verified TLS, controller
+mTLS and a per-Node HMAC credential remain required. etcd stores public endpoints,
+not these credentials. Nodes remain trusted cluster infrastructure, as in the
+existing shared coordination/route-key design. This is not tenant self-enrollment.
+Issuing a bundle does not register a Node or increase project quota.
+
+The state sequence is `JOINING → ACTIVE → DRAINING → MAINTENANCE → ACTIVE`, or
+`DRAINING/MAINTENANCE → RETIRED`. Start maintenance through the API:
+
+```sh
+python -m dsec.host.fleet --client /private/deployment/client.json --out drain.json \
+  drain --node node1 --version 2
+python -m dsec.host.fleet --client /private/deployment/client.json get --node node1
+# Wait for admitted work to finish, or explicitly stop it through its normal API.
+python -m dsec.host.fleet --client /private/deployment/client.json --out maintain.json \
+  maintain --node node1 --version 3
+# Apply the separately reviewed host maintenance while no owned resources remain.
+python -m dsec.host.fleet --client /private/deployment/client.json --out resume.json \
+  resume --node node1 --version 4
+```
+
+Drain fences **new admissions**, not already accepted work. Existing sandboxes and
+episodes keep their owner and can continue/stop. Finishing maintenance requires
+both zero IAM in-flight admissions and an owning Node proof that Edge leases,
+sandboxes and episode/scheduler work are empty. Ready-pool or private development
+resources can also prevent this proof: disable/refund prepared work using the
+existing instance operations before finishing maintenance. These commands do not
+kill active jobs, flush a ready pool, install privileges or upgrade software.
+An unreachable Node or UNKNOWN work stays blocked and retains quota.
+
+For exit, drain first, then call `retire --node node1 --version VERSION` after
+cleanup. Retiring requires the same proofs; stopping the Node process or removing
+its configuration is insufficient. Stop its now-idle services and explicitly
+retire its administrator installation afterwards. This API retires cluster
+membership, not Linux files or helper permissions. The Node identity stays as a
+tombstone; physical endpoints may be reused only by a new identity. Existing
+receipts and sandbox routes keep their original owner. To abandon a registration
+that never became ACTIVE, `withdraw` converts JOINING to a tombstone using the
+quorum proof that no controlled work was admitted; it does not claim host cleanup.
+
+Every change requires an expected version. Repeat a lost-reply transition only
+with its retained request ID, original arguments and version, using a new result
+file. A completed latest transition reconciles; a delayed request after a later
+transition fails rather than reactivating a retired Node. The model
+`NodeLifecycle.tla` and controlled CAS tests cover this boundary. Mixed old/new
+admission code, empty-host provisioning and certificate renewal
+require their own migration/acceptance; membership does not silently supply them.
+
+## Compatible runtime upgrade and rollback
+
+This workflow upgrades the core Python runtime, with the original Node identity,
+CA, credentials, paths and journals. It supports only equal explicit cluster,
+fleet, coordination, Edge and episode compatibility contracts. The wheel version
+and content build ID identify software; they are not the membership version used
+for CAS. A publisher must review actual compatibility before retaining a contract
+version. This is not a state migration, etcd upgrade, VMM/kernel/helper update,
+guest native-agent or model upgrade. Those need separate plans. Keep all replicas on releases that
+understand pending upgrades. Deployments without release identity must first
+install a release-aware baseline during a controlled maintenance window; they
+cannot be silently adopted or used as an automatic rollback target.
+
+On a Node's unprivileged service account, stage the publisher's verified core
+wheel alongside the old installation. Obtain SHA256 from the trusted release
+channel, rather than treating a hash calculated from an unknown download as trust:
+
+```sh
+python -m dsec.host.releases stage --wheel /private/dsec_reproduce-VERSION-py3-none-any.whl \
+  --sha256 PUBLISHED_SHA256 --root /srv/dsec/releases
+python -m dsec.host.releases verify --release-dir /srv/dsec/releases/CONTENT_BUILD_ID \
+  > /private/candidate-release.json
+```
+
+Staging uses a separate venv, `--no-index --no-deps`, and checks the installed
+payload against the wheel. A completed identical stage can be verified/reused;
+an interrupted directory without `release.json` is incomplete and is never
+launched or silently reused. Retain/inspect that failed directory separately.
+The old installation is untouched. Keep the old release and its verified build
+reference until the observation window ends. Transfer only the public candidate
+reference to the administrator's API client machine.
+
+Drain and maintain the Node as above. Read the actual membership version, then
+prepare the upgrade through the root-authorized management API:
+
+```sh
+python -m dsec.host.fleet --client /private/deployment/client.json --out upgrade.json \
+  upgrade --node node1 --version MAINTENANCE_VERSION --release /private/candidate-release.json
+```
+
+The transaction requires zero held admissions, empty owning services, compatible
+software and the running source release. It records source/target references in
+the existing Node record. While pending, resume, retirement and another upgrade
+are rejected. A lost reply retains the original request ID and version; inspect
+`node.get` and reconcile that same request instead of inventing a second plan.
+
+Stop this idle Node's **gateway, episode service, then Edge** through its existing
+process manager. Update only its explicit service launch commands, preserving
+Host/Node configuration and state roots. Each command runs in its own service:
+
+```sh
+python -m dsec.host.releases run --release-dir /srv/dsec/releases/CONTENT_BUILD_ID \
+  --role sandbox --config /private/host.json --node-config /private/node.json
+python -m dsec.host.releases run --release-dir /srv/dsec/releases/CONTENT_BUILD_ID \
+  --role worker --config /private/host.json --node-config /private/node.json
+python -m dsec.host.releases run --release-dir /srv/dsec/releases/CONTENT_BUILD_ID \
+  --role node --config /private/node.json --node-config /private/node.json
+```
+
+Start Edge first, wait for its health, then the configured episode service and
+its health, then gateway. Omit worker only if that Node has no configured episode
+service. The launcher validates the loaded payload, membership and Host/socket
+binding, then uses existing Host composition. Container agents follow the selected
+installed package. It does not install privileges or control other processes.
+
+After startup, use a new result file and the pending membership version to
+`commit --node node1 --version PENDING_VERSION`. Commit queries the real gateway,
+Edge and configured episode service; all must prove the target release and empty
+resources. A startup failure, mixed versions, unavailable Node or UNKNOWN reply
+does not authorize scheduling. After commit, explicitly `resume` with its new
+version. Startup and Node admission also check the committed build; launching a
+stale installation is not permission to serve new work.
+
+To abandon a pending candidate, stop only its idle processes and launch the
+retained **source** release with the same configurations, in the same order.
+Then `rollback --node node1 --version PENDING_VERSION`, retaining its result file.
+Rollback requires actual source software proof; it cannot succeed merely because
+files were switched or the candidate died. It leaves MAINTENANCE until explicit
+resume. Do not restore old etcd/Edge/episode state over current journals. To return
+to an earlier version after a successful commit, prepare a new upgrade targeting
+that retained compatible release; a late operation from the previous plan must
+fail its version check.
+
+For Docker control-plane replicas, create a separate credential-free image context:
+
+```sh
+python deploy/cluster/upgrade.py context --deployment /private/deployment \
+  --wheel /private/dsec_reproduce-VERSION-py3-none-any.whl --sha256 PUBLISHED_SHA256 \
+  --out /private/candidate-image
+docker build --build-arg PYTHON_IMAGE=python@sha256:PINNED_BASE_IMAGE_DIGEST \
+  --tag dsec-api-candidate:VERSION /private/candidate-image
+# Use the exact pinned base from candidate-image/build.json.
+# source-release.json is the release field of authenticated source API health.
+# Record immutable local image IDs for both the old and candidate images.
+python deploy/cluster/upgrade.py plan --deployment /private/deployment \
+  --source-release /private/source-release.json --target-release /private/candidate-image/release.json \
+  --source-image sha256:OLD_IMAGE_ID --target-image sha256:NEW_IMAGE_ID --out /private/api-upgrade
+docker compose --project-directory /private/deployment -f /private/deployment/compose.yaml \
+  -f /private/api-upgrade/upgrade-api1.json up -d --no-deps --no-build api1
+```
+
+Before changing api2, wait for **authenticated** health on api1 to report the exact
+target release, query its IAM/Node state, and verify work still reaches its owning
+Node. Read-only readiness polls may repeat within a bounded timeout; protected
+mutations must not be replayed. Apply `upgrade-api2.json` only after these gates.
+If a gate fails, retain the healthy replica and inspect the failed one; explicit
+rollback uses `rollback-api1.json`/`rollback-api2.json` in the same one-at-a-time
+sequence. Overlays pin only that API's image with `pull_policy: never`; they do
+not replace configuration, credentials, etcd members or volumes. The tool renders
+plans only and never calls Docker. Two colocated API replicas still do not prove
+host-failure availability.
+
+## Certificate and credential rotation
+
+Rotation is explicit operator work. The SDK, controllers and Node gateways
+reload selected security files per request/connection. Once enabled, rotations
+below do not require restarting these processes or recreating sandboxes. An
+accepted operation may finish after a retirement; requests accepted afterwards
+must use current trust and credentials. This is not a global distribution or
+acknowledgement service: verify each replica and Node before retiring material.
+Keep private manifests, passwords and keys owned by the service user with mode
+`0600`, and their directories `0700`. Never log or paste the secret values.
+
+For an existing generated, managed deployment, first prepare role patches:
+
+```bash
+python deploy/cluster/rotate.py enable --deployment /private/deployment \
+  --out /private/rotation-enablement
+```
+
+This writes patches only; it does not install files or restart services. Preserve
+file modes when copying. Install each Node's secret manifests and patched
+`node.json`, restart only its gateway, then install the controller manifests and
+patched configuration and roll one API replica at a time. Keep Edge and episode
+services running. This one-time opt-in changes configuration and needs the
+supporting runtime on every participant. During migration, `allow_legacy: true`
+accepts the previous per-Node credential. Do not disable it until every sender
+uses the independent Node authentication ring. Route signing uses the unchanged
+`route-key`; existing sandbox and episode IDs remain valid.
+
+Each manifest contains a positive `generation`. Referenced material files have
+absolute paths in the consuming service's filesystem namespace. Write new keys,
+certificates and trust bundles to new private files, then publish their references
+with the next generation and explicit expected generation:
+
+```bash
+python -m dsec.host.credentials publish \
+  --kind tls-client --path /run/dsec/client-tls.json \
+  --document /private/next-client-tls.json --expected-generation 1
+```
+
+Kinds are `tls-client`, `tls-server`, `node-auth` and `etcd-identity`. Publication
+validates material, locks the destination, checks its expected generation and
+atomically replaces the manifest. Publishing exactly the already selected
+value is idempotent. A running reader rejects older generations and edits to
+material or manifest at the same generation. Across restarts, the private
+published manifest is the authority; never restore an earlier file to undo a
+rotation. A deliberate rollback during overlap needs a **new** generation.
+
+For read-only Docker role mounts, publish from the host with an explicit mapping:
+
+```bash
+python -m dsec.host.credentials publish --kind tls-server \
+  --path /private/deployment/secrets/controllers/server-tls.json \
+  --document /private/next-server-tls.json --expected-generation 1 \
+  --reference-prefix /secrets \
+  --material-directory /private/deployment/secrets/controllers
+```
+
+The publisher validates direct-child material against the private host directory
+while preserving `/secrets/...` references in the published document. It rejects
+path escapes and symlinks and grants no write access to the service. All files
+must be installed before publishing the reference. The mapping also supports
+`etcd-identity`; Node-auth documents need no path mapping. This avoids depending
+on Docker Desktop's different bind-root UID mapping. Never relax ownership or
+file/directory checks to work around a mount namespace.
+
+### API access tokens
+
+Only root IAM credential administrators can use this protocol. Prepare writes
+the new private token, replacement client configuration and intent **before**
+contacting the API. Preserve that output even if the response is lost:
+
+```bash
+python -m dsec.host.credentials prepare-api --client /private/client.json \
+  --out /private/api-token-r2
+python -m dsec.host.credentials check-api \
+  --client /private/api-token-r2/client.json
+python -m dsec.host.credentials get-api --client /private/api-token-r2/client.json \
+  --rotation-id ROTATION_ID
+python -m dsec.host.credentials complete-api \
+  --client /private/api-token-r2/client.json --rotation-id ROTATION_ID \
+  --out /private/api-token-r2/completion.json
+```
+
+Use the `rotation_id` from `intent.json`; do not substitute a new identity on
+an uncertain result. Prepare permits both credentials. Complete requires the
+**new** credential and revokes the old one in the same IAM transaction. Cancel
+requires the **old** credential and revokes the candidate. Use `cancel-api` with
+the same arguments and a fresh output path if abandoning an overlap. Query state
+after response loss; the CLI never retries an uncertain mutation automatically.
+A delayed cancel cannot restore a completed credential. Raw tokens never enter
+the IAM ledger or audit output.
+
+Distribute the selected replacement client/token privately. A client configured
+with `token_file` reads its selected file each call, so an atomic replacement can
+switch an existing SDK object. Do not rerun bootstrap with a revoked token or
+reset the IAM ledger to make old credentials work. Keep a separate authorized
+administrator available for recovery from operator mistakes.
+
+### Node authentication and TLS
+
+Node authentication uses a separate manifest of this form (values below are
+placeholders; generate independent random 256-bit keys):
+
+```json
+{"generation":2,"active":"old","keys":{"old":"64_HEX_DIGITS","new":"64_HEX_DIGITS"},"allow_legacy":false}
+```
+
+Keep at most four keys. Publish the overlap on all receiving Nodes first, then
+on controllers; switch controller `active` to `new` in a later generation. Check
+every route before publishing a generation that removes `old`. No fallback to a
+previous key occurs on errors. Long-lived route signing is a separate mechanism
+and is not rotated by this operation.
+
+Issue new leaves explicitly:
+
+```bash
+python deploy/cluster/rotate.py issue --ca CA.crt --ca-key CA.key \
+  --cn NAME --host HOST --usage serverAuth --out PRIVATE_NEW_DIRECTORY
+```
+
+Use `clientAuth` for controller/etcd clients and repeat `--host` for each server
+SAN. The optional `create-ca --cn NAME --out PRIVATE_DIRECTORY` creates a private
+issuer; its key stays with the administrator, never on Nodes or API replicas.
+For a DSec CA change, expand both peers' trust first, switch client and server
+leaves, verify every peer, then remove the old CA. API client and controller-to-
+Node manifests use `ca_file`, optional `cert_file`/`key_file`, and optional
+`peer_sha256` leaf pins. Server manifests use `cert_file`, `key_file`, optional
+`client_ca_file`, and optional client leaf pins. Set explicit fingerprint pins
+when old leaves under a retained CA must be revoked. A renewed leaf alone does
+not revoke another valid certificate issued by the same CA.
+
+`python -m dsec.host.credentials check-api --client CLIENT.json` reports the
+selected server TLS generation and public fingerprint. `python -m dsec.host.fleet
+--client CLIENT.json security --node NODE` queries the Node through the API.
+Check each API endpoint separately and compare expected leaf fingerprints;
+otherwise a healthy first replica may hide an unrotated one. A connection that
+completed its handshake before a trust/pin retirement is rechecked before an
+application request is accepted. Requests are never transparently resent with
+an older identity.
+
+After opting in, new Node enrollment requires explicit `--ca CURRENT_CA.crt
+--ca-key CURRENT_CA.key` arguments. It exports the currently selected limited
+account, TLS and Node authentication manifests rather than old bootstrap
+credentials. The enrollment tool does not infer or export an issuer private key.
+
+### etcd service identity
+
+Keep etcd administrator authentication external to service exports. Prepare a
+fresh prefix-limited account using an administrator `EtcdStore` options JSON:
+
+```bash
+python -m dsec.host.etcd_rotation --admin-config /private/etcd-admin.json \
+  prepare --username dsec-r2 --out /private/etcd-account-r2
+```
+
+The tool verifies the existing role grants exactly read/write access to this
+deployment's isolated prefix. It records the new password and intent before
+account creation; unknown administrative mutation replies are not retried.
+Inspect account/role state and retained intent before resolving uncertainty.
+Distribute only the new limited password to controllers and Nodes. Publish
+`etcd-identity` manifests containing `generation`, `username` and the absolute
+`password_file`; these replace the selected identity and discard any cached old
+JWT immediately. Never try the previous account if new login fails. Prove access
+through every service and to the existing ledger with the replacement account,
+then retire the old one:
+
+```bash
+python -m dsec.host.etcd_rotation --admin-config /private/etcd-admin.json \
+  retire --username dsec --replacement-config /private/etcd-new-service.json \
+  --out /private/etcd-account-r2/retirement.json
+```
+
+The replacement config uses the same prefix and only the limited account. Retire
+refuses `root`, checks the replacement's role and authenticated ledger access,
+then deletes the old service user. An exact stale-auth-revision rejection
+(HTTP 400/code 3) triggers one login with the selected identity and one resend;
+etcd returns it before authorized effects. Generic validation errors, permission
+denials and unknown replies do not enter that path
+([etcd error definitions](https://github.com/etcd-io/etcd/blob/v3.5.21/api/v3rpc/rpctypes/error.go),
+[authorization before apply](https://github.com/etcd-io/etcd/blob/v3.5.21/server/etcdserver/apply_auth.go)).
+etcd authenticates and authorizes token
+requests using its own auth state; a cached token is not an independent grant
+([etcd auth design](https://etcd.io/docs/v3.5/learning/design-auth-v3/)). Renewing
+an etcd client certificate through its TLS manifest does not replace its service
+password or revoke old certificates. etcd peer/server CA changes and JWT signing
+root changes require a separate member-by-member campaign, following
+[etcd transport security](https://etcd.io/docs/v3.6/op-guide/security/).
+
+The 2026-10-24 installed-wheel acceptance passed 21 checks with two API
+replicas, three real etcd members on a Mac and one Linux Node. The same container,
+marker and SDK object survived Node key, IAM token, API/Node CA and leaf,
+etcd client leaf and limited-account rotation. Retired identities were rejected;
+all five control-plane and three Node processes retained their original start
+times. IAM held work returned to zero and Node retirement required empty proof.
+The original five Linux host containers retained their process identities.
+This proves this bounded topology and path, not independent-host HA or automatic
+fleet-wide rollout. The first campaign exposed stale etcd auth-revision handling;
+the exact rejection was fixed and the complete campaign rerun on the new wheel.
 
 ## Controller setup
 

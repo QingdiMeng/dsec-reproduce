@@ -89,6 +89,7 @@ class APIClientTests(unittest.IsolatedAsyncioTestCase):
             '-keyout',str(key),'-out',str(cert),'-days','1','-subj','/CN=localhost',
             '-addext','subjectAltName=DNS:localhost,IP:127.0.0.1'],
             check=True, capture_output=True)
+        key.chmod(0o600)
         seen = []
         closed_tls = []
         finish = Handler.finish

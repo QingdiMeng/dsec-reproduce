@@ -17,7 +17,7 @@ class Watcher:
     def __init__(self, probes, *, max_age=10, clock=time.monotonic):
         if isinstance(max_age, bool) or not math.isfinite(max_age) or max_age <= 0:
             raise ValueError('Positive watcher freshness window required')
-        self.probes = dict(probes)
+        self.probes = dict(probes) if isinstance(probes, dict) else probes
         for node in self.probes:
             identifier(node)
         self.max_age, self.clock = max_age, clock

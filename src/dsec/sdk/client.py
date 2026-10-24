@@ -229,15 +229,15 @@ class DSecClient(_SandboxClient):
     transport. DevEdgeClient is an explicit, separate development interface.
     """
     def __init__(self, endpoints, *, token, project, ca_file=None,
-                 cert_file=None, key_file=None):
+                 cert_file=None, key_file=None, security_file=None):
         from dsec.sdk.cluster import ClusterTransport
         if not isinstance(endpoints, (list, tuple)) or not endpoints or any(
                 not isinstance(endpoint, str) for endpoint in endpoints):
             raise ValueError('Explicit list of HTTPS API Server endpoints required')
-        if not isinstance(token, str) or not token or '\n' in token or '\r' in token:
+        if not callable(token) and (not isinstance(token, str) or not token or '\n' in token or '\r' in token):
             raise ValueError('IAM token required')
         self._transport = ClusterTransport(endpoints, token=token, project=project,
-            ca_file=ca_file, cert_file=cert_file, key_file=key_file)
+            ca_file=ca_file, cert_file=cert_file, key_file=key_file,security_file=security_file)
         self._features = frozenset()
         self._opened = False
 
