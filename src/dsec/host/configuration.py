@@ -12,7 +12,7 @@ from dsec.contracts.network import validate_proxy_bypass_hosts
 
 
 PATH_OPTIONS = {
-    'binary', 'kernel', 'template', 'microvm_environment_catalog',
+    'binary', 'kernel', 'template', 'microvm_environment_catalog', 'qemu_execution_catalog',
     'overlaybd_ublk_socket', 'overlaybd_global_config', 'snapshot_editor',
     'tb2_manifest', 'tb2_verifier_artifact_manifest', 'tb2_verifier_artifact_local',
     'tb2_verifier_artifact_threefs', 'tb2_verifier_dax_binary',

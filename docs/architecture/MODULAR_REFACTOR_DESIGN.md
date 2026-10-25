@@ -77,6 +77,68 @@ API、CLI、线协议、持久化格式与 HA 部署要求；行为变更需要�
 | CPH-008 | 部署是重构的验收对象 | 从声明式拓扑和节点配置生成只读计划，再生成角色专用部署文件，管理员初始化与服务启动分别执行；单机与多机复用同一实现。明确服务身份、端口、目录、制品版本、凭据归属与依赖顺序。验收覆盖节点加入/退出、重复执行、失败恢复、升级回滚及宿主原服务连续性。CPU/GPU 混合部署中，DSec 只拥有沙盒及其资源预算，模型/GPU 服务由外部系统管理。 |
 | CPH-009 | 动态节点成员状态与准入共享 quorum 边界 | 用户于 2026-10-24 要求新节点无需更新/重启控制面加入。etcd 只保存公开路由、版本化成员状态与 IAM 原子更新的在途计数，不保存节点明文凭据或第二份执行状态。ACTIVE 才能接受新准入；维护、退出必须同时检查在途计数和所属 Edge/episode 服务证明。所有管理变更使用预期版本和请求 ID，RETIRED 保留身份墓碑；失联和 UNKNOWN 不释放配额或迁移执行所有者。管理员沿用现有 CA 签发部署包，网关内凭据按节点身份从现有集群密钥派生，并独立要求 mTLS；既有受信基础设施边界不扩大为租户可注册节点。 |
 
+CPH-012（2026-10-25）：三条执行路径共用 SDK→API→IAM/Placement→Node→Edge。
+FnCall 与 Container 都由 QEMU/KVM 容纳内层 Docker，不为其复制调度器、租约或请求日志；
+MicroVM 保留 Firecracker 及原有 EROFS/DAX/OverlayBD/3FS 机制。FnCall 是带不可变
+`execution_mode=fncall` 的执行策略，沿用 container 路由和物理租约类别，状态中明确标识
+实际路径，放置前要求节点观测到准备好的函数环境。暖槽占用配额，单次调用必须清理完毕
+才可完成和复用；UNKNOWN 不重放，清理失败退役外层 VM。该策略没有会话/快照接口。
+配置与镜像、CID 池均为节点本地可信输入，租户不能传宿主路径或 Docker 参数；准入同时
+计入外层 RAM/vCPU/私有盘，停止和失败创建均须证明 VMM 死亡及 CID 归还才能释放资源。
+先验收禁止联网的执行闭环，不能将其称为完整生产隔离、镜像共享或论文性能复现；
+LSM/cgroup、host-user vsock 授权、联网策略和 Container 内存卸载独立验收。
+新 QEMU/FnCall 记录要求 Edge 状态契约 2，自动升级/回滚不能跨 1/2；旧请求字节兼容
+不等于旧 Edge 能接管新状态。首次启用使用排空后的新实例，必要的旧状态迁移单独审查。
+
+CPH-013（2026-10-25）：QEMU guest 的 host CID 检查不能替代 Edge 身份认证。
+Container/FnCall 强制每实例密钥和带随机挑战、方向及端口绑定的双向 HMAC 门控；
+5002 控制与 5001 会话/流式路径均须在解析或连接内层 agent 前认证。密钥只经私有
+virtio-serial 启动通道注入可信 supervisor 内存，不进入任务设备、argv 或集群状态。
+Edge 通过同一私有密钥和已保存摘要接管，重启不补发启动秘密，不重新执行动作；
+凭据缺失或改变必须拒绝，不给活 VM 自动换钥。新 VM 自带新密钥，运行中轮换另行设计。
+该组合要求 catalog/descriptor schema 2 和重建 guest；旧实例先以原版本排空再换新目录。
+Firecracker 既有协议和独立开发 QEMU primitive 不受影响。root/Edge UID 仍受信任，
+认证不构成完整 LSM/cgroup、抗连接洪泛或联网隔离的生产验收。
+
+CPH-014（2026-10-25）：宿主隔离是 Edge 启动与回收流程的一部分，不能在 VMM 执行后
+补挂 cgroup。启用 `host_isolation` 的 QEMU 环境要求独立委派服务子树；真实 cgroup
+限制外层 RAM 加显式 VMM 余量、CPU 配额、进程数和 swap，余量同时进入 Node/IAM
+最小准入。Edge 先持久化启动意图和等待中子进程身份，再由固定权限 AppArmor broker
+认领该进程，最后允许它进入 cgroup、设置 on-exec 策略并 exec QEMU。不用线程内
+`preexec_fn` 或执行后迁移；接管继续核对 pidfd/exe/argv，并检查内核 cgroup、enforce、
+NoNewPrivs、零有效/许可能力及 seccomp 状态。启动时完整核验安排在 QMP/KVM 就绪后、
+guest `cont` 之前，避免把 exec 完成误作 QEMU 已安装 seccomp。启动权限丢失不重放。
+broker 只接受固定实例中的 32 位十六进制 ID 和经核验的 launcher PID，不启动进程、
+改网络或接受策略文本。认领后的进程死亡前不能卸载 AppArmor；退役墓碑先于卸载，
+延迟认领不得撤销它。卸载或 cgroup 回收失败保留资源租约。管理员只安装一次固定
+helper/配置/sudoers；服务运行和每 VM cgroup 操作继续由普通账户完成。
+此设计不新增生命周期权威，不代表联网、多租户对抗或所有后端已完成生产验收。
+
+CPH-015（2026-10-25）：QEMU 联网复用独立 netns/TAP 边界，但不新增 root VMM launcher。
+管理员固定实例、uplink、地址槽、DNS/可选代理和 eBPF 对象摘要；受限 broker 只创建本实例
+网络并向其私有 Unix socket 一次性交付 TAP FD，双方核验 UID，不能传命令或宿主路径。
+QEMU 保持宿主普通 UID，只继承指向独立 netns 的 TAP FD；内层 Docker 的 host 网络指的是
+该外层 guest，不是物理宿主。TAP 经 root 私有设备节点打开，AppArmor 只准许继承本实例
+节点的读写，不授予 `/dev/net/tun` 通配访问。控制/native 继续使用原认证 vsock。
+
+TC eBPF 绑定 TAP ingress，先安装并核验，再启用接口；IPv4 TCP/UDP 公网外连之外，
+只允许固定 DNS 和可选 TCP 代理例外。源 MAC/IP 伪造、IPv6、VLAN、分片、元数据与其他
+私网目的地默认拒绝；namespace conntrack/NAT 和精确标记的宿主规则处理回程，不清空
+宿主链或复用 Docker 网桥。此首版不宣称 IPv6、ICMP、热更新或带宽整形能力。
+
+网络 ledger 是既有 Edge 生命周期的资源凭据，不是第二个任务调度器。领取 FD 的意图
+先持久化，回复丢失不重领；启动子进程先记日志并认领网络，再允许 exec。VM 死亡证明
+先于拆网，RETIRING 先于拆除，迟到认领不能撤销退役。固定 root 子命令继承 broker 的
+文件描述符锁，broker 被杀后仍须等待在途命令结束才能清理。失败保留租约和证据；
+接管要求 namespace inode、接口身份、BPF ID/tag 与策略一致，不重建运行中实例的网络。
+启动异常先持久化原始错误，再尝试清理；清理异常单独记录，不能覆盖根因或伪造完成。
+未返回的创建若丢失失败标记，只能在原请求、原实例及 VMM 已死亡的证明下接续退役；
+正常 RUNNING 创建不能被失败恢复销毁。STOPPING 的清理可在同一 Edge 中重试，
+最终磁盘/CID/网络证明完成后，才由原生命周期和 IAM 所有者释放租约，不手工改账本。
+模型和受控变异验证这些有限边界，不能替代 Linux 验收。本轮另以已安装 wheel 完成
+7 项 SDK 与 29 项有限实机检查，包括内核实际附着程序、出网/拒绝、接管和完整退役；
+范围仍为单个已准备 Node、无代理策略，不外推为多租户对抗、洪泛或规模验收。
+
 CPH-008 于 2026-10-21 根据“重构要面对部署问题”的要求追加。它扩充验收范围，
 不表示批量安装、动态入群或升级回滚已完成，也不扩大现有 HA 验收结论。
 

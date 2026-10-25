@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import asdict
 from dsec.contracts.sandbox import (UnsupportedCapability, DSecMicroVMRunArgs,
-                                   DSecContainerRunArgs, DSecTB2RunArgs)
+                                   DSecContainerRunArgs, DSecFnCallRunArgs, DSecTB2RunArgs)
 from dsec.sdk.sandbox_transport import SandboxClient, ServiceError
 from dsec.contracts.resources import NodeDemand
 from dsec.sdk.native import NativeSandboxMixin
@@ -132,10 +132,34 @@ class _SandboxClient:
         args = DSecContainerRunArgs() if args is None else args
         if not isinstance(args, DSecContainerRunArgs):
             raise TypeError("run_container requires DSecContainerRunArgs")
+        if args.execution_mode != 'container':
+            raise ValueError('Use run_fncall for independent function invocations')
         args.validate()
         result = await asyncio.to_thread(self._transport.call, "container_create",
-            request_id=request_id, resource_demand=self._node_hint(resource_demand), spec=asdict(args))
+            request_id=request_id, resource_demand=self._node_hint(resource_demand), spec=args.wire_spec())
         return DSecContainerSandbox(self._transport, result["id"], args, features=self._features)
+
+    async def run_fncall(self, args: DSecFnCallRunArgs, *, request_id=None, resource_demand=None):
+        self._require_container_service()
+        if 'fncall-rpc-v1' not in self._features:
+            raise UnsupportedCapability('Upgrade API/Edge for fncall-rpc-v1')
+        if not isinstance(args, DSecFnCallRunArgs) or args.execution_mode != 'fncall':
+            raise TypeError('run_fncall requires DSecFnCallRunArgs')
+        args.validate()
+        result = await asyncio.to_thread(self._transport.call, 'container_create', request_id=request_id,
+            resource_demand=self._node_hint(resource_demand), spec=args.wire_spec())
+        return DSecFnCallExecutor(self._transport, result['id'], args)
+
+    async def attach_fncall(self, sandbox_id, args: DSecFnCallRunArgs):
+        self._require_container_service()
+        if not isinstance(args,DSecFnCallRunArgs) or args.execution_mode != 'fncall':
+            raise TypeError('attach_fncall requires DSecFnCallRunArgs')
+        args.validate()
+        slot = DSecFnCallExecutor(self._transport,sandbox_id,args)
+        status = await slot.status()
+        if status.get('execution_path') != 'fncall' or status['state'] != 'RUNNING':
+            raise RuntimeError('Function slot is not running')
+        return slot
 
     async def run_tb2(self, args: DSecTB2RunArgs, *, request_id: str | None = None, resource_demand=None):
         self._require_container_service()
@@ -152,6 +176,8 @@ class _SandboxClient:
             raise ValueError("sandbox_id is required")
         if not isinstance(args, DSecContainerRunArgs):
             raise TypeError("attach_container requires DSecContainerRunArgs")
+        if args.execution_mode != 'container':
+            raise ValueError('Use attach_fncall for function slots')
         args.validate()
         sandbox = DSecContainerSandbox(self._transport, sandbox_id, args, features=self._features)
         if (await sandbox.status())["state"] != "RUNNING":
@@ -186,7 +212,8 @@ class DSecContainerSandbox(NativeSandboxMixin):
 
     async def _call(self, operation, *, request_id=None, **args):
         return await asyncio.to_thread(self._transport.call, operation, self.id,
-            request_id=request_id, spec=asdict(self._run_args), **args)
+            request_id=request_id, spec=(self._run_args.wire_spec() if
+                hasattr(self._run_args, 'wire_spec') else asdict(self._run_args)), **args)
 
     async def status(self):
         return await self._call("container_status")
@@ -207,6 +234,29 @@ class DSecContainerSandbox(NativeSandboxMixin):
 
     async def stop(self, *, request_id: str | None = None):
         return await self._call("container_stop", request_id=request_id)
+
+
+class DSecFnCallExecutor:
+    """A charged, tenant-owned precreated slot; no persistent session API."""
+    def __init__(self, transport, sandbox_id, run_args):
+        self._transport, self.id, self._run_args = transport,sandbox_id,run_args
+
+    async def _call(self, operation, *, request_id=None, **args):
+        return await asyncio.to_thread(self._transport.call, operation, self.id,
+            request_id=request_id, spec=self._run_args.wire_spec(), **args)
+
+    async def invoke(self, command, *, timeout_ms=5000, output_limit=65536, request_id=None):
+        return await self._call('container_execute', request_id=request_id,command=command,
+                                timeout_ms=timeout_ms,output_limit=output_limit)
+
+    async def status(self):
+        return await self._call('container_status')
+
+    async def query_request(self, request_id):
+        return await self._call('container_query_action', lookup_id=request_id)
+
+    async def stop(self, *, request_id=None):
+        return await self._call('container_stop',request_id=request_id)
 
 
 class DSecTB2Sandbox(DSecContainerSandbox):

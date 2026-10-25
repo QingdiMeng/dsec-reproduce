@@ -10,6 +10,7 @@ from dsec.contracts.errors import CommandOutcomeUnknown, ServiceBusy
 from dsec.contracts.native import (CHUNK_BYTES, MAX_FILE_BYTES, NATIVE_FEATURE, STREAM_FEATURE,
                                    identifier, file_path)
 from dsec.contracts.sandbox import UnsupportedCapability
+from dsec.runtime.isolation.guest_auth import authenticate_client, validate_key
 
 
 class NativeSessionReset(RuntimeError):
@@ -17,10 +18,13 @@ class NativeSessionReset(RuntimeError):
 
 
 class NativeChannel:
-    def __init__(self, endpoint=None, *, vsock=False, guest_cid=None, max_timeout_ms=30000):
+    def __init__(self, endpoint=None, *, vsock=False, guest_cid=None, max_timeout_ms=30000, auth_key=None):
         if guest_cid is not None and (vsock or endpoint is not None or
                 type(guest_cid) is not int or not 3 <= guest_cid < 2**32-1):
             raise ValueError("Direct vsock requires an exclusive valid guest CID")
+        if auth_key is not None and guest_cid is None:
+            raise ValueError('Guest authentication requires direct vsock')
+        self.auth_key = validate_key(auth_key) if auth_key is not None else None
         self.endpoint = str(endpoint)
         self.vsock = vsock
         self.guest_cid = guest_cid
@@ -41,6 +45,8 @@ class NativeChannel:
         with socket.socket(family, socket.SOCK_STREAM) as connection:
             connection.settimeout(timeout_ms / 1000 + 5)
             connection.connect(self.endpoint if self.guest_cid is None else (self.guest_cid, 5001))
+            if self.auth_key is not None:
+                authenticate_client(connection, self.auth_key, 5001)
             with connection.makefile("rb") as stream:
                 if self.vsock:
                     connection.sendall(b"CONNECT 5001\n")
@@ -191,6 +197,8 @@ class NativeChannel:
             with socket.socket(family, socket.SOCK_STREAM) as connection:
                 connection.settimeout(timeout / 1000 + 5)
                 connection.connect(self.endpoint if self.guest_cid is None else (self.guest_cid, 5001))
+                if self.auth_key is not None:
+                    authenticate_client(connection, self.auth_key, 5001)
                 with connection.makefile("rb") as reader:
                     if self.vsock:
                         connection.sendall(b"CONNECT 5001\n")

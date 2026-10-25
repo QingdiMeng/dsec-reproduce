@@ -64,6 +64,8 @@ class EdgeFixture:
         self.drop_after_create = False
 
     def call(self, operation, sandbox_id=None, *, request_id=None, resource_demand=None, **args):
+        if operation == 'health':
+            return {'protocol_features': [], 'qemu_environments': {}}
         if operation in ('query_request', 'container_query_request'):
             return deepcopy(self.proofs.get(args['lookup_id'], {'state':'NOT_FOUND'}))
         if operation == 'create':

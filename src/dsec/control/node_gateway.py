@@ -29,7 +29,7 @@ def edge_request_id(project, operation_id):
 
 def public_proof(proof, operation_id):
     value = dict(proof, request_id=operation_id)
-    if 'response' in value:
+    if isinstance(value.get('response'), dict):
         value['response'] = dict(value['response'], request_id=operation_id)
     return value
 
@@ -122,6 +122,16 @@ class NodeGateway:
                 raise RequestConflict('Edge request ID belongs to a different operation/arguments')
         return proof
 
+    def _release_failed_create(self, receipt, proof):
+        response = proof.get('response') or {}
+        error = response.get('error') or {}
+        if (receipt['sandbox_id'] is None and proof['state'] == 'DONE' and response.get('ok') is False
+                and error.get('type') == 'ExecutionCreateFailed'
+                and error.get('details',{}).get('cleanup_complete') is True):
+            # The canonical Edge create digest was checked before this call.
+            # Its durable failure reply attests VMM death AND CID retirement.
+            self.iam.release(receipt['project'],receipt['request_id'],self.node_id,nonadmission=True)
+
     def create(self, receipt):
         with self._admission((receipt['project'], receipt['request_id'])):
             receipt = self._receipt(receipt)
@@ -137,6 +147,15 @@ class NodeGateway:
             demand = Quota(**receipt['demand'])
             if backend == 'container':
                 spec = DSecContainerRunArgs(**args['spec']).validate()
+                actual = self.inspection.call('health').get('qemu_environments', {}).get(environment)
+                if actual is not None:
+                    if actual['mode'] != spec.execution_mode:
+                        raise UnsupportedCapability('Requested mode differs from Node environment')
+                    physical = Quota(**actual['minimum'])
+                    minimum = Quota(**{name:max(getattr(minimum,name),getattr(physical,name))
+                                       for name in Quota.__dataclass_fields__})
+                elif spec.execution_mode == 'fncall':
+                    raise UnsupportedCapability('Owning Edge has no prepared QEMU function environment')
                 minimum = Quota(1, max(minimum.cpu,spec.cpu_cores_limit),
                     max(minimum.memory_mb,spec.memory_limit_mb),minimum.disk_mb,minimum.network_mbps)
             if not minimum.fits(demand):
@@ -153,6 +172,7 @@ class NodeGateway:
             if proof['state'] == 'DONE':
                 response = proof['response']
                 if not response['ok']:
+                    self._release_failed_create(receipt,proof)
                     raise ServiceError(response['error']['type'], response['error']['message'])
                 return self._result(receipt, response['result'])
             if proof['state'] == 'UNKNOWN':
@@ -169,6 +189,8 @@ class NodeGateway:
                 result = self.edge.call('create' if backend == 'microvm' else 'container_create',
                     request_id=edge_request_id(receipt['project'], receipt['request_id']), resource_demand=hint, **args)
             except ServiceError as exc:
+                if exc.kind == 'ExecutionCreateFailed':
+                    self._release_failed_create(receipt,self._creation_proof(receipt))
                 # Only explicit non-admission AND an absent Edge intent permits
                 # returning quota. An arbitrary failure/timeout never does.
                 if exc.kind in ('ServiceBusy', 'NodeAdmissionBusy', 'AdmissionDenied'):
@@ -184,6 +206,8 @@ class NodeGateway:
             if is_rollout(receipt):
                 raise RequestConflict('Use rollout status for a worker-owned admission')
             proof = self._creation_proof(receipt)
+            if receipt['state'] != 'RELEASED':
+                self._release_failed_create(receipt,proof)
             if proof['state'] == 'NOT_FOUND' and receipt['state'] == 'DISPATCHED':
                 return dict(proof, state='UNKNOWN', reason='dispatch_may_be_delayed')
             if proof['state'] == 'DONE' and proof['response']['ok']:
@@ -224,7 +248,7 @@ class NodeGateway:
                 raise AuthorizationDenied('Request belongs to another sandbox')
             return dict(proof, **({'sandbox_id':route.encode(self.route_key)} if proof['state'] != 'NOT_FOUND' else {}))
         if operation == 'container_query_action':
-            # Container command proofs live in that container's guest journal,
+            # Command proofs live in the owning backend's action journal,
             # not the Edge lifecycle journal. Keep the admitted specification
             # and map private request IDs back to the authenticated API scope.
             proof = public_proof(self.edge.call(operation, route.local_id,
@@ -272,6 +296,10 @@ class NodeGateway:
         extensions = {SESSION_FILE_FEATURE, HTTP_FEATURE, ROLLOUT_FEATURE}
         capabilities = (set(self.capabilities)-extensions) | (extensions & set(health.get('protocol_features', ())))
         capabilities.discard(ROLLOUT_FEATURE)
+        capabilities.discard('fncall-execution-v1')
+        if any(value.get('mode') == 'fncall' for name,value in health.get('qemu_environments',{}).items()
+               if name in self.environments) and 'container' in self.backends:
+            capabilities.add('fncall-execution-v1')
         try:
             if self.rollouts.healthy():
                 capabilities.add(ROLLOUT_FEATURE)
@@ -308,6 +336,7 @@ class NodeGateway:
                     continue
                 if current['state'] in ('ADMITTED', 'DISPATCHED'):
                     proof = self._creation_proof(current)
+                    self._release_failed_create(current,proof)
                     if proof['state'] != 'DONE' or not proof['response']['ok']:
                         # NOT_FOUND cannot prove a delayed dispatch will never
                         # arrive. UNKNOWN/PENDING never permit quota release.

@@ -40,6 +40,8 @@ def main():
                         help="task-id=absolute ext4 path for a task microVM")
     parser.add_argument("--microvm-environment-catalog",
                         help="pinned generic microVM boot and EROFS layer catalog")
+    parser.add_argument('--qemu-execution-catalog',
+                        help='trusted networkless QEMU Container/FnCall catalog; no host Docker fallback')
     parser.add_argument("--validate-only", action="store_true",
                         help="validate immutable artifacts and configuration without starting a daemon")
     parser.add_argument("--tb2-layer-manifest", action="append", default=[],
@@ -94,6 +96,15 @@ def main():
     parser.add_argument("--warm-min-disk-gib", type=int, default=0)
     args=parser.parse_args()
     os.umask(0o077)
+    if args.qemu_execution_catalog:
+        from dsec.runtime.backends.qemu_container import ExecutionCatalog
+        catalog = ExecutionCatalog(args.qemu_execution_catalog)
+        for item in catalog.environments.values():
+            from dsec.runtime.backends.qemu import QemuArtifact
+            for key in ('binary','kernel','template'):
+                QemuArtifact(**item[key]).verify()
+        os.environ['DSEC_QEMU_EXECUTION_CATALOG'] = str(catalog.path)
+        os.environ.setdefault('DSEC_CONTAINER_ROOT', str(Path(args.root).resolve().parent/'containers'))
     if args.node_budget and args.admission_worker_socket:
         parser.error('Use Edge node admission or legacy worker admission, never both')
     if args.max_requests<1: parser.error("--max-requests must be positive")

@@ -1,4 +1,4 @@
-"""Bind rotation safety models to canonical tests and required guard removals."""
+"""Bind security safety models to canonical tests and required guard removals."""
 import argparse
 import hashlib
 import json
@@ -15,6 +15,8 @@ from dsec.host import security_publication
 from tests.unit.test_credential_rotation import CredentialRotationTests
 from tests.unit.test_security_publication import SecurityPublicationTests
 from tests.unit.test_tls_rotation import TLSRotationTests
+from dsec.runtime.isolation import guest_auth
+from tests.unit.test_guest_auth import GuestAuthTests
 
 
 def main():
@@ -22,11 +24,20 @@ def main():
     root=args.root.resolve();root.mkdir(parents=True,exist_ok=False)
     report=dict(status='failed',canonical=[],controls=[],scope='Targeted code guard correspondence, not whole-program refinement or HA proof')
     try:
-        for cls in (CredentialRotationTests,SecurityPublicationTests,TLSRotationTests):
+        for cls in (CredentialRotationTests,SecurityPublicationTests,TLSRotationTests,GuestAuthTests):
             result=run(root/cls.__name__,test_class=cls)
             if not result.wasSuccessful() or result.skipped:raise AssertionError('Canonical security tests must pass without skips')
             report['canonical'].append(dict(suite=cls.__name__,tests=result.testsRun))
         controls=(
+            ('guest_auth_bypass',guest_auth,None,'authenticate_server',
+             [("if not hmac.compare_digest(read_exact(sock, KEY_BYTES, deadline=deadline), proof(key, port, nonce, b'client')):","if False:")],GuestAuthTests,
+             'test_previous_challenge_response_cannot_be_replayed','EffectsRequireBoundProof'),
+            ('guest_auth_port',guest_auth,None,'proof',
+             [("GREETING+str(port).encode()+b'\\0'+role+b'\\0'+nonce","GREETING+b'\\0'+role+b'\\0'+nonce")],GuestAuthTests,
+             'test_control_proof_cannot_authorize_native_port','EffectsRequireBoundProof'),
+            ('guest_auth_nonce',guest_auth,None,'proof',
+             [("GREETING+str(port).encode()+b'\\0'+role+b'\\0'+nonce","GREETING+str(port).encode()+b'\\0'+role")],GuestAuthTests,
+             'test_previous_challenge_response_cannot_be_replayed','EffectsRequireBoundProof'),
             ('unproved_completion',credential_rotation,None,'rotate',
              [("if caller!=old[expected]:","if False:")],CredentialRotationTests,
              'test_overlap_and_completion_prove_the_new_token_without_storing_secrets','CompletionHasNewProof'),
@@ -59,7 +70,11 @@ def main():
             if not passed:raise AssertionError('Security guard removal did not cause its required behavioral failure: '+name)
         report['status']='passed'
     finally:
-        sources=['src/dsec/control/credential_rotation.py','src/dsec/control/iam.py','src/dsec/control/cluster_api.py',
+        sources=['src/dsec/runtime/isolation/guest_auth.py','tests/unit/test_guest_auth.py','tests/unit/test_qemu_backend.py',
+                 'src/dsec/runtime/backends/docker_guest.py','src/dsec/runtime/backends/qemu.py',
+                 'src/dsec/runtime/backends/qemu_container.py','src/dsec/runtime/sessions/native.py',
+                 'verification/GuestChannelAuth.tla','verification/GuestChannelAuth.cfg',
+                 'src/dsec/control/credential_rotation.py','src/dsec/control/iam.py','src/dsec/control/cluster_api.py',
                  'src/dsec/_credentials.py','src/dsec/_tls.py','src/dsec/_security_files.py','src/dsec/host/security_publication.py',
                  'src/dsec/host/cluster_http.py','src/dsec/control/etcd_auth.py','src/dsec/control/coordination.py',
                  'tests/unit/test_credential_rotation.py','tests/unit/test_security_publication.py','tests/unit/test_tls_rotation.py',

@@ -25,7 +25,7 @@ class NodeUpgradeTests(FleetFixture, unittest.TestCase):
                                    action,proof=proof,release=release)
 
     def test_upgrade_requires_current_empty_maintenance_and_compatible_state(self):
-        bad=deepcopy(self.target);bad['compatibility']['edge']=2
+        bad=deepcopy(self.target);bad['compatibility']['edge']+=1
         with self.assertRaises(ValueError):self.change('upgrade',bad)
         self.assertIsNone(self.life.read('n1').get('upgrade'))
         current=self.life.read('n1');proof=dict(self.proof(current,False),release=self.source)

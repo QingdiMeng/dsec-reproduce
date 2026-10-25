@@ -9,6 +9,7 @@ from dsec.contracts.cluster import Quota, identifier
 from dsec.host import node_probe
 from dsec.host.diagnostics import doctor
 from dsec.storage.catalog import EnvironmentCatalog
+from dsec.runtime.backends.qemu_container import ExecutionCatalog
 
 
 def load_node(path):
@@ -30,9 +31,18 @@ def check_binding(cfg, configuration):
     if node.get('worker_socket') and Path(node['worker_socket']).resolve() != root/'worker/worker.sock':
         raise ValueError('Node worker socket does not belong to this host instance')
     catalog = EnvironmentCatalog(cfg['sandbox']['microvm_environment_catalog'])
+    prepared = set(catalog.entries)
+    execution_path = cfg['sandbox'].get('qemu_execution_catalog')
+    execution = ExecutionCatalog(execution_path) if execution_path else None
+    if execution:
+        if 'container' not in node.get('backends', ()):
+            raise ValueError('QEMU Container/FnCall environments require the container route backend')
+        if set(execution.environments) & prepared:
+            raise ValueError('QEMU and Firecracker environment IDs must be distinct')
+        prepared.update(execution.environments)
     advertised = node['environments']
     if (not advertised or set(advertised) != set(node['minimum_demands'])
-            or not set(advertised) <= set(catalog.entries)):
+            or not set(advertised) <= prepared):
         raise ValueError('Every advertised environment requires a prepared catalog entry and minimum demand')
     budget = cfg['scheduler']
     capacity = Quota(node['max_sandboxes'], budget['cpu'], budget['memory_mb'],
@@ -40,6 +50,16 @@ def check_binding(cfg, configuration):
     for minimum in node['minimum_demands'].values():
         if not Quota(**minimum).fits(capacity):
             raise ValueError('An advertised environment minimum exceeds the configured Node budget')
+    if execution:
+        import math
+        for name,item in execution.environments.items():
+            if name not in advertised:
+                continue
+            physical = Quota(1,item['cpu_count'],item['memory_mb']+
+                (execution.host_isolation['memory_overhead_mb'] if execution.host_isolation else 0),
+                math.ceil(Path(item['template']['path']).stat().st_size/1024**2),0)
+            if not physical.fits(Quota(**node['minimum_demands'][name])):
+                raise ValueError('Node minimum must include outer QEMU RAM, CPU and private disk')
 
 
 def memory_available_mb():

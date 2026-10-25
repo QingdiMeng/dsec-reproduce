@@ -1,7 +1,7 @@
-"""Networkless QEMU/KVM execution primitive, not yet a public FullVM backend.
+"""QEMU/KVM primitive, composed by the Container/FnCall Edge backend.
 
-Only trusted administrator-pinned artifacts enter this driver. Edge integration,
-outer-VM Docker, host confinement and eBPF policy are separate unfinished gates.
+Only trusted administrator-pinned artifacts enter this driver. Edge leases and
+outer-VM Docker belong to its caller; host confinement/eBPF remain separate gates.
 Production requests fail before effects. QMP is private; no arbitrary argv, HMP,
 host shares, host Docker, device passthrough or TCG fallback.
 """
@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import socket
 import subprocess
 import threading
 import time
@@ -23,6 +24,7 @@ from dsec.contracts.sandbox import UnsupportedCapability
 from dsec.runtime.backends.qmp import QMP
 from dsec.runtime.sessions.channel import VsockCommandChannel
 from dsec.runtime.sessions.native import NativeChannel
+from dsec.runtime.isolation.guest_auth import BOOT_ACK, FEATURE, read_exact, validate_key
 from dsec.storage.snapshots import _copy_sparse
 
 
@@ -72,20 +74,30 @@ class QemuVM:
 
     This raw-disk primitive boots a trusted guest. Records permit adoption of an
     attested RUNNING process, not replay of interrupted boot or guest operations.
-    A guest CID is an administrator-reserved host-wide resource; its allocator
-    will belong to Edge. Kernel CID collisions reject boot, never replace a VM.
+    A guest CID is an administrator-reserved host-wide resource allocated by
+    Edge. Kernel CID collisions reject boot, never replace a VM.
     """
-    def __init__(self, config, directory):
+    def __init__(self, config, directory, *, ready_probe=None, auth_key=None, host_isolation=None, network=None):
         self.config = config.validate()
+        self.auth_key = validate_key(auth_key) if auth_key is not None else None
         path = Path(directory)
         if not path.is_absolute() or path.resolve(strict=True) != path or path.is_symlink():
             raise ValueError('Private canonical instance directory required')
         info = path.stat()
         if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
             raise ValueError('Instance directory must be owned by runtime user and mode 0700')
-        if len(os.fsencode(str(path/'qmp.sock'))) >= 104:
+        if max(len(os.fsencode(str(path/name))) for name in ('qmp.sock', 'bootstrap.sock')) >= 104:
             raise ValueError('Private QMP socket path is too long')
         self.directory, self.record_path = path, path/'qemu.json'
+        self.host = None
+        if host_isolation is not None:
+            from dsec.runtime.isolation.qemu_host import HostIsolation
+            self.host = HostIsolation(host_isolation,path,config.memory_mb,config.cpu_count)
+        self.network = None
+        if network is not None:
+            if self.host is None:raise ValueError('Isolated QEMU networking requires host confinement')
+            from dsec.runtime.isolation.qemu_network import QemuNetwork
+            self.network=QemuNetwork(network,path)
         self.owner = (path/'qemu.lock').open('a')
         try:
             fcntl.flock(self.owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -97,7 +109,8 @@ class QemuVM:
         self.state, self.reason = 'NEW', None
         self.qmp = QMP(path/'qmp.sock')
         self.channel = VsockCommandChannel(guest_cid=config.guest_cid)
-        self.native = NativeChannel(guest_cid=config.guest_cid)
+        self.native = NativeChannel(guest_cid=config.guest_cid, auth_key=self.auth_key)
+        self.ready_probe = ready_probe
         self.record = None
 
     def _require_owner(self):
@@ -113,7 +126,7 @@ class QemuVM:
                        'sha256':getattr(self.config, name).sha256}
                 for name in ('binary', 'kernel', 'template')}
 
-    def _argv(self, machine_uuid, artifacts):
+    def _argv(self, machine_uuid, artifacts, network=None):
         # blockdev JSON prevents commas/options in a path from adding drives.
         root = {'driver':'raw', 'node-name':'root', 'file':{
             'driver':'file', 'filename':str(self.directory/'root.ext4')}, 'read-only':False}
@@ -121,7 +134,7 @@ class QemuVM:
         # each whole value remains one argv item and never passes through shell.
         qmp = 'socket,id=qmp,path=' + str(self.directory/'qmp.sock').replace(',', ',,') + ',server=on,wait=off'
         serial = 'file,id=serial0,path=' + str(self.directory/'console.log').replace(',', ',,')
-        return [artifacts['binary']['path'], '-no-user-config', '-nodefaults',
+        argv = [artifacts['binary']['path'], '-no-user-config', '-nodefaults',
                 '-machine', 'q35,accel=kvm', '-cpu', 'host', '-m', str(self.config.memory_mb),
                 '-smp', str(self.config.cpu_count), '-uuid', machine_uuid,
                 '-display', 'none', '-monitor', 'none', '-nic', 'none', '-no-reboot', '-S',
@@ -133,6 +146,18 @@ class QemuVM:
                 '-blockdev', json.dumps(root, separators=(',', ':')),
                 '-device', 'virtio-blk-pci,drive=root', '-device',
                 f'vhost-vsock-pci,guest-cid={self.config.guest_cid}']
+        if self.auth_key is not None:
+            bootstrap = ('socket,id=bootstrap,path=' +
+                         str(self.directory/'bootstrap.sock').replace(',', ',,') + ',server=on,wait=off')
+            argv += ['-chardev', bootstrap, '-device', 'virtio-serial-pci,id=dsecserial',
+                     '-device', f'virtserialport,bus=dsecserial.0,chardev=bootstrap,name={FEATURE}']
+        if network is not None:
+            if type(network['fd']) is not int or network['fd']<3:raise ValueError('Private TAP descriptor required')
+            # With an inherited TAP descriptor, its creator chose the header
+            # mode already. QEMU rejects vnet_hdr= alongside fd=.
+            argv += ['-netdev',f"tap,id=dsecnet,fd={network['fd']},vhost=off",
+                     '-device','virtio-net-pci,netdev=dsecnet,mac=06:00:dc:00:00:02']
+        return argv
 
     def _preflight(self):
         if os.geteuid() == 0:
@@ -146,7 +171,22 @@ class QemuVM:
             guest_cid=self.config.guest_cid, memory_mb=self.config.memory_mb,
             cpu_count=self.config.cpu_count, machine_uuid=str(uuid.uuid4()), process=None)
         record['argv'] = self._argv(record['machine_uuid'], artifacts)
+        if self.auth_key is not None:
+            record['auth_sha256'] = hashlib.sha256(self.auth_key).hexdigest()
+        if self.host is not None:
+            record['host_policy'] = self.host.policy
+        if self.network is not None:record['network_policy']=self.network.policy
         return record
+
+    def _provision_channel(self):
+        if self.auth_key is not None:
+            # The only boot transfer. Never replay on adoption of a live VM.
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.settimeout(15)
+                sock.connect(str(self.directory/'bootstrap.sock'))
+                sock.sendall(self.auth_key)
+                if read_exact(sock, len(BOOT_ACK), deadline=time.monotonic()+15) != BOOT_ACK:
+                    raise ValueError('Guest channel bootstrap acknowledgement mismatch')
 
     def _attach(self, saved):
         # Same pidfd/start-time/UID/executable verifier as the Firecracker path.
@@ -160,14 +200,40 @@ class QemuVM:
             raise RuntimeError('QEMU KVM enforcement not attested')
 
     def _spawn(self):
-        self.child = subprocess.Popen(self.record['argv'], stdin=subprocess.DEVNULL,
-            stdout=self.log, stderr=subprocess.STDOUT, close_fds=True,
-            env={'PATH':'/usr/bin:/bin', 'LANG':'C'})
+        if self.host is None:
+            self.child = subprocess.Popen(self.record['argv'], stdin=subprocess.DEVNULL,
+                stdout=self.log, stderr=subprocess.STDOUT, close_fds=True,
+                env={'PATH':'/usr/bin:/bin', 'LANG':'C'})
+        else:
+            def committed(saved,argv):
+                self.record.update(launch_process=saved,launch_argv=argv)
+                self._save()
+                self._checkpoint('confined_child_identity_committed')
+            options = (dict(pass_fds=(self.network.fd,),claim=self.network.claim)
+                       if self.network is not None else {})
+            try:
+                self.child = self.host.launch(self.record['argv'],self.log,committed,
+                                             on_spawn=lambda child:setattr(self,'child',child),**options)
+            finally:
+                if self.network is not None:self.network.close()
         self._checkpoint('spawned_before_pid_record')
         from dsec.runtime.registry import identity
         saved = identity(self.child.pid)
         self.process = self._attach(saved)
         self.record['process'] = saved; self._save()
+
+    def _attach_launcher(self, saved):
+        from dsec.runtime.registry import identity, AttachedProcess
+        try:current=identity(saved['pid'])
+        except FileNotFoundError:return None
+        if (any(current[key]!=saved[key] for key in ('uid','start_ticks','boot_id'))):
+            raise RuntimeError('Launch process identity changed; recovery fenced')
+        if current['argv']==self.record['argv']:
+            binary=self.config.binary.path
+        elif current['argv']==self.record['launch_argv']:
+            binary=self.record['launch_argv'][0]
+        else:raise RuntimeError('Unexpected confined launch process; recovery fenced')
+        return AttachedProcess(current,binary,self.qmp.endpoint,expected_argv=current['argv'])
 
     def _checkpoint(self, stage):
         """No-op named boundary for deterministic controller-crash acceptance."""
@@ -206,6 +272,8 @@ class QemuVM:
             self.record = self._initial_record(artifacts)
             self.state = 'STARTING'; self._save()
             try:
+                if self.host is not None:
+                    self.record['host_isolation']=self.host.prepare();self._save()
                 disk = self.directory/'root.ext4'
                 if disk.exists() or disk.is_symlink():
                     raise FileExistsError('Private writable disk already exists')
@@ -213,6 +281,10 @@ class QemuVM:
                 disk.chmod(0o600)
                 if disk.stat().st_nlink != 1:
                     raise ValueError('Private disk must not be hard-linked')
+                if self.network is not None:
+                    self.record['network_isolation']=self.network.prepare()
+                    self.record['argv']=self._argv(self.record['machine_uuid'],artifacts,self.network.record)
+                    self._save()
                 self.log = (self.directory/'vmm.log').open('xb')
                 self._spawn()
                 deadline = time.monotonic() + 15
@@ -223,20 +295,34 @@ class QemuVM:
                         raise TimeoutError('QMP socket not ready')
                     time.sleep(.02)
                 self._prove_kvm()
+                # QEMU installs its own seccomp during initialization, after
+                # exec. Require the full kernel proof once QMP is serving and
+                # before the paused guest can execute, not at the exec gap.
+                if self.host is not None:self.host.attest(self.process.pid)
+                if self.network is not None:self.network.attest()
                 self.qmp.execute('cont')
+                self._provision_channel()
                 while True:
                     if self.process.poll() is not None:
                         raise RuntimeError('QEMU exited before guest readiness')
                     try:
-                        self.native.capabilities(); break
+                        (self.ready_probe or self.native.capabilities)(); break
                     except (OSError, EOFError, UnsupportedCapability):
                         if time.monotonic() >= deadline:
                             raise TimeoutError('QEMU guest native protocol not ready')
                         time.sleep(.02)
                 self.state = 'RUNNING'; self._save()
                 return self.status()
-            except BaseException:
-                self._terminate()
+            except BaseException as exc:
+                # Preserve the first error even if cleanup itself fails.
+                self.record['boot_error']=dict(type=type(exc).__name__,message=str(exc)[:8192])
+                self._save()
+                try:self._terminate()
+                except BaseException as cleanup:
+                    self.state,self.reason='STOPPING','boot_failed_cleanup_pending'
+                    self.record['cleanup_error']=dict(type=type(cleanup).__name__,message=str(cleanup)[:8192])
+                    self._save()
+                    raise
                 self.state, self.reason = 'FAILED', 'boot_failed_no_replay'
                 self._save()
                 raise
@@ -248,18 +334,40 @@ class QemuVM:
                 raise RuntimeError('Adoption is single-use')
             record = json.loads(self.record_path.read_text())
             artifacts = self._artifacts()
+            expected_argv=self._argv(str(uuid.UUID(record['machine_uuid'])),artifacts,record.get('network_isolation'))
+            valid_argv=record.get('argv')==expected_argv
+            # The rejected FD/header combination can exist in old failed
+            # records. Accept that exact historical spelling only for fully
+            # retired instances; never attach a live process with changed argv.
+            if (not valid_argv and '-netdev' in expected_argv and record.get('state') in ('STOPPED','FAILED')
+                    and not record.get('process') and not record.get('launch_process')
+                    and record.get('host_retired') is True and record.get('network_retired') is True):
+                legacy=list(expected_argv);legacy[legacy.index('-netdev')+1]+=',vnet_hdr=off'
+                valid_argv=record.get('argv')==legacy
             if (record.get('version') != 1 or record.get('artifacts') != artifacts
                     or record.get('guest_cid') != self.config.guest_cid
                     or record.get('memory_mb') != self.config.memory_mb
                     or record.get('cpu_count') != self.config.cpu_count
-                    or record.get('argv') != self._argv(str(uuid.UUID(record['machine_uuid'])), artifacts)):
+                    or record.get('auth_sha256') != (hashlib.sha256(self.auth_key).hexdigest()
+                                                    if self.auth_key is not None else None)
+                    or record.get('host_policy') != (self.host.policy if self.host is not None else None)
+                    or record.get('network_policy') != (self.network.policy if self.network is not None else None)
+                    or not valid_argv):
                 raise ValueError('QEMU record configuration identity mismatch')
             self.record = record
+            if self.host is not None and record.get('host_isolation'):
+                self.host.restore(record['host_isolation'])
+            if self.network is not None and record.get('network_isolation'):
+                self.network.restore(record['network_isolation'])
             if record.get('process'):
                 self.process = self._attach(record['process'])
+            elif record.get('launch_process'):
+                self.process = self._attach_launcher(record['launch_process'])
             if record['state'] in ('STOPPED', 'FAILED') and not record.get('process'):
                 self.state, self.reason = record['state'], record.get('reason')
             elif record['state'] in ('RUNNING', 'PAUSED') and self.process is not None:
+                if self.host is not None:self.host.attest(self.process.pid)
+                if self.network is not None:self.network.attest()
                 self._prove_kvm()
                 actual = self.qmp.execute('query-status')
                 if actual.get('running') != (record['state'] == 'RUNNING'):
@@ -281,8 +389,13 @@ class QemuVM:
             if self.state in ('RUNNING', 'PAUSED') and not live:
                 self.state, self.reason = 'FAILED', 'vmm_missing_no_replay'
                 self._save()
-            return dict(state=self.state, process_alive=live, guest_cid=self.config.guest_cid,
+            confinement = self.host.attest(self.process.pid) if live and self.host is not None else None
+            result = dict(state=self.state, process_alive=live, guest_cid=self.config.guest_cid,
+                        host_isolation=confinement,
                         production=False, reason=self.reason)
+            if self.network is not None:
+                result['network_isolation']=self.network.attest() if live else None
+            return result
 
     def execute(self, command, *, timeout_ms=5000, output_limit=65536):
         with self.lock:
@@ -336,6 +449,17 @@ class QemuVM:
             # Death is proved before clearing the identity. A later owner must
             # not open a pidfd for a terminal record's old/reused PID.
             self.record['process'] = None
+            if self.host is not None:
+                needs_retirement=bool(self.record.get('host_isolation') or
+                                      self.record.get('launch_process') or self.host.created)
+                self.record['launch_process']=None
+                self._save()  # Proved death survives a later broker/cleanup failure.
+                if needs_retirement:self.host.retire()
+                self.record['host_retired']=True
+            if self.network is not None:
+                self._save()
+                self.network.retire()
+                self.record['network_retired']=True
 
     def stop(self):
         with self.lock:
@@ -364,4 +488,5 @@ class QemuVM:
                 self.process.close(); self.process = None
             if self.log is not None:
                 self.log.close(); self.log = None
+            if self.network is not None:self.network.close()
             self.owner.close()

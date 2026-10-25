@@ -42,7 +42,7 @@ class ContainerLifecycleJournal:
                 return {"state": "PENDING", "request_id": request_id}
             return self._lookup_locked(path, request_id)
 
-    def recover(self, request_id, verifier):
+    def recover(self, request_id, verifier, *, failed=False):
         """Commit a proven terminal result for a previously uncertain request."""
         path = self._path(request_id)
         with path.with_suffix(".lock").open("a") as stream:
@@ -53,11 +53,14 @@ class ContainerLifecycleJournal:
             record = self._lookup_locked(path, request_id)
             if record["state"] != "UNKNOWN" or not isinstance(record.get("args"), dict):
                 return record
+            if failed and record['operation'] != 'create':
+                raise ValueError('Only failed creation can publish a cleanup proof')
             result = verifier(record)
             if result is None:
                 return record
             record["state"] = "DONE"
-            record["response"] = {"request_id": request_id, "ok": True, "result": result}
+            record["response"] = {"request_id": request_id, "ok": not failed,
+                                  'error' if failed else 'result':result}
             record["recovered_from_unknown"] = True
             atomic_json(path, record)
             return record
@@ -77,6 +80,10 @@ class ContainerLifecycleJournal:
                 if saved["digest"] != digest:
                     raise ValueError("Container request ID used with different operation/arguments")
                 if saved["state"] == "DONE":
+                    if not saved['response']['ok']:
+                        from dsec.contracts.rpc import ServiceError
+                        error = saved['response']['error']
+                        raise ServiceError(error['type'], error['message'], error.get('details'))
                     return saved["response"]["result"]
                 raise RequestOutcomeUnknown("Container lifecycle result is unknown", request_id)
             if operation == "create" and not self.edge_node_admission:

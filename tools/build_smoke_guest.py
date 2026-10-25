@@ -8,6 +8,24 @@ import subprocess
 import tempfile
 
 
+def export_image(image, root, archive):
+    """Export a pinned image via a stopped, networkless temporary container."""
+    if not re.fullmatch(r'sha256:[0-9a-f]{64}', image):
+        raise ValueError('Supply an exact local Docker image ID')
+    actual = subprocess.check_output(['docker', 'image', 'inspect', image,
+                                      '--format', '{{.Id}}'], text=True).strip()
+    if actual != image:
+        raise ValueError('Image identity differs')
+    cid = subprocess.check_output(['docker', 'create', '--network', 'none', image, '/bin/true'],
+                                  text=True).strip()
+    try:
+        with Path(archive).open('wb') as stream:
+            subprocess.run(['docker', 'export', cid], stdout=stream, check=True)
+    finally:
+        subprocess.run(['docker', 'rm', cid], check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(['tar', '--no-same-owner', '-xf', str(archive), '-C', str(root)], check=True)
+
+
 def build(image, source, output):
     if not re.fullmatch(r'sha256:[0-9a-f]{64}', image):
         raise ValueError('Supply an exact local Docker image ID')
@@ -28,14 +46,7 @@ def build(image, source, output):
         work = Path(temp)
         root = work/'root'
         root.mkdir()
-        cid = subprocess.check_output(['docker', 'create', '--network', 'none', image, '/bin/true'],
-                                      text=True).strip()
-        try:
-            with (work/'root.tar').open('wb') as stream:
-                subprocess.run(['docker', 'export', cid], stdout=stream, check=True)
-        finally:
-            subprocess.run(['docker', 'rm', cid], check=True, stdout=subprocess.DEVNULL)
-        subprocess.run(['tar', '--no-same-owner', '-xf', str(work/'root.tar'), '-C', str(root)], check=True)
+        export_image(image, root, work/'root.tar')
         if not (root/'bin/sh').exists() and not (root/'bin/sh').is_symlink():
             raise ValueError('Trusted base image needs /bin/sh')
         subprocess.run(['gcc', '-static', '-O2', '-Wall', '-Wextra', '-Werror',

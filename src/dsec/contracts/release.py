@@ -3,7 +3,7 @@ from copy import deepcopy
 import re
 
 
-COMPATIBILITY = {'cluster': 'dsec-cluster-v1', 'fleet': 'dsec-node-upgrade-v1', 'coordination': 1, 'edge': 1, 'episode': 1}
+COMPATIBILITY = {'cluster': 'dsec-cluster-v1', 'fleet': 'dsec-node-upgrade-v1', 'coordination': 1, 'edge': 2, 'episode': 1}
 
 
 def release_ref(value):

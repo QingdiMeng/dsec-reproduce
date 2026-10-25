@@ -1,7 +1,8 @@
 """Edge owns container backends and the existing durable lifecycle journal.
 
-This preserves the trusted-host Docker backend. It does not implement
-production VM containment or container memory snapshots.
+An explicit trusted catalog selects networkless Docker-in-QEMU without a host
+Docker fallback. Legacy host Docker is development-only. Host confinement,
+mediated networking and container memory snapshots remain separate gates.
 """
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
@@ -13,6 +14,8 @@ import re
 import threading
 
 from dsec.contracts.requests import request_digest
+from dsec.contracts.errors import RequestOutcomeUnknown
+from dsec.contracts.rpc import ServiceError
 from dsec.contracts.resources import NodeDemand
 from dsec.contracts.sandbox import DSecContainerRunArgs, DSecTB2RunArgs, UnsupportedCapability
 from dsec.runtime.backends.container import (CatalogErofsBackend, CatalogLayeredBackend,
@@ -50,6 +53,27 @@ class ContainerRuntime:
         self.operation_locks = {}
         self.native_activity = {}
         self.closed = False
+        self.qemu_catalog = None
+
+    def _execution_catalog(self):
+        from dsec.runtime.backends.qemu_container import ExecutionCatalog
+        with self.lock:
+            if self.qemu_catalog is None:
+                self.qemu_catalog = ExecutionCatalog(self.configuration['DSEC_QEMU_EXECUTION_CATALOG'])
+            self.qemu_catalog.unchanged()
+            return self.qemu_catalog
+
+    def execution_environments(self):
+        path = self.configuration.get('DSEC_QEMU_EXECUTION_CATALOG')
+        if not path:
+            return {}
+        import math
+        catalog = self._execution_catalog()
+        return {name:dict(mode=item['mode'],containment='qemu-kvm',network=item.get('network','none'),
+            minimum=dict(concurrency=1,cpu=item['cpu_count'],memory_mb=item['memory_mb']+
+                         (catalog.host_isolation['memory_overhead_mb'] if catalog.host_isolation else 0),
+                         disk_mb=math.ceil(Path(item['template']['path']).stat().st_size/1024**2),network_mbps=0))
+                for name,item in catalog.environments.items()}
 
     def _journal(self):
         with self.lock:
@@ -79,6 +103,10 @@ class ContainerRuntime:
             if self.native_activity or self.operation_locks:
                 raise ServiceBusy("Container operations are active; owner cannot be released")
             self.closed = True
+            for backend in self.backends.values():
+                close = getattr(backend, 'close', None)
+                if close is not None:
+                    close()
             if self.owner_lock is not None:
                 self.owner_lock.close()
                 self.owner_lock = None
@@ -117,6 +145,8 @@ class ContainerRuntime:
     def native_operation(self, kind, spec, sandbox_id, request_id):
         # Registration and stop admission share the existing lifecycle lock.
         # Readers then run concurrently; the lock is not held over guest I/O.
+        if getattr(spec, 'execution_mode', 'container') != 'container':
+            raise UnsupportedCapability('FnCall has no persistent native sessions')
         token = object()
         with self._operation(sandbox_id):
             self._journal()
@@ -145,12 +175,15 @@ class ContainerRuntime:
                     self.backends[key] = TB2ContainerBackend(spec.task_id, spec.image)
                 return self.backends[key]
             backend = self._container_backend(spec)
+            check = getattr(backend, 'check_spec', None)
+            if check is not None:
+                check(spec)
             backend.edge_node_admission = self.node_admission is not None
             return backend
 
     def _key(self, kind, spec, sandbox_id):
         return ((kind, spec.task_id, spec.image, sandbox_id) if kind == "tb2" else
-                (kind, spec.environment_id, spec.storage, sandbox_id))
+                (kind, spec.environment_id, spec.storage, spec.execution_mode, sandbox_id))
 
     def _entry(self, kind, spec, sandbox_id):
         backend = self._backend(kind, spec)
@@ -195,7 +228,8 @@ class ContainerRuntime:
                 lease_id = None
                 if self.node_admission is not None:
                     lease_id = self.node_admission.allocate('container',
-                        minimum=NodeDemand(spec.cpu_cores_limit, spec.memory_limit_mb, 1, 0),
+                        minimum=getattr(backend, 'minimum_demand',
+                            NodeDemand(spec.cpu_cores_limit, spec.memory_limit_mb, 1, 0)),
                         configured_limits={'memory_mb':spec.memory_limit_mb, 'cpu':spec.cpu_cores_limit})
                     self.node_admission.bind(lease_id, request_id)
                 options = {"memory_mb": spec.memory_limit_mb, "cpus": spec.cpu_cores_limit,
@@ -211,7 +245,14 @@ class ContainerRuntime:
                        spec.lifecycle_args(), resource_demand) if self.node_admission is not None
                        else nullcontext())
             with self._operation(request_id), context:
-                return journal.execute(request_id, "create", None, spec.lifecycle_args(), create)
+                try:
+                    return journal.execute(request_id, "create", None, spec.lifecycle_args(), create)
+                except RequestOutcomeUnknown:
+                    proof = self.lookup_request(request_id)
+                    if proof['state'] == 'DONE' and not proof['response']['ok']:
+                        error = proof['response']['error']
+                        raise ServiceError(error['type'],error['message'],error.get('details'))
+                    raise
         if not isinstance(sandbox_id, str) or not re.fullmatch(r"[a-f0-9]{32}", sandbox_id):
             raise ValueError("Invalid sandbox ID")
         if operation == "container_stop":
@@ -235,6 +276,8 @@ class ContainerRuntime:
                         raise ServiceBusy("Native work is active; stop was not admitted")
                 return journal.execute(request_id, "stop", sandbox_id, spec.stop_args(), stop)
         backend = self._backend(kind, spec)
+        if operation == 'container_query_action' and hasattr(backend, 'query_action'):
+            return backend.query_action(sandbox_id,args['lookup_id'])
         if operation == "container_status" and backend.prove_stopped(sandbox_id):
             return {"id": sandbox_id, "backend": kind, "state": "STOPPED"}
         sandbox = self._entry(kind, spec, sandbox_id).sandbox
@@ -254,14 +297,19 @@ class ContainerRuntime:
             return proof
         args, operation = proof["args"], proof.get("operation")
         if (operation == "create" and proof.get("sandbox_id") is None and
-                set(args) == {"environment_id", "storage", "memory_mb", "cpus", "qos"}):
+                set(args) - {'execution_mode'} == {"environment_id", "storage", "memory_mb", "cpus", "qos"}):
             spec = DSecContainerRunArgs(environment_id=args["environment_id"],
                 storage=args["storage"], memory_limit_mb=args["memory_mb"],
-                cpu_cores_limit=args["cpus"], cpu_qos=args["qos"])
+                cpu_cores_limit=args["cpus"], cpu_qos=args["qos"],
+                execution_mode=args.get('execution_mode', 'container'))
             sandbox_id = request_id
-        elif (operation == "stop" and set(args) == {"environment_id", "storage"} and
+        elif (operation == "stop" and set(args) - {'execution_mode'} == {"environment_id", "storage"} and
                 isinstance(proof.get("sandbox_id"), str)):
-            spec = DSecContainerRunArgs(environment_id=args["environment_id"], storage=args["storage"])
+            original = journal.lookup(proof['sandbox_id']).get('args') or {}
+            spec = DSecContainerRunArgs(environment_id=args["environment_id"], storage=args["storage"],
+                execution_mode=args.get('execution_mode', 'container'),
+                memory_limit_mb=original.get('memory_mb',512),cpu_cores_limit=original.get('cpus',1),
+                cpu_qos=original.get('qos','default'))
             sandbox_id = proof["sandbox_id"]
         else:
             return proof
@@ -270,6 +318,16 @@ class ContainerRuntime:
         try:
             spec.validate()
             backend = self._backend("container", spec)
+            failed = getattr(backend, 'prove_failed_create', None)
+            if operation == 'create' and failed and failed(sandbox_id):
+                def failure(saved):
+                    if not failed(sandbox_id):
+                        return None
+                    if self.node_admission is not None:
+                        self.node_admission.stopped('container',sandbox_id)
+                    return dict(type='ExecutionCreateFailed',message='Guest startup failed; cleanup proved',
+                                details=dict(cleanup_complete=True))
+                return journal.recover(request_id,failure,failed=True)
             def verify(saved):
                 if saved.get("digest") != proof["digest"]:
                     return None
@@ -295,11 +353,12 @@ class ContainerRuntime:
             if record.get('operation') != 'create':
                 continue
             args = record.get('args', {})
-            if set(args) == {'environment_id','storage','memory_mb','cpus','qos'}:
+            if set(args) - {'execution_mode'} == {'environment_id','storage','memory_mb','cpus','qos'}:
                 kind = 'container'
                 spec = DSecContainerRunArgs(environment_id=args['environment_id'],
                     storage=args['storage'], memory_limit_mb=args['memory_mb'],
-                    cpu_cores_limit=args['cpus'], cpu_qos=args['qos'])
+                    cpu_cores_limit=args['cpus'], cpu_qos=args['qos'],
+                    execution_mode=args.get('execution_mode', 'container'))
             elif set(args) == {'task_id','image','memory_mb','cpus'}:
                 kind = 'tb2'
                 spec = DSecTB2RunArgs(task_id=args['task_id'], image=args['image'],
@@ -308,13 +367,26 @@ class ContainerRuntime:
                 raise ValueError('Cannot migrate container node lease: unknown create schema')
             spec.validate()
             sid = record['request_id']
-            minimum = NodeDemand(spec.cpu_cores_limit, spec.memory_limit_mb, 1, 0)
-            self.node_admission.adopt_container(sid, minimum)
             backend = self._backend(kind, spec)
+            minimum = getattr(backend, 'minimum_demand', NodeDemand(spec.cpu_cores_limit, spec.memory_limit_mb, 1, 0))
+            self.node_admission.adopt_container(sid, minimum)
             if backend.prove_stopped(sid):
                 self.node_admission.stopped('container', sid)
 
     def _container_backend(self, args):
+        execution = self.configuration.get('DSEC_QEMU_EXECUTION_CATALOG')
+        if execution:
+            from dsec.runtime.backends.qemu_container import QemuContainerBackend
+            key = ('qemu', args.environment_id)
+            if key not in self.backends:
+                catalog = self._execution_catalog()
+                if args.environment_id not in catalog.environments:
+                    raise UnsupportedCapability('Environment absent from QEMU catalog; no host Docker fallback')
+                self.backends[key] = QemuContainerBackend(catalog, args.environment_id,
+                    self.configuration['DSEC_CONTAINER_ROOT'])
+            return self.backends[key]
+        if args.execution_mode == 'fncall':
+            raise UnsupportedCapability('FnCall requires a configured QEMU execution catalog')
         key = (args.environment_id, args.storage)
         if key not in (("e1-real", "local"), ("e2-full", "local"), ("e2-full", "threefs_lazy")):
             catalog_path = self.configuration.get("DSEC_ENVIRONMENT_CATALOG")

@@ -30,6 +30,14 @@ def render_units(cfg, out):
     base = [sys.executable, '-I', '-B', '-m', 'dsec_host', '--config', cfg['_file'], 'run']
     name = 'dsec-'+cfg['instance']
     units = {}
+    confinement=''
+    if cfg['sandbox'].get('qemu_execution_catalog'):
+        from dsec.runtime.backends.qemu_container import ExecutionCatalog
+        catalog=ExecutionCatalog(cfg['sandbox']['qemu_execution_catalog'])
+        if catalog.host_isolation:
+            if Path(catalog.host_isolation['cgroup_root']).name!=name+'-sandbox.service':
+                raise ValueError('Host isolation cgroup must match the rendered sandbox service')
+            confinement='Delegate=cpu memory pids\nDelegateSubgroup=edge\n'
     for role in ('sandbox', 'worker'):
         unit = name+'-'+role+'.service'
         before = ''
@@ -42,7 +50,7 @@ def render_units(cfg, out):
             ('After='+name+'-sandbox.service\nWants='+name+'-sandbox.service\n' if role == 'worker' else '')+
             '\n[Service]\nType=simple\n'+before+'ExecStart='+command(base+[role])+'\n'+
             'Restart=always\nRestartSec=2\nTimeoutStartSec=120\nTimeoutStopSec=60\n'+
-            ('KillMode=process\n' if role == 'sandbox' else '')+
+            ('KillMode=process\n'+confinement if role == 'sandbox' else '')+
             'UMask=0077\n\n[Install]\nWantedBy=default.target\n')
     for name, text in units.items():
         destination = out/name

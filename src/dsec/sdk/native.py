@@ -65,7 +65,8 @@ class NativeSandboxMixin(NativeFilesMixin):
         backend = "container" if self.backend in ("container", "tb2") else "microvm"
         if backend == "container":
             from dataclasses import asdict
-            args.update(spec=asdict(self._run_args), kind="tb2" if self.backend == "tb2" else "container")
+            args.update(spec=(self._run_args.wire_spec() if hasattr(self._run_args, 'wire_spec')
+                              else asdict(self._run_args)), kind="tb2" if self.backend == "tb2" else "container")
         # The transport sends one stable intent. Unknown outcomes are queried,
         # never replayed automatically by a transfer/session wrapper.
         operation_id = identifier(request_id or uuid.uuid4().hex)

@@ -170,9 +170,11 @@ class Handler(socketserver.StreamRequestHandler):
             with self.server.count_lock:
                 counts={"active_requests":self.server.active_requests,"max_requests":self.server.max_requests,
                         "rejected_requests":self.server.rejected_requests}
+            runtime = getattr(self.server, 'container_runtime', None)
             return {"pid":os.getpid(),"release":installed_release(),"recovery_events":manager.recovery_events,
+                    "qemu_environments":runtime.execution_environments() if runtime else {},
                     "monitor_errors":manager.errors,"warm_pool":manager.warm_pool_status(),
-                    "protocol_features":["container-rpc-v1", "busy-nonadmission-v1", NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_FEATURE, HTTP_FEATURE] + (
+                    "protocol_features":["container-rpc-v1", "fncall-rpc-v1", "busy-nonadmission-v1", NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_FEATURE, HTTP_FEATURE] + (
                         ["node-admission-v1"] if getattr(self.server, 'node_admission', None) else []),
                     "admission_worker_socket":self.server.admission_worker_socket,**counts}
         if op=="node_status":

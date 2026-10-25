@@ -13,10 +13,11 @@ from dsec.contracts.requests import (MUTATING, RequestConflict, RequestPending,
 
 
 class RequestJournal:
-    def __init__(self, root):
+    def __init__(self, root, *, retain_args=False):
         self.root = Path(root).resolve() / "requests"
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.lock = threading.RLock()
+        self.retain_args = retain_args
         # A previous daemon died before committing the response. The command
         # might have run; the request must never be admitted again.
         for path in self.root.glob("*.json"):
@@ -50,7 +51,7 @@ class RequestJournal:
                                "operation": request["operation"],
                                "sandbox_id": request.get("sandbox_id"),
                                "digest": digest, "state": "PENDING"}
-            if request["operation"] in NATIVE_MUTATING:
+            if self.retain_args or request["operation"] in NATIVE_MUTATING:
                 record["args"] = request.get("args", {})
             atomic_json(path, record)
             return None
@@ -70,7 +71,7 @@ class RequestJournal:
             finally:
                 os.close(fd)
 
-    def unknown(self, request_id):
+    def unknown(self, request_id, *, reason=None):
         """An admitted native action lost its reply; never admit it again."""
         path = self._path(request_id)
         with self.lock:
@@ -78,6 +79,8 @@ class RequestJournal:
             if record["state"] != "PENDING":
                 raise RuntimeError("Request journal is not pending")
             record["state"] = "UNKNOWN"
+            if reason is not None:
+                record['reason'] = str(reason)[:2000]
             atomic_json(path, record)
 
     def native_cancel_intent(self, request_id):
@@ -113,5 +116,6 @@ class RequestJournal:
                     "operation": record["operation"],
                     "sandbox_id": record["sandbox_id"], "digest": record["digest"],
                     "response": record.get("response"),
+                    **({'reason':record['reason']} if 'reason' in record else {}),
                     **({"cancel_requested": record["cancel_requested"]} if "cancel_requested" in record else {}),
                     **({"args": record["args"]} if "args" in record else {})}

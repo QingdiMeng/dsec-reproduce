@@ -25,10 +25,14 @@ jobs:
         run: python3 tools/check_shutdown_refinement.py --fetch --cache "$RUNNER_TEMP/dsec-tla" --out "$RUNNER_TEMP/dsec-shutdown-refinement"
       - name: Native race regressions, trace correspondence and code mutations
         run: python3 tools/check_native_race_refinement.py --fetch --cache "$RUNNER_TEMP/dsec-tla" --out "$RUNNER_TEMP/dsec-native-races"
+      - name: FnCall cleanup boundaries and required code mutations
+        run: python3 tools/check_fncall_refinement.py --out "$RUNNER_TEMP/dsec-fncall-refinement"
       - name: Cluster model-to-code guard regressions and required mutations
         run: python3 tools/check_cluster_refinement.py --root "$RUNNER_TEMP/dsec-cluster-refinement"
-      - name: Security rotation code guards and required mutations
+      - name: Credential and guest-channel security guards and required mutations
         run: python3 tools/check_security_refinement.py --root "$RUNNER_TEMP/dsec-security-refinement"
+      - name: QEMU confinement launch and policy-retirement guards
+        run: python3 tools/check_host_isolation_refinement.py --root "$RUNNER_TEMP/dsec-host-isolation"
       - name: Counterexample evidence
         if: always()
         run: |
@@ -36,7 +40,7 @@ jobs:
           import os
           import tarfile
           from pathlib import Path
-          for name in ('dsec-concurrency-model', 'dsec-shutdown-refinement', 'dsec-native-races', 'dsec-cluster-refinement', 'dsec-security-refinement'):
+          for name in ('dsec-concurrency-model', 'dsec-shutdown-refinement', 'dsec-native-races', 'dsec-fncall-refinement', 'dsec-cluster-refinement', 'dsec-security-refinement', 'dsec-host-isolation'):
               root = Path(os.environ['RUNNER_TEMP']) / name
               report = root / 'report.json'
               if report.exists():
@@ -51,7 +55,7 @@ jobs:
                       print(str(log.relative_to(root)))
                       print(text[text.index(marker):])
           with tarfile.open(Path(os.environ['RUNNER_TEMP']) / 'dsec-concurrency-evidence.tar.gz', 'w:gz') as archive:
-              for name in ('dsec-concurrency-model', 'dsec-shutdown-refinement', 'dsec-native-races', 'dsec-cluster-refinement', 'dsec-security-refinement'):
+              for name in ('dsec-concurrency-model', 'dsec-shutdown-refinement', 'dsec-native-races', 'dsec-fncall-refinement', 'dsec-cluster-refinement', 'dsec-security-refinement', 'dsec-host-isolation'):
                   root = Path(os.environ['RUNNER_TEMP']) / name
                   if root.exists():
                       archive.add(root, arcname=name,

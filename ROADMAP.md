@@ -1,6 +1,6 @@
 # Roadmap: reproducing DSec as a usable elastic sandbox system
 
-Updated: 2026-10-24. Baseline: `0.1.0.dev0`, with modular R3 functional acceptance complete.
+Updated: 2026-10-25. Baseline: `0.1.0.dev0`, with modular R3 functional acceptance complete.
 
 The goal is a general elastic sandbox system for agent workloads and RL, with
 reproducible evidence for the mechanisms described in the
@@ -14,6 +14,26 @@ of the paper's production platform or its performance results. Future version
 names below are planning targets, not released capabilities or calendar
 commitments. Follow the milestone order; move a date rather than weaken an
 acceptance gate.
+
+The networkless QEMU Container/FnCall preview now requires per-VM authenticated
+control/native channels, catalog schema 2 and rebuilt guests. Linux acceptance
+rejects wrong keys, port reuse, old challenges and unauthenticated protocol;
+Edge restart preserves the same VM and action proofs. This closes the host-user
+vsock bypass in that preview. Opt-in per-VMM AppArmor, seccomp/NoNewPrivs and
+cgroup CPU/memory/pids/swap limits have passed networkless Linux execution,
+denied-file access, restart/adoption and retirement checks. Connection-flood
+resilience, broader tenant/adversarial network coverage and shared
+image storage remain production gates; the production flag stays false.
+See [execution boundaries](docs/architecture/EXECUTION_ISOLATION.md) and
+[acceptance evidence](docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md).
+
+Opt-in isolated QEMU IPv4 egress now has bounded installed-wheel Linux acceptance
+with a scoped one-shot TAP-FD broker and a pinned TC eBPF policy. Seven public SDK
+and 29 orchestration checks passed, including actual attached-program packet
+tests, Container public HTTPS, FnCall DNS, host/metadata/private denial, Edge
+adoption and complete retirement. Existing host Docker/Grafana were preserved.
+This closes the prepared single-Node networking acceptance, not broader tenant
+adversarial coverage, configured-proxy acceptance, flood resilience or scale.
 
 The [modular refactor design](docs/architecture/MODULAR_REFACTOR_DESIGN.md)
 was approved on 2026-10-08 against revision `7f70524`. R0 compatibility gates
@@ -123,7 +143,7 @@ path does not establish the same result for every storage or runtime backend.
 
 | Paper capability | v0.1 status | Remaining boundary |
 | --- | --- | --- |
-| libdsec-style client and backend selection | Partial | Public Container and microVM paths exist. A private QEMU/KVM primitive passed real execution/fault and concurrent CID recovery gates; outer-VM Container, FnCall and public FullVM integration remain unfinished. Some run arguments are unsupported. |
+| libdsec-style client and backend selection | Partial | Public networkless QEMU Container/FnCall paths share API/IAM/Edge admission with Firecracker MicroVM. FnCall cleans each invocation; Container retains native sessions/workspace. FullVM, mediated networking, production QEMU confinement and some run arguments remain unfinished. See execution isolation and acceptance boundaries. |
 | Shared EROFS layers and private OverlayFS writes | Validated on single-host paths | Generic offline layer compaction is not yet a supported publication policy. |
 | On-demand storage, local metadata and local/3FS sources | Validated on selected paths | Distributed throughput, failure handling and heterogeneous workload benefits are not established. |
 | Rust OverlayBD and ublk storage path | Validated integration | External upstream components; not bundled binaries or a reproduction of their implementation. |
@@ -135,7 +155,7 @@ path does not establish the same result for every storage or runtime backend.
 | Agent execution independent of GPU preemption | Partial | Worker persists sandbox/actions; the Miles-side agent loop and training trajectory still depend on the trainer session. |
 | `pack_diff` disk checkpoint to a new environment | Partial foundations | Disk COW and prepared-state forks do not provide the complete build, sanitize, publish and restore workflow. |
 | Scheduling and resource accounting | Local runtime validated; HA control development preview | Resource budgets, queue reasons and leases exist. IAM/placement/watcher have bounded acceptance; independent-host availability, scale and production failure behavior are not established. |
-| Production security and platform scale | Partial local isolation | netns/helpers and IAM preview exist. Enforced AppArmor/eBPF policy, QEMU backend containment and production distributed operations remain unfinished. |
+| Production security and platform scale | Partial local isolation | Opt-in QEMU AppArmor/cgroup and netns/TC eBPF passed bounded installed-wheel Linux execution, public egress and denied host/metadata/private access, adoption and retirement. Broader tenant/adversarial coverage, configured-proxy acceptance, flood/scale and production distributed operations remain unfinished. |
 
 Mechanism references: [paper §3](https://arxiv.org/html/2609.22978#S3),
 [§5](https://arxiv.org/html/2609.22978#S5), and
@@ -250,7 +270,7 @@ counts.
 | --- | --- | --- |
 | RM-401 | Multi-node API, placement and watcher | Discover host capabilities/health, place work with node admission, route by sandbox owner, and rebuild authoritative state after controller restart. Test host loss and stale ownership without duplicate writable instances. |
 | RM-402 | Distributed 3FS and cache behavior | Measure remote sparse reads, bandwidth, cache accounting, unavailable replicas and node loss across actual hosts. Local single-machine 3FS deployment is not evidence of distributed availability. |
-| RM-403 | Scale and optional backend expansion | Publish measured creation/restore throughput, concurrent capacity, resource density and failure scope on disclosed hardware. Add FnCall, full VM or cloud bursting only when an application requires them; keep backend coverage distinct from scale results. |
+| RM-403 | Scale and optional backend expansion | Publish measured creation/restore throughput, concurrent capacity, resource density and failure scope on disclosed hardware. Scale the networkless QEMU Container/FnCall preview; add full VM or cloud bursting when an application requires them. Keep functional backend coverage distinct from scale results. |
 
 **Exit:** multi-host correctness and resource/performance reports are
 reproducible. Paper-scale workloads remain an independent validation target,
@@ -351,7 +371,7 @@ completion/cancellation, and supports reloadable versioned TLS trust/identity
 and prefix-limited etcd service identities. Operators publish/distribute private
 material explicitly and verify each peer before retirement; no unknown mutation
 is automatically replayed. See the [rotation guide](docs/guides/CLUSTER_DEPLOYMENT.md#certificate-and-credential-rotation).
-The bounded safety gates cover 48 finite-model cases and five dedicated security
+The original rotation safety gates covered 48 finite-model cases and five dedicated security
 mutations in addition to the twelve cluster controls. Automated fleet-wide
 credential distribution/acknowledgement, long-lived route-key migration and
 etcd peer CA/JWT signing-root migration remain separate work.

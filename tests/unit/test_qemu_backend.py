@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 from types import SimpleNamespace
@@ -143,6 +144,39 @@ class QemuTests(unittest.TestCase):
         self.assertFalse(any('tcg' in value or 'docker.sock' in value for value in args))
         self.assertIn('-S', args); self.assertIn('-sandbox', args)
 
+    def test_inherited_tap_does_not_reconfigure_descriptor_creation_options(self):
+        args=self.vm._argv('fixture-uuid',self.vm._artifacts(),dict(fd=15))
+        backend=args[args.index('-netdev')+1].split(',')
+        self.assertEqual(backend[0],'tap')
+        options=dict(value.split('=',1) for value in backend[1:])
+        self.assertEqual(options['fd'],'15')
+        # QEMU rejects these options with fd=; only the root broker creates
+        # the TAP and decides its header mode. No helper/script fallback.
+        self.assertFalse(set(options)&{'ifname','script','downscript','vnet_hdr','helper','queues','fds','vhostfds'})
+
+    def test_rejected_old_tap_arguments_are_readable_only_after_complete_retirement(self):
+        self.vm.host=Mock(policy={});self.vm.network=Mock(policy={})
+        artifacts=self.vm._artifacts();record=self.vm._initial_record(artifacts)
+        record.update(state='STOPPED',process=None,launch_process=None,host_retired=True,
+                      network_retired=True,network_isolation=dict(fd=15))
+        record['argv']=self.vm._argv(record['machine_uuid'],artifacts,dict(fd=15))
+        record['argv'][record['argv'].index('-netdev')+1]+=',vnet_hdr=off'
+        self.vm.detach()
+        for changed in ({},{'state':'RUNNING'},{'process':{'pid':1}},
+                        {'launch_process':{'pid':1}},{'host_retired':False},
+                        {'network_retired':False},{'argv':record['argv']+['unexpected']}):
+            value=dict(record,**changed);self.vm.record_path.write_text(json.dumps(value))
+            adopted=QemuVM(self.config,self.path)
+            adopted.host=Mock(policy={});adopted.network=Mock(policy={})
+            adopted._attach=Mock(side_effect=AssertionError('Must not attach'))
+            adopted._attach_launcher=Mock(side_effect=AssertionError('Must not attach'))
+            try:
+                if changed:
+                    with self.assertRaisesRegex(ValueError,'configuration identity'):adopted.adopt()
+                else:self.assertEqual(adopted.adopt()['state'],'STOPPED')
+                adopted._attach.assert_not_called();adopted._attach_launcher.assert_not_called()
+            finally:adopted.detach()
+
     def test_lost_control_reply_retains_intent_without_retry(self):
         self.instrument(); self.vm.boot()
         self.vm.qmp.execute = Mock(side_effect=EOFError('lost pause response'))
@@ -230,13 +264,17 @@ class QemuTests(unittest.TestCase):
     @unittest.skipUnless(hasattr(socket, 'AF_VSOCK'), 'Linux pidfd verifier')
     def test_pidfd_shared_verifier_requires_exact_launch_arguments(self):
         from dsec.runtime.registry import AttachedProcess, identity
-        binary = str(Path('/usr/bin/sleep').resolve(strict=True))
-        argv = [binary, '30']
-        child = subprocess.Popen(argv)
+        binary = str(Path(sys.executable).resolve(strict=True))
+        argv = [binary, '-I', '-c', 'import sys; print("ready",flush=True); sys.stdin.read(1)']
+        child = subprocess.Popen(argv,stdin=subprocess.PIPE,stdout=subprocess.PIPE)
         self.addCleanup(lambda:(child.terminate(), child.wait(timeout=5)) if child.poll() is None else None)
+        self.addCleanup(child.stdin.close); self.addCleanup(child.stdout.close)
+        # Child cooperation establishes readiness rather than assuming that
+        # Popen returning means all proc identity fields have settled.
+        self.assertEqual(child.stdout.readline(),b'ready\n')
         saved = identity(child.pid)
         with self.assertRaisesRegex(RuntimeError, 'command line'):
-            AttachedProcess(saved, binary, '/unused', expected_argv=[binary, '31'])
+            AttachedProcess(saved, binary, '/unused', expected_argv=argv+['unexpected'])
         attached = AttachedProcess(saved, binary, '/unused', expected_argv=argv)
         self.addCleanup(attached.close)
         self.assertIsNone(attached.poll())

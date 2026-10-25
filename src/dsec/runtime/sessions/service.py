@@ -24,10 +24,13 @@ def native_operation(server, sandbox_id, args, request_id):
         if kind != "container":
             raise UnsupportedCapability("Legacy TB2 server images need a native agent upgrade")
         with runtime.native_operation(kind, spec, sandbox_id, request_id) as entry:
-            endpoint = entry.backend.root / sandbox_id / "native.sock"
-            if not endpoint.exists():
-                raise UnsupportedCapability("Container has no native v1 agent")
-            channel = NativeChannel(endpoint)
+            if hasattr(entry.backend, 'native_channel'):
+                channel = entry.backend.native_channel(sandbox_id)
+            else:
+                endpoint = entry.backend.root / sandbox_id / "native.sock"
+                if not endpoint.exists():
+                    raise UnsupportedCapability("Container has no native v1 agent")
+                channel = NativeChannel(endpoint)
             channel.prepare(action, **values)
             features = channel.capabilities()
             if action == "http" and HTTP_FEATURE not in features:

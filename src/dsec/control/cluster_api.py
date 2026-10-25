@@ -87,7 +87,7 @@ class ClusterAPI:
         self.iam.authorize(credential, project, permission(operation, args))
         if operation == 'health':
             from dsec._release import installed_release
-            return dict(protocol=PROTOCOL, protocol_features=[PROTOCOL, 'container-rpc-v1',
+            return dict(protocol=PROTOCOL, protocol_features=[PROTOCOL, 'container-rpc-v1', 'fncall-rpc-v1',
                 'busy-nonadmission-v1', 'node-admission-v1', 'node-upgrade-v1', ROLLOUT_FEATURE, NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_FEATURE, HTTP_FEATURE],release=installed_release())
         if operation == 'node.list':
             if args:
@@ -122,7 +122,9 @@ class ClusterAPI:
             digest = request_digest(operation, None, dict(args=args, demand=asdict(demand)))
             receipt = self.iam.lookup(project, operation_id)
             if receipt is None:
-                candidate = self.placement.choose(backend, environment, demand)
+                capabilities = (('fncall-execution-v1',) if backend == 'container' and
+                    args.get('spec',{}).get('execution_mode') == 'fncall' else ())
+                candidate = self.placement.choose(backend, environment, demand,capabilities=capabilities)
             else:
                 candidate = receipt['node']
             # IAM rechecks permission at the quota transaction's linearization

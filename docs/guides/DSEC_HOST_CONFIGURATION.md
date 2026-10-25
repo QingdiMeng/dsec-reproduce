@@ -1,8 +1,8 @@
 # Installed single-host configuration
 
 `dsec-host` is the wheel's configuration and acceptance entry point. The core
-control plane and task plugins are installed together; images, task definitions,
-kernel, Firecracker and optional storage services remain explicit artifacts.
+installs independently; task plugins are optional and installed when used. Images,
+task definitions, kernel, Firecracker and storage services remain explicit artifacts.
 Configuration is JSON with schema 1. Relative paths resolve from its directory.
 
 ```json
@@ -434,3 +434,247 @@ acceptance requires a dedicated Edge instance and is a separate host procedure.
 Match the guest's network recipe to the service configuration: a boot artifact
 built with `--network` requires a configured guest NIC, even when a particular
 task or verifier itself needs no Internet access.
+
+## Networkless QEMU Container and FnCall
+
+These Linux execution previews require an **Edge contract 2** release.
+Automatic upgrade or rollback from
+contract 1 rejects because the old runtime cannot own these persisted instances;
+drain and provision a fresh instance, with a reviewed migration if old state must
+be retained. Keep Node gateway, Edge and any configured episode service on the
+same wheel. Old ordinary Container request/digest bytes are preserved.
+
+The runtime requires unprivileged read/write
+access to `/dev/kvm` and `/dev/vhost-vsock`, QEMU/KVM, and prepared artifacts.
+They do not install host Docker, change bridges/firewall rules, or provide
+outbound networking. [The isolation contract](../architecture/EXECUTION_ISOLATION.md)
+lists remaining production gates. Use a dedicated new Container state directory;
+do not point it at a legacy host-Docker instance or another Edge's state.
+
+Prepare templates on a Linux build machine with Docker and a static C compiler.
+Supply exact already-local image IDs, not mutable tags. The trusted base needs
+Python 3, `/bin/sh`, mount/mountpoint and coreutils; the task image needs Python 3
+and `/bin/sh`. A pinned Docker dind image supplies static Docker binaries, but
+the builder only exports its stopped container; it never runs dind on the host.
+
+```bash
+python tools/build_docker_guest.py --base sha256:BASE_IMAGE_ID \
+  --docker-tools sha256:DOCKER_TOOLS_IMAGE_ID --task-image sha256:TASK_IMAGE_ID \
+  --source . --out /srv/dsec/artifacts/function.ext4 --mode fncall
+python tools/build_docker_guest.py --base sha256:BASE_IMAGE_ID \
+  --docker-tools sha256:DOCKER_TOOLS_IMAGE_ID --task-image sha256:TASK_IMAGE_ID \
+  --source . --out /srv/dsec/artifacts/container.ext4 --mode container
+```
+
+Replace the symbolic IDs with 64 lowercase hex characters. Preserve both output
+records: `sha256` pins the template; `inner_image` pins the image configuration
+that inner Docker actually loads. With a containerd-backed host Docker, its
+manifest ID can differ from that configuration ID. The builder derives the
+correct value from the pinned exported archive; do not substitute a tag or
+blindly reuse the host's image ID.
+
+Prepare an absolute mode-0700 runtime-owned shared CID pool directory. Cooperating
+Edges on one host must use the same ledger and range, disjoint from other VMMs.
+Create a trusted `schema:2` catalog with `cid_pool:{root,first,last}` and an
+`environments` map. Each environment has these required fields:
+
+| Field | Required value |
+| --- | --- |
+| `mode` | `fncall` or `container`, matching its prepared template |
+| `binary`, `kernel`, `template` | Objects containing canonical absolute `path` and `sha256` |
+| `image` | The builder's `inner_image` |
+| `memory_mb`, `cpu_count` | Outer VM RAM and vCPUs, e.g. 1024 and 1 |
+| `inner_memory_mb`, `inner_cpus` | Prepared inner limits, currently 512 and 1 with the CLI defaults |
+
+Add `sandbox.qemu_execution_catalog` to the Host configuration. Optionally set
+`worker.container_root` to the new private state directory; otherwise Edge uses
+`state_root/containers`. This catalog is exclusive: absent environments and
+unsupported modes/storage/QoS fail before create; there is no host-Docker fallback.
+Artifact contents are verified before boot. Editing a catalog requires an
+explicit Edge restart. Do not change catalog contents for a live instance.
+
+Rebuild Container/FnCall templates with the current builder. Catalog schema 1
+and old unauthenticated templates are rejected; drain their instances using the
+matching old release before switching to fresh state. Changing only the schema
+number cannot upgrade an old guest. The kernel needs `CONFIG_VIRTIO_CONSOLE=y`.
+Edge creates a unique mode-0600 `channel.key` in each private instance directory
+and injects it through a dedicated virtio-serial bootstrap socket. Do not copy
+keys between instances or publish them with logs. Keep this file with private
+instance state across Edge restarts: a missing/changed key fails closed, never
+generates a replacement for a live VM. New VM creation supplies key rotation;
+live rekey is unsupported. Keys remain in private stopped records for recovery,
+and can be removed when the entire retired instance is deleted.
+
+The Node advertises route backends `microvm` and `container`, with distinct
+Firecracker and QEMU environment IDs. Add both sets to `node.environments` and
+`minimum_demands`. Every QEMU minimum must include one concurrency slot, all outer
+RAM/vCPUs, and the full private raw disk size (2048 MiB by default), even though
+the inner container limit is 512 MiB. `node-preflight` checks this; Node and Edge
+also enforce observed minima during API creation. FnCall's actual prepared
+capability is published from Edge health, not a caller-supplied configuration bit.
+
+Public clients use the existing HTTPS API and project credentials:
+
+```python
+from dsec.sdk import DSecClient, DSecFnCallRunArgs, DSecContainerRunArgs
+
+async with DSecClient(["https://api.example"], token=token,
+                     project="research", ca_file="ca.crt") as client:
+    demand = dict(cpu=1, memory_mb=1024, disk_mb=2048, network_mbps=0)
+    slot = await client.run_fncall(
+        DSecFnCallRunArgs(environment_id="python-function"), resource_demand=demand)
+    try:
+        first = await slot.invoke("echo 42 >/work/private; cat /work/private")
+        fresh = await slot.invoke("test ! -e /work/private")
+    finally:
+        await slot.stop()
+    box = await client.run_container(
+        DSecContainerRunArgs(environment_id="python-container"), resource_demand=demand)
+    try:
+        await box.run_shell("echo persistent >/work/value")
+        result = await box.run_shell("cat /work/value")
+    finally:
+        await box.stop()
+```
+
+Each function slot holds its quota while warm. `attach_fncall` reconnects without
+creating another slot; persistent shell/file sessions belong to Container and
+MicroVM, not FnCall. Choose stable request IDs when a result may need recovery;
+query UNKNOWN instead of reissuing the invocation under a fresh ID. Successful
+function replies follow process/tmpfs cleanup, and failed cleanup retires the VM.
+
+`tools/verify_execution_paths.py --config PATH --out REPORT` runs installed SDK
+acceptance through HTTPS, with at most two simultaneous sandboxes and automatic
+stop attempts. Its JSON configuration contains `client` (the DSecClient keyword
+arguments except token), `token_file` (mode 0600), and `paths` keyed by `fncall`,
+`container`, `microvm`; each path has `spec` and `demand` as in the example.
+The checks cover function freshness/dedup/timeout, Container persistent sessions
+and binary files, distinct CIDs/workspaces, and Firecracker pause/resume. Keep
+failure reports and check physical/IAM/CID leases after the run. These checks do
+not prove tenant security, cold-start performance, image sharing or whole-host HA.
+
+### QEMU host confinement
+
+This opt-in path passed bounded networkless Linux AppArmor/VMM acceptance;
+broader production security and networking gates remain open. See the
+[acceptance report](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md).
+Add this top-level field to the schema-2 QEMU catalog,
+using the actual runtime UID, instance name and service cgroup path:
+
+```json
+"host_isolation": {
+  "cgroup_root": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/dsec-example-sandbox.service",
+  "helper": "/usr/local/libexec/dsec-example-qemu-profile",
+  "memory_overhead_mb": 256,
+  "pids_max": 128
+}
+```
+
+The current broker binds one shared QEMU binary/kernel pair; use separate Nodes
+for different pairs. Templates and task images may differ. Start with a fresh
+drained Container state directory: policy is part of the immutable catalog and
+live VM identity, not a setting to switch underneath running instances.
+
+Render a reviewable, pinned administrator installation as the service account:
+
+```bash
+dsec-host --config host.json render-qemu-privileges --user dsec --out qemu-privileges
+apparmor_parser -Q -K qemu-privileges/sample.profile
+# Administrator: review and check, then install once.
+sudo python3 -I qemu-privileges/install-qemu-privileges.py
+sudo python3 -I qemu-privileges/install-qemu-privileges.py --apply
+dsec-host --config host.json render --out user-units
+```
+
+The installer reuses the restricted installer checks, refuses different existing
+targets, and installs only the fixed AppArmor helper/config/sudoers. It does not
+change Docker, networking, cgroups, services or modules. Runtime calls to this
+helper use noninteractive sudo; no shell/root launcher or arbitrary profile/path
+argument is accepted. Keep Edge's own sudo capability; NoNewPrivs is set in the
+VMM child, not the helper-using Edge. The host must expose fine-grained AppArmor
+Unix socket mediation (`/sys/kernel/security/apparmor/features/network/af_unix`
+reports `yes`). Loading a syntactically valid profile alone does not prove VMM
+startup or its access boundaries; validate both on the deployment host.
+
+The generated sandbox unit uses `Delegate=cpu memory pids` and
+`DelegateSubgroup=edge` (systemd 254+). Confirm its actual `ControlGroup` matches
+the catalog. SSH foreground execution outside that delegated service rejects.
+Each VM gets a child group with `memory.max = guest RAM + overhead`,
+`memory.swap.max=0`, `memory.oom.group=1`, bounded `pids.max`, and CPU quota
+matching vCPU count. Update Node minima **and client demand** to include overhead:
+1024 MiB guest plus 256 MiB overhead requires at least 1280 MiB admission.
+Unconfigured development catalogs retain their previous minimum; enabling host
+confinement must not silently hide its extra memory cost.
+
+For a bounded controller-only check, run `tools/verify_host_cgroup.py` in a new
+dedicated delegated service with its own cgroup root and report path. It tests a
+48 MiB child OOM, process refusal and CPU throttling, then removes its empty
+groups. It is separate from actual QEMU/AppArmor, tenant or networking acceptance.
+
+### Isolated QEMU IPv4 egress (bounded Linux acceptance)
+
+Keep existing environments networkless unless networking is explicitly prepared.
+For a fresh drained instance, add a catalog-level `network` object and set only
+the intended environment entries to `"network": "isolated"`:
+
+```json
+"network": {
+  "helper": "/usr/local/libexec/dsec-example-qemu-network",
+  "uplink": "eth0",
+  "slot_offset": 1024,
+  "max_slots": 2,
+  "policy": {"dns": "1.1.1.1", "egress_proxy": null}
+}
+```
+
+`host_isolation` is mandatory. The administrator reserves a disjoint range in
+`10.232.0.0/16` (one /31 per slot); overlapping existing routes reject creation.
+Host IPv4 forwarding must already be provisioned. No shared bridge or host
+Docker daemon is created. The guest's address/MAC can repeat because each TAP
+belongs to a separate network namespace. QEMU receives one already-open TAP FD
+and stays unprivileged; it does not enter that namespace or receive CAP_NET_ADMIN.
+
+Rebuild each selected template with `tools/build_docker_guest.py --network-policy
+policy.json` in addition to its existing arguments; `policy.json` must contain
+the exact catalog `network.policy`. Use the rebuilt artifact SHA-256 in the
+catalog. Guest init configures IPv4 before the task starts. Inner Docker uses
+the outer guest's network, with capabilities dropped and no host mounts/devices.
+The existing authenticated vsock control path is unchanged. A configured proxy
+is one `{ "ip": "192.168.0.104", "port": 18888 }` TCP exception; it supplies
+HTTP(S)_PROXY inside the task. No proxy credential is accepted here.
+
+`render-qemu-privileges --clang /path/to/clang` builds the TC eBPF object as the
+ordinary service user (Linux x86_64 headers and a BPF-capable Clang are needed
+at build time). Review `egress.c`, `sample.profile`, both helpers and configs.
+The single installer pins and installs six fixed root files and creates the
+two private state directories. Installation itself does not change networking;
+normal SDK creation invokes only the fixed broker operations for that instance.
+Runtime does not compile code or accept a replacement eBPF object from callers.
+Different existing installations still reject replacement; use a fresh instance
+for this preview rather than overwriting running helpers or catalogs.
+
+TC guards load before any link is activated. The first policy admits IPv4
+TCP/UDP public egress, exact DNS and optional proxy exceptions, and only the ARP
+needed by the fixed gateway. It rejects source spoofing, IPv6, VLAN, IP options,
+fragments, metadata and other private/reserved destinations. Return traffic is
+conntracked. This is not bandwidth shaping, live policy rotation or IPv6 support.
+Public API `network_rules` overrides remain unsupported; the environment owns
+the immutable policy. Network status includes the observed kernel program
+identity. Adoption refuses drift; interrupted creation never replays FD lending.
+
+On the Node, the scoped helper's `test-policy SID` operation runs fixed positive
+and negative packets through that instance's attached BPF program without
+sending network traffic. It accepts no packet, program ID, path or repeat count.
+Pair this with real guest DNS/HTTPS, host/private denial, restart and cleanup
+checks before enabling networking for an application. Portable/native-C tests
+and successful BPF compilation alone do not establish Linux enforcement.
+
+On 2026-10-25, installed-wheel acceptance passed seven public SDK and 29
+orchestration checks on one prepared Linux Node: actual attached-program packet
+tests, Container DNS/public HTTPS, FnCall DNS, host/metadata/private connection
+denial, Edge restart/adoption and failure cleanup. Every owned namespace, TAP,
+profile, cgroup, CID, private writable disk and physical/IAM lease was retired;
+the original host Docker/Grafana containers were unchanged. This used the fixed
+DNS `192.168.0.1` and no proxy; it does not validate another Node's prerequisites,
+configured proxy egress, adversarial multi-tenant use or connection floods. See
+the [acceptance evidence](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md).

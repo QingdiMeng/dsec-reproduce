@@ -46,6 +46,10 @@ def build_parser():
     privileges.add_argument('--user', required=True)
     privileges.add_argument('--slot-offset', type=int, required=True,
                             help='administrator-selected disjoint range within the 32768-slot pool')
+    qemu = commands.add_parser('render-qemu-privileges', help='render fixed QEMU host/network broker installer; never apply')
+    qemu.add_argument('--out', type=Path, required=True)
+    qemu.add_argument('--user', required=True)
+    qemu.add_argument('--clang',default='clang',help='BPF-capable compiler; only needed for a networked catalog')
     run = commands.add_parser('run', help='run a configured installed service in the foreground')
     run.add_argument('role', choices=('sandbox', 'worker'))
     run.add_argument('--validate-only', action='store_true')
@@ -80,6 +84,9 @@ def main():
         result = render_units(cfg, args.out)
     elif args.operation == 'render-privileges':
         result = render_privileges(cfg, args.out, args.user, args.slot_offset)
+    elif args.operation == 'render-qemu-privileges':
+        from dsec.host.qemu_privileges import render
+        result = render(cfg,args.out,args.user,clang=args.clang)
     elif args.operation == 'wait':
         if not math.isfinite(args.timeout) or not 0 < args.timeout <= 120:
             raise ValueError('Readiness timeout must be between zero and 120 seconds')

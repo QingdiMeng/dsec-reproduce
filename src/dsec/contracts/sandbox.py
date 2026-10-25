@@ -1,6 +1,6 @@
 """libdsec-style run specifications; host artifacts are resolved by Edge."""
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 import math
 import re
 
@@ -77,8 +77,17 @@ class DSecContainerRunArgs:
     ttl_running_stop: float | None = None
     network_rules: dict | None = None
     init_user: str | None = None
+    execution_mode: str = "container"
+
+    def wire_spec(self):
+        result = asdict(self)
+        if self.execution_mode == 'container':
+            result.pop('execution_mode')  # Preserve old SDK/Edge request digests.
+        return result
 
     def validate(self):
+        if self.execution_mode not in ('container', 'fncall'):
+            raise UnsupportedCapability('Unknown container execution mode')
         if (not isinstance(self.environment_id, str) or
                 not re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,127}", self.environment_id) or
                 self.storage not in ("local", "threefs_lazy")):
@@ -102,10 +111,18 @@ class DSecContainerRunArgs:
     def lifecycle_args(self):
         return {"environment_id": self.environment_id, "storage": self.storage,
                 "memory_mb": self.memory_limit_mb, "cpus": self.cpu_cores_limit,
-                "qos": self.cpu_qos}
+                "qos": self.cpu_qos,
+                **({'execution_mode':self.execution_mode} if self.execution_mode != 'container' else {})}
 
     def stop_args(self):
-        return {"environment_id": self.environment_id, "storage": self.storage}
+        return {"environment_id": self.environment_id, "storage": self.storage,
+                **({'execution_mode':self.execution_mode} if self.execution_mode != 'container' else {})}
+
+
+@dataclass(frozen=True)
+class DSecFnCallRunArgs(DSecContainerRunArgs):
+    """A tenant-owned warm function slot; each invocation starts with clean tmpfs."""
+    execution_mode: str = 'fncall'
 
 
 @dataclass(frozen=True)
