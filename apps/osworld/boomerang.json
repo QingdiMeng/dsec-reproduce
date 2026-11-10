@@ -1,0 +1,195 @@
+[
+  {
+    "op": "key",
+    "keys": [
+      "escape"
+    ],
+    "settle": 0.6
+  },
+  {
+    "op": "key",
+    "keys": [
+      "ctrl",
+      "home"
+    ]
+  },
+  {
+    "op": "key",
+    "keys": [
+      "ctrl",
+      "shift",
+      "end"
+    ],
+    "label": "full-range-chord",
+    "roi": [
+      3,
+      131,
+      74,
+      148
+    ]
+  },
+  {
+    "op": "click",
+    "at": [
+      966,
+      173
+    ]
+  },
+  {
+    "op": "click",
+    "at": [
+      574,
+      83
+    ],
+    "settle": 0.5
+  },
+  {
+    "op": "key",
+    "keys": [
+      "ctrl",
+      "home"
+    ]
+  },
+  {
+    "op": "drag",
+    "at": [
+      93,
+      181
+    ],
+    "to": [
+      430,
+      252
+    ],
+    "label": "drag-select",
+    "roi": [
+      3,
+      131,
+      74,
+      148
+    ]
+  },
+  {
+    "op": "key",
+    "keys": [
+      "ctrl",
+      "home"
+    ]
+  },
+  {
+    "op": "key",
+    "keys": [
+      "ctrl",
+      "home"
+    ]
+  },
+  {
+    "op": "click",
+    "at": [
+      54,
+      140
+    ]
+  },
+  {
+    "op": "key",
+    "keys": [
+      "ctrl",
+      "a"
+    ]
+  },
+  {
+    "op": "text",
+    "text": "E1:E36"
+  },
+  {
+    "op": "key",
+    "keys": [
+      "enter"
+    ]
+  },
+  {
+    "op": "click",
+    "at": [
+      673,
+      84
+    ],
+    "settle": 0.8
+  },
+  {
+    "op": "click",
+    "at": [
+      328,
+      354
+    ]
+  },
+  {
+    "op": "click",
+    "at": [
+      723,
+      315
+    ],
+    "label": "chart-line-subtype"
+  },
+  {
+    "op": "click",
+    "at": [
+      172,
+      348
+    ],
+    "settle": 0.5,
+    "label": "chart-series-page",
+    "roi": [
+      124,
+      330,
+      903,
+      518
+    ]
+  },
+  {
+    "op": "click",
+    "at": [
+      590,
+      456
+    ]
+  },
+  {
+    "op": "text",
+    "text": "$Sheet1.$A$2:$A$36"
+  },
+  {
+    "op": "click",
+    "at": [
+      172,
+      367
+    ]
+  },
+  {
+    "op": "click",
+    "at": [
+      740,
+      546
+    ],
+    "settle": 0.7
+  },
+  {
+    "op": "key",
+    "keys": [
+      "escape"
+    ]
+  },
+  {
+    "op": "key",
+    "keys": [
+      "ctrl",
+      "s"
+    ],
+    "settle": 0.6
+  },
+  {
+    "op": "click",
+    "at": [
+      658,
+      461
+    ],
+    "settle": 0.9
+  }
+]

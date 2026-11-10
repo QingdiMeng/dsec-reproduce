@@ -118,6 +118,9 @@ def source_files(root):
         files.update(str(p.relative_to(root)) for p in (app/'src'/package_name).glob('*.json')
                      if p.stem.isidentifier())
         files.add('apps/'+name+'/tests/test_case.py')
+    files.update('apps/osworld/'+name for name in (
+        'README.md', 'desktop_regression.py', 'compare_trace.py', 'score_calc.py',
+        'boomerang.json', 'weekly-sales.json', 'workbook-sha256.json'))
     return config, sorted(files)
 
 

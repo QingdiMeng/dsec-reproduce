@@ -1,0 +1,112 @@
+[
+  {
+    "op": "key",
+    "keys": [
+      "escape"
+    ],
+    "settle": 0.6
+  },
+  {
+    "op": "click",
+    "at": [
+      966,
+      173
+    ]
+  },
+  {
+    "op": "click",
+    "at": [
+      105,
+      736
+    ]
+  },
+  {
+    "op": "click",
+    "at": [
+      674,
+      84
+    ],
+    "settle": 0.6
+  },
+  {
+    "op": "click",
+    "at": [
+      167,
+      327
+    ],
+    "settle": 0.4
+  },
+  {
+    "op": "click",
+    "at": [
+      487,
+      294
+    ]
+  },
+  {
+    "op": "key",
+    "keys": [
+      "ctrl",
+      "a"
+    ]
+  },
+  {
+    "op": "text",
+    "text": "$Sheet1.$A$1:$C$11"
+  },
+  {
+    "op": "click",
+    "at": [
+      296,
+      341
+    ]
+  },
+  {
+    "op": "click",
+    "at": [
+      169,
+      369
+    ]
+  },
+  {
+    "op": "click",
+    "at": [
+      490,
+      292
+    ]
+  },
+  {
+    "op": "text",
+    "text": "Sales & COGS"
+  },
+  {
+    "op": "click",
+    "at": [
+      740,
+      546
+    ],
+    "settle": 0.7
+  },
+  {
+    "op": "key",
+    "keys": [
+      "escape"
+    ]
+  },
+  {
+    "op": "key",
+    "keys": [
+      "ctrl",
+      "s"
+    ],
+    "settle": 0.6
+  },
+  {
+    "op": "click",
+    "at": [
+      657,
+      462
+    ],
+    "settle": 0.8
+  }
+]
