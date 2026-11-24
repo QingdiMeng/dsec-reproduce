@@ -7,10 +7,10 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from dsec.storage.catalog import MicroVMEnvironmentCatalog, file_sha256
-from dsec_image.pack_diff import PROFILE, capture, publish
+from dsec_image.pack_diff import PROFILE, _overlaybd_child, capture, publish
 
 
 def policy_for(revision):
@@ -55,6 +55,44 @@ class CaptureTest(unittest.IsolatedAsyncioTestCase):
                 await capture(builder, policy, Path("unused"))
         builder.status.assert_not_called()
 
+
+class LayerPublicationTest(unittest.TestCase):
+    def test_cleanup_precedes_publication_and_unconfirmed_device_retains_staging(self):
+        entry = {"boot_template": "unused", "boot_sha256": "unused",
+                 "overlaybd_root": {"lowers": [{"file": "base", "sha256": "a" * 64, "bytes": 8}]}}
+        for failure in ("none", "install", "delete", "replace-daemon"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as folder:
+                work = Path(folder)
+                with patch("dsec.storage.overlaybd.OverlayBDRootStore") as cls, \
+                        patch("dsec_image.pack_diff._install_files") as install:
+                    store = cls.return_value
+                    store.socket_identity.side_effect = ["owner", "owner",
+                        "new" if failure == "replace-daemon" else "owner"]
+                    store.create.return_value = (7, "runtime")
+                    def snapshot(device, image, staging, target):
+                        diff = staging / "delta.commit"
+                        diff.write_bytes(b"new")
+                        (staging / "disk-image.json").write_text("{}")
+                        return diff
+                    store.snapshot.side_effect = snapshot
+                    if failure == "install":
+                        install.side_effect = ValueError("install failed")
+                    if failure == "delete":
+                        store.delete.side_effect = RuntimeError("delete failed")
+                    context = _overlaybd_child(entry, [], "socket", "config", work)
+                    if failure == "none":
+                        with context as derived:
+                            store.delete.assert_called_once()
+                            self.assertNotIn("boot_template", derived)
+                            pins = derived["overlaybd_root"]["lowers"]
+                            self.assertEqual(pins[:-1], entry["overlaybd_root"]["lowers"])
+                            self.assertEqual(pins[-1]["sha256"], hashlib.sha256(b"new").hexdigest())
+                    else:
+                        with self.assertRaises((ValueError, RuntimeError)), context:
+                            self.fail("Unconfirmed work reached publication")
+                    if failure == "replace-daemon":
+                        store.delete.assert_not_called()
+                    self.assertEqual(bool(list(work.iterdir())), failure in ("delete", "replace-daemon"))
 
 @unittest.skipUnless(all(shutil.which(x) for x in ("mkfs.ext4", "debugfs", "e2fsck")),
                      "Linux e2fsprogs required")

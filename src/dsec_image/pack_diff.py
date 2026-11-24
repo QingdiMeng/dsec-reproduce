@@ -3,6 +3,7 @@
 The publisher supplies the policy independently of the capture. Only a trusted
 parent with /opt on the native ext4 root can opt in to this format.
 """
+from contextlib import contextmanager
 import argparse
 import base64
 import hashlib
@@ -19,6 +20,7 @@ from dsec.storage.publication import publish_microvm
 
 
 PROFILE = "direct-ext4-opt-v1"
+OVERLAY_PROFILE = "overlaybd-ext4-opt-v1"
 LIMIT = 16 * 1024 * 1024
 
 
@@ -119,7 +121,70 @@ def _install(work, item, data):
     (work / "readback").unlink()
 
 
-def publish(policy, delta, parent_catalog, child, destination, store):
+def _install_files(work, files):
+    for item, data in files:
+        _install(work, item, data)
+    subprocess.run(["e2fsck", "-fn", str(work / "boot.ext4")], capture_output=True,
+                   check=True, timeout=120)
+
+
+@contextmanager
+def _overlaybd_child(entry, files, socket, config, workspace):
+    from dsec.storage.overlaybd import OverlayBDRootStore
+
+    store = OverlayBDRootStore(socket, config, {})
+    work = Path(tempfile.mkdtemp(prefix="pack-diff-", dir=Path(workspace).resolve(strict=True)))
+    # A lost daemon reply leaves device ownership uncertain. Retain the
+    # runtime and evidence until the operator can reconcile the device ID.
+    safe_to_remove = True
+    try:
+        store.share_directory(work)
+        image = work / "parent-image.json"
+        image.write_text(json.dumps({"lowers": [{"file": pin["file"]} for pin in
+                                                entry["overlaybd_root"]["lowers"]], "upper": {}}))
+        image.chmod(0o640)
+        owner = store.socket_identity()
+        safe_to_remove = False
+        device, runtime = store.create(image, work, work / "boot.ext4")
+        try:
+            _install_files(work, files)
+            if store.socket_identity() != owner:
+                raise RuntimeError("ublk daemon changed before sealing the child layer")
+            commit = store.snapshot(device, image, work, work / "checkpoint")
+        finally:
+            if store.socket_identity() != owner:
+                raise RuntimeError("ublk daemon changed; original device ownership is uncertain")
+            store.delete(device, runtime, work)
+            safe_to_remove = True
+        child = dict(entry)
+        child.pop("boot_template", None)
+        child.pop("boot_sha256", None)
+        image_file = work / "disk-image.json"
+        child["overlaybd_root"] = {
+            "image": str(image_file), "image_sha256": file_sha256(image_file),
+            "lowers": [*entry["overlaybd_root"]["lowers"],
+                       {"file": str(commit), "bytes": commit.stat().st_size,
+                        "sha256": file_sha256(commit)}]}
+        yield child
+    except Exception as exc:
+        if not safe_to_remove:
+            exc.add_note(f"Check ublk device ownership before removing {work}")
+        raise
+    finally:
+        if safe_to_remove:
+            shutil.rmtree(work)
+
+
+def _publish_child(work, entry, revision, child, destination, store):
+    entry.pop("execution_contract", None)
+    entry["pack_diff_parent"] = revision
+    candidate = work / "catalog.json"
+    candidate.write_text(json.dumps({"format": 1, "environments": {child: entry}}))
+    return publish_microvm(candidate, child, destination, Path(store))
+
+
+def publish(policy, delta, parent_catalog, child, destination, store, *,
+            ublk_socket=None, ublk_global_config=None, ublk_work_dir=None):
     files = _approved(policy)
     if not IDENTIFIER.fullmatch(child) or child == policy["parent"]:
         raise ValueError("A distinct child environment ID is required")
@@ -129,8 +194,14 @@ def publish(policy, delta, parent_catalog, child, destination, store):
         raise ValueError("Incompatible parent revision")
     spec = catalog.resolve(parent, "local")
     entry = dict(catalog.entries[parent])
-    if spec["root_block_backend"] != "file-ext4" or entry.get("pack_diff_root") != PROFILE:
-        raise ValueError("Parent requires the explicitly attested direct ext4 /opt profile")
+    layered = spec["root_block_backend"] == "overlaybd-ublk"
+    if entry.get("pack_diff_root") != (OVERLAY_PROFILE if layered else PROFILE):
+        raise ValueError("Parent requires an explicitly attested ext4 /opt profile for its root backend")
+    ublk = (ublk_socket, ublk_global_config, ublk_work_dir)
+    if layered and not all(ublk):
+        raise ValueError("OverlayBD publication requires a ublk socket, global config and writable workspace")
+    if not layered and any(ublk):
+        raise ValueError("ublk options require an OverlayBD parent")
     with Path(delta).open("rb") as stream:
         raw = stream.read(2 * LIMIT + 1)
     if len(raw) > 2 * LIMIT:
@@ -141,31 +212,33 @@ def publish(policy, delta, parent_catalog, child, destination, store):
             or not isinstance(value["files"], dict)
             or set(value["files"]) != {item["path"] for item in files}):
         raise ValueError("Delta differs from publisher policy")
+    approved = []
+    for item in files:
+        data = base64.b64decode(value["files"][item["path"]], validate=True)
+        _check_bytes(item, data)
+        approved.append((item, data))
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".pack-diff-", dir=destination.parent) as name:
         work = Path(name)
+        if layered:
+            with _overlaybd_child(entry, approved, *ublk) as derived:
+                return _publish_child(work, derived, policy["revision"], child, destination, store)
         disk = work / "boot.ext4"
         shutil.copyfile(entry["boot_template"], disk)
         if file_sha256(disk) != entry["boot_sha256"]:
             raise ValueError("Parent disk changed while preparing child")
-        for item in files:
-            data = base64.b64decode(value["files"][item["path"]], validate=True)
-            _check_bytes(item, data)
-            _install(work, item, data)
-        subprocess.run(["e2fsck", "-fn", str(disk)], capture_output=True, check=True, timeout=120)
-        entry.pop("execution_contract", None)
-        entry.update(boot_template=str(disk.resolve()), boot_sha256=file_sha256(disk),
-                     pack_diff_parent=policy["revision"])
-        candidate = work / "catalog.json"
-        candidate.write_text(json.dumps({"format": 1, "environments": {child: entry}}))
-        return publish_microvm(candidate, child, destination, Path(store))
+        _install_files(work, approved)
+        entry.update(boot_template=str(disk.resolve()), boot_sha256=file_sha256(disk))
+        return _publish_child(work, entry, policy["revision"], child, destination, store)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for key in ("policy", "delta", "parent-catalog", "destination", "store"):
         parser.add_argument("--" + key, required=True, type=Path)
+    for key in ("ublk-socket", "ublk-global-config", "ublk-work-dir"):
+        parser.add_argument("--" + key, type=Path)
     parser.add_argument("--child", required=True)
     args = vars(parser.parse_args())
     args["policy"] = json.loads(args["policy"].read_text())

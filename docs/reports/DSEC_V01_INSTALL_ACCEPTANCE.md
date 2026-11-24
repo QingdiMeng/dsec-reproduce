@@ -1444,3 +1444,18 @@ Firecracker 1.17、64 MiB Alpine 原生 ext4 父盘和 Linux e2fsprogs。
 验收脚本的第一次启动沿用了修改父描述之前的能力声明，Edge 正确拒绝。第二次
 缺少 Edge 准入预算，无法获得可放置 Node。验收配置移除旧声明并显式传入独立
 实例的预算后完成上述检查。这两次尝试都未进入 VM 创建。
+
+## 2026-11-24 TASK-025 OverlayBD 父层复用与子 VM 恢复
+
+同一台 Linux 主机使用核心 wheel `5863e9e50d3db282389e150114b98c08918f0009ab6bb9f402d8a340ac49ea86`、
+Firecracker 1.17 和发布版 Rust ublk daemon（SHA-256 前缀 `b78207e6`）。
+四个实例依次由公开 SDK 通过回环 HTTPS API 创建，Controller 与 NodeGateway 同进程，etcd、Edge 和 VM 独立运行。
+临时启动器最初把可执行文件放在挂载了 noexec 的 /run，systemd 拒绝启动。
+改用 root 管理的 /usr/local/libexec 并核对 socket 对端 PID 后执行本轮验收。
+
+- 用 64 MiB Alpine ext4 启动盘构造两层 OverlayBD 父镜像。构建实例写入批准的可执行文件和未获批准的临时文件，SDK 捕获的交接包为 349 字节。错误父摘要触发拒绝，目录内容未变。
+- 发布子环境后，两个父 lower 的路径、顺序、inode 和 SHA-256 均保持一致。对象库仅新增 77,824 字节的 commit 和 441 字节的镜像描述文件。重启 Edge 加载已发布目录后创建新实例。
+- 第一台子 VM 运行新增程序返回 42，临时文件不存在。在该实例覆盖程序后，新建父 VM 看不到程序及临时文件，第二台子 VM 仍返回 42。
+- 四个独立实例均达到 STOPPED 并报告资源已回收。主机 ublk 块设备集合恢复到验收前，临时 etcd 和私有对象库已回收。原始结果保存在工作区 `.runtime/pack-overlaybd-20261124/report.json`。
+
+本次结果覆盖单机本地对象库和一个小型新增依赖。增量大小包含 ext4 元数据和块层格式开销，不能外推到其他工作负载。

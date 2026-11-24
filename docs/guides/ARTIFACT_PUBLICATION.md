@@ -63,6 +63,32 @@ python -m dsec_image.pack_diff --policy policy.json --delta dependency.delta.jso
 取决于发布者的内容审查。已存在目标、符号链接父目录和不匹配的父版本会终止发布。
 此版本覆盖新增文件，暂不支持覆盖、删除、整盘块差分、运行态内存或热加载目录。
 
+### OverlayBD 根盘的派生发布（TASK-025）
+
+此路径沿用上面的捕获格式和文件策略。父环境发布者使用
+`pack_diff_root=overlaybd-ext4-opt-v1` 声明 `/opt` 位于 OverlayBD 提供的 ext4 根文件系统。
+基础镜像的有序 lower、大小和 SHA-256 仍由父目录固定。当完整根盘已由这些 lower
+提供时，目录可省略 `boot_template` 和 `boot_sha256`。如显式提供副本，发布器仍校验它。
+
+发布命令额外接收管理员部署的三个路径。以下示例的工作区须位于 daemon 可读写的目录，
+对象库及其父目录须允许 daemon 读取。先将父版本发布到同一对象库，以便复用已有对象。
+
+```bash
+python -m dsec_image.pack_diff --policy policy.json --delta dependency.delta.json \
+  --parent-catalog environments.json --child with-tool \
+  --destination environments.json --store /srv/dsec/artifacts \
+  --ublk-socket /srv/dsec/overlaybd/ublk.sock \
+  --ublk-global-config /srv/dsec/overlaybd/global.json \
+  --ublk-work-dir /srv/dsec/overlaybd/staging
+```
+
+发布器在父 lower 上创建临时可写块设备，通过原有文件安装、读回校验和 e2fsck 后，
+用 restack 封存一个新 commit。确认设备释放后，发布器才把新环境写入目录。内容寻址库
+保留父 lower 的顺序，并把新 commit 放在栈顶。daemon 回执丢失或身份变化时，错误中会给出
+待核对的工作目录。管理员应先确认设备归属再清理该目录。
+
+Linux 实机验收中，从 64 MiB Alpine 启动盘构造的两个父 lower 均得到复用。发布一个新增依赖只增加 76 KiB 的 commit 和 441 字节的描述文件。新建子 VM 可以执行程序，父环境和其他子 VM 的内容保持独立。详见[实机验收记录](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md)。
+
 ## TASK-023 设计提案 · 单次发布内复用本地校验
 
 TASK-003 在两个共享 EROFS 层的环境上测到，发布器命中对象池后仍对源和目标各读两遍。
