@@ -20,6 +20,15 @@ class QMP:
     def execute(self, command):
         if command not in self.COMMANDS:
             raise ValueError('Unsupported private QMP command')
+        return self._execute(command)
+
+    def _screendump(self, private_path):
+        return self._execute('screendump', {'filename':str(private_path),'format':'png'})
+
+    def _send_input(self, events):
+        return self._execute('input-send-event', {'events':events})
+
+    def _execute(self, command, arguments=None):
         deadline = time.monotonic() + self.timeout
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             def remaining():
@@ -50,10 +59,13 @@ class QMP:
             greeting = read()
             if not isinstance(greeting.get('QMP'), dict):
                 raise QMPError('QMP greeting required')
-            def exchange(name):
+            def exchange(name, args=None):
                 request_id = uuid.uuid4().hex
                 remaining()
-                connection.sendall(json.dumps({'execute':name, 'id':request_id}).encode() + b'\n')
+                request = {'execute':name, 'id':request_id}
+                if args is not None:
+                    request['arguments'] = args
+                connection.sendall(json.dumps(request).encode() + b'\n')
                 for _ in range(self.MAX_EVENTS + 1):
                     value = read()
                     if 'event' in value and 'id' not in value:
@@ -67,4 +79,4 @@ class QMP:
                     return value['return']
                 raise QMPError('QMP event budget exceeded')
             exchange('qmp_capabilities')
-            return exchange(command)
+            return exchange(command, arguments)

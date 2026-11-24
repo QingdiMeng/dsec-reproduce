@@ -17,7 +17,7 @@ from dsec.contracts.native import (NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_
 from dsec.contracts.resources import NodeDemand
 from dsec.contracts.sandbox import UnsupportedCapability, DSecContainerRunArgs
 from dsec.host.cluster_http import ClusterHTTPServer, Handler
-from dsec.sdk import DSecClient, ClusterClient
+from dsec.sdk import DSecClient, ClusterClient, DSecFullVMRunArgs
 from dsec.sdk.client import DSecClient as CanonicalClient
 from dsec.sdk.development import DevEdgeClient
 from dsec.sdk.cluster import ClusterTransport
@@ -57,6 +57,29 @@ class APIClientTests(unittest.IsolatedAsyncioTestCase):
             DSecClient(['https://api.example'], token=self.token, project='case', allow_loopback_http=True)
         for token in ('', None, 'x\ny'):
             with self.assertRaises(ValueError): DSecClient(['https://api.example'], token=token, project='case')
+
+    async def test_fullvm_is_explicit_and_never_falls_back_to_container(self):
+        client = self.client()
+        spec = DSecFullVMRunArgs(environment_id='desktop')
+        demand = NodeDemand(1,512,512,0)
+        health = dict(self.health, protocol_features=[*self.health['protocol_features'],'container-rpc-v1'])
+        client._transport.rpc.send = Mock(return_value=health)
+        await client.open()
+        with self.assertRaises(UnsupportedCapability):
+            await client.run_fullvm(spec,resource_demand=demand)
+        with self.assertRaises(ValueError):
+            await client.run_container(spec,resource_demand=demand)
+        self.assertEqual(client._transport.rpc.send.call_count,1)
+
+        health['protocol_features'].append('fullvm-rpc-v1')
+        client._transport.rpc.send = Mock(side_effect=[health,{'id':'signed-fullvm'},{'session_id':'a'*32}])
+        await client.open()
+        box = await client.run_fullvm(spec,resource_demand=demand)
+        self.assertEqual(box.backend,'fullvm')
+        sent = client._transport.rpc.send.call_args.args[1]
+        self.assertEqual(sent['args']['spec']['execution_mode'],'fullvm')
+        await box.open_session()
+        self.assertEqual(client._transport.rpc.send.call_args.args[1]['args']['backend'],'fullvm')
 
     async def test_missing_admission_demand_and_legacy_tb2_reject_before_send(self):
         client = self.client(); client._transport.rpc.send = Mock(return_value=self.health)

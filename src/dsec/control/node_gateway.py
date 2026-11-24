@@ -120,7 +120,7 @@ class NodeGateway:
         if proof['state'] != 'NOT_FOUND':
             args = self._edge_create_args(receipt) if receipt['backend'] == 'microvm' else (
                 DSecContainerRunArgs(**receipt['args']['spec']).lifecycle_args())
-            if receipt['backend'] == 'container' and 'environment_contract' in receipt['args']:
+            if receipt['backend'] != 'microvm' and 'environment_contract' in receipt['args']:
                 args['environment_contract'] = receipt['args']['environment_contract']
             if (proof.get('operation') != 'create' or proof.get('sandbox_id') is not None
                     or proof.get('digest') != request_digest('create', None, args)):
@@ -157,17 +157,19 @@ class NodeGateway:
             if backend not in self.backends or minimum is None:
                 raise ValueError('Node does not provide this backend/environment')
             demand = Quota(**receipt['demand'])
-            if backend == 'container':
+            if backend != 'microvm':
                 spec = DSecContainerRunArgs(**args['spec']).validate()
+                if spec.route_backend != backend:
+                    raise RequestConflict('Admission backend differs from execution mode')
                 actual = self.inspection.call('health').get('qemu_environments', {}).get(environment)
-                if actual is not None:
+                if actual is not None and backend != 'fullvm':
                     if actual['mode'] != spec.execution_mode:
                         raise UnsupportedCapability('Requested mode differs from Node environment')
                     physical = Quota(**actual['minimum'])
                     minimum = Quota(**{name:max(getattr(minimum,name),getattr(physical,name))
                                        for name in Quota.__dataclass_fields__})
                 elif spec.execution_mode == 'fncall':
-                    raise UnsupportedCapability('Owning Edge has no prepared QEMU function environment')
+                    raise UnsupportedCapability('Owning Edge has no prepared QEMU execution environment')
                 minimum = Quota(1, max(minimum.cpu,spec.cpu_cores_limit),
                     max(minimum.memory_mb,spec.memory_limit_mb),minimum.disk_mb,minimum.network_mbps)
             if not minimum.fits(demand):
@@ -178,7 +180,7 @@ class NodeGateway:
                     self.iam.release(receipt['project'],receipt['request_id'],self.node_id,nonadmission=True)
                 raise ServiceError('AdmissionDenied','Requested quota understates configured environment resources',
                     {'minimum':asdict(minimum),'requested':asdict(demand)})
-            if backend == 'container' and args.get('kind', 'container') != 'container':
+            if backend != 'microvm' and args.get('kind', 'container') != 'container':
                 raise ValueError('Legacy TB2 runtime is not a cluster backend')
             proof = self._creation_proof(receipt)
             if proof['state'] == 'DONE':
@@ -196,7 +198,12 @@ class NodeGateway:
                 # journal. Once a send was possible, never send it a second time.
                 raise RequestOutcomeUnknown('Dispatch may have reached Edge; NOT_FOUND cannot authorize replay', receipt['request_id'])
             required = execution_requirements(args.get('required_capabilities', ()))
-            if required:
+            if backend == 'fullvm':
+                if actual is None or actual.get('mode') != 'fullvm' or not Quota(**actual['minimum']).fits(demand):
+                    self.iam.release(receipt['project'], receipt['request_id'], self.node_id,
+                                     nonadmission=True)
+                    raise ServiceError('AdmissionDenied', 'Owning Edge does not provide this FullVM within the admitted quota')
+            if required or backend == 'fullvm':
                 live = self.health()
                 actual = live.environment_contract(backend, environment)
                 expected = (EnvironmentView.from_dict(args['environment_contract'])
@@ -260,8 +267,14 @@ class NodeGateway:
         if (route.node != self.node_id or receipt is None or receipt['node'] != self.node_id
                 or receipt['sandbox_id'] != route.local_id or receipt['backend'] != route.backend):
             raise AuthorizationDenied('Sandbox route does not match its admitted owner')
-        if route.backend == 'container' and args.get('spec', receipt['args'].get('spec')) != receipt['args'].get('spec'):
-            raise RequestConflict('Container specification changed from original admission')
+        if route.backend != 'microvm' and args.get('spec', receipt['args'].get('spec')) != receipt['args'].get('spec'):
+            raise RequestConflict('Execution specification changed from original admission')
+        if route.backend == 'fullvm' and not (operation.startswith('container_') or
+                (operation in ('native', 'native_stream', 'native_events', 'native_cancel')
+                 and args.get('backend') == 'fullvm') or operation == 'query_request'):
+            raise RequestConflict('Operation does not match FullVM admission')
+        if args.get('backend') == 'fullvm' and route.backend != 'fullvm':
+            raise RequestConflict('FullVM operation requires a FullVM admission')
         values = dict(args)
         required = required_extension(values.get('action'), values) if operation == 'native' else None
         if required and required not in self.inspection.call('health').get('protocol_features', ()):
@@ -270,7 +283,7 @@ class NodeGateway:
         lookup_id = values.get('lookup_id')
         if lookup_id is not None:
             values['lookup_id'] = edge_request_id(route.project, lookup_id)
-        if route.backend == 'container' and operation not in ('native', 'native_stream', 'native_events', 'native_cancel', 'container_query_request'):
+        if route.backend != 'microvm' and operation not in ('native', 'native_stream', 'native_events', 'native_cancel', 'container_query_request'):
             values['spec'] = receipt['args']['spec']
         if operation in ('query_request', 'container_query_request'):
             proof = public_proof(self.edge.call(operation, route.local_id,
@@ -333,6 +346,10 @@ class NodeGateway:
             capabilities.discard(ENVIRONMENT_REQUIREMENTS_FEATURE)
         capabilities.discard(ROLLOUT_FEATURE)
         capabilities.discard('fncall-execution-v1')
+        capabilities.discard('fullvm-execution-v1')
+        if 'fullvm' in self.backends and any(value.get('mode') == 'fullvm'
+                for name,value in health.get('qemu_environments',{}).items() if name in self.environments):
+            capabilities.add('fullvm-execution-v1')
         if any(value.get('mode') == 'fncall' for name,value in health.get('qemu_environments',{}).items()
                if name in self.environments) and 'container' in self.backends:
             capabilities.add('fncall-execution-v1')

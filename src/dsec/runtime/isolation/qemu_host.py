@@ -50,6 +50,7 @@ class HostIsolation:
             'memory.swap.max':'0','memory.oom.group':'1','pids.max':str(policy['pids_max']),
             'cpu.max':f'{cpus*100000} 100000'}
         self.readonly_layers=[]
+        self.uefi=None
         self.record=None
         self.created=False
 
@@ -84,17 +85,26 @@ class HostIsolation:
             (self.group/name).write_text(value)
         self.check_limits()
         info=self.group.stat()
-        prepared=self.broker('prepare',*([json.dumps(self.readonly_layers,separators=(',',':'))] if self.readonly_layers else []))
+        arguments = []
+        if self.readonly_layers or self.uefi is not None:
+            arguments.append(json.dumps(self.readonly_layers,separators=(',',':')))
+        if self.uefi is not None:
+            arguments.append(json.dumps(self.uefi,separators=(',',':')))
+        prepared=self.broker('prepare',*arguments)
         if prepared['state']!='PREPARED':
             raise RuntimeError('AppArmor profile is not prepared')
+        if prepared.get('uefi') != self.uefi:
+            raise RuntimeError('AppArmor boot file selection differs from the VM')
         self.record=dict(policy=self.policy,group=str(self.group),device=info.st_dev,inode=info.st_ino,
                          limits=self.limits,profile=prepared['profile'],profile_sha256=prepared['sha256'])
         if self.readonly_layers:self.record['readonly_layers']=self.readonly_layers
+        if self.uefi is not None:self.record['uefi']=self.uefi
         return self.record
 
     def restore(self, record):
         if (record['policy']!=self.policy or record['group']!=str(self.group)
-                or record['limits']!=self.limits or record.get('readonly_layers',[])!=self.readonly_layers):
+                or record['limits']!=self.limits or record.get('readonly_layers',[])!=self.readonly_layers
+                or record.get('uefi')!=self.uefi):
             raise ValueError('Saved host isolation policy changed')
         self.record=record
 

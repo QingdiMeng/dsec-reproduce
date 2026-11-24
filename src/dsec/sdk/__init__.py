@@ -2,7 +2,7 @@
 
 from dsec.sdk.sandbox_transport import ServiceError, RequestOutcomeUnknown
 from dsec.sdk.client import (DSecClient, DSecSandbox, DSecContainerSandbox, DSecTB2Sandbox,
-                             DSecFnCallExecutor, DSecFnCallRunArgs,
+                             DSecFnCallExecutor, DSecFnCallRunArgs, DSecFullVMSandbox, DSecFullVMRunArgs,
                              DSecMicroVMRunArgs, DSecContainerRunArgs, DSecTB2RunArgs,
                              UnsupportedCapability)
 
@@ -11,7 +11,7 @@ __all__ = [
     "DSecClient", "DSecSandbox", "DSecContainerSandbox", "DSecTB2Sandbox",
     "DSecSession",
     "DSecMicroVMRunArgs", "DSecContainerRunArgs", "DSecTB2RunArgs", "UnsupportedCapability",
-    "DSecFnCallExecutor", "DSecFnCallRunArgs",
+    "DSecFnCallExecutor", "DSecFnCallRunArgs", "DSecFullVMSandbox", "DSecFullVMRunArgs",
 ]
 
 from dsec.sdk.native import DSecSession

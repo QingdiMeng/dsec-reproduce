@@ -45,7 +45,7 @@ class NodeAdmission:
                 record = json.loads(path.read_text())
                 if (record.get('version') != 1 or record.get('lease_id') != path.stem or
                         not re.fullmatch(r'[0-9a-f]{32}', path.stem) or
-                        record.get('backend') not in ('microvm', 'container') or
+                        record.get('backend') not in ('microvm', 'container', 'fullvm') or
                         record.get('state') not in ('ALLOCATING', 'BOUND', 'LIVE', 'UNKNOWN', 'RELEASED')):
                     raise ValueError('Invalid node lease record')
                 requests = record.get('requests')
@@ -266,11 +266,11 @@ class NodeAdmission:
                                   'phase':'ready' if sb.reserved else 'active',
                                   'demand':asdict(self.ready_demand if sb.reserved else self.default_demand)})
 
-    def adopt_container(self, sandbox_id, minimum):
+    def adopt_container(self, sandbox_id, minimum, *, backend='container'):
         with self.lock:
-            if self._for_sandbox('container', sandbox_id) is None:
-                key = hashlib.sha256(('container:'+sandbox_id).encode()).hexdigest()[:32]
-                self._commit({'version':1, 'lease_id':key, 'backend':'container',
+            if self._for_sandbox(backend, sandbox_id) is None:
+                key = hashlib.sha256((backend+':'+sandbox_id).encode()).hexdigest()[:32]
+                self._commit({'version':1, 'lease_id':key, 'backend':backend,
                               'sandbox_id':sandbox_id, 'state':'LIVE', 'requests':{},
                               'configured_limits':None, 'demand':asdict(self._demand(minimum))})
 

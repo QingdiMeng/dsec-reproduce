@@ -10,7 +10,7 @@ from dsec.control.cluster_inventory import OPERATIONS, browse
 from dsec.contracts.requests import request_digest
 from dsec.contracts.native import NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_FEATURE, HTTP_FEATURE, required_extension
 from dsec.contracts.native import REQUIREMENTS_FEATURE, execution_requirements
-from dsec.contracts.sandbox import UnsupportedCapability
+from dsec.contracts.sandbox import DSecContainerRunArgs, UnsupportedCapability
 from dsec.contracts.rollout import ROLLOUT_FEATURE
 from dsec.contracts.environments import ENVIRONMENT_REQUIREMENTS_FEATURE
 from dsec.contracts.cluster import NoPlacement
@@ -24,11 +24,11 @@ def permission(operation, args):
     if operation in ('pause', 'resume', 'recover', 'seal_baseline'):
         return 'sandbox.snapshot'
     if operation in ('status', 'container_status', 'query_request', 'container_query_request', 'container_query_action',
-                     'native_events', 'health', 'node_status', 'node.list'):
+                     'native_events', 'health', 'node_status', 'node.list', 'container_screenshot'):
         return 'sandbox.read'
     if operation == 'native' and args.get('action') in ('capabilities', 'read'):
         return 'sandbox.read'
-    if operation in ('native', 'native_stream', 'native_cancel', 'execute', 'container_execute'):
+    if operation in ('native', 'native_stream', 'native_cancel', 'execute', 'container_execute', 'container_desktop_input'):
         return 'sandbox.execute'
     raise ValueError('Unsupported cluster operation')
 
@@ -90,7 +90,7 @@ class ClusterAPI:
         self.iam.authorize(credential, project, permission(operation, args))
         if operation == 'health':
             from dsec._release import installed_release
-            return dict(protocol=PROTOCOL, protocol_features=[PROTOCOL, 'container-rpc-v1', 'fncall-rpc-v1',
+            return dict(protocol=PROTOCOL, protocol_features=[PROTOCOL, 'container-rpc-v1', 'fncall-rpc-v1', 'fullvm-rpc-v1', 'fullvm-desktop-v1',
                 'busy-nonadmission-v1', 'node-admission-v1', 'node-upgrade-v1', ROLLOUT_FEATURE, NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_FEATURE, HTTP_FEATURE, REQUIREMENTS_FEATURE, ENVIRONMENT_REQUIREMENTS_FEATURE],release=installed_release())
         if operation == 'node.list':
             if args:
@@ -114,6 +114,9 @@ class ClusterAPI:
             if args.get('baseline_id') is not None or args.get('kind') == 'tb2':
                 raise ValueError('Cluster baseline routing and legacy TB2 backend are not supported')
             backend = 'microvm' if operation == 'create' else 'container'
+            if backend == 'container' and isinstance(args.get('spec'),dict) and args['spec'].get('execution_mode') == 'fullvm':
+                DSecContainerRunArgs(**args['spec']).validate()
+                backend = 'fullvm'
             if 'environment_contract' in args:
                 raise ValueError('Environment contracts are selected by the control plane, not callers')
             required = execution_requirements(args.get('required_capabilities', ()))
@@ -137,11 +140,13 @@ class ClusterAPI:
             if receipt is None:
                 capabilities = (('fncall-execution-v1',) if backend == 'container' and
                     args.get('spec',{}).get('execution_mode') == 'fncall' else ())
+                if backend == 'fullvm':
+                    capabilities = ('fullvm-execution-v1',)
                 capabilities = tuple(sorted(set(capabilities) | set(required) |
                     ({REQUIREMENTS_FEATURE, ENVIRONMENT_REQUIREMENTS_FEATURE} if required else set())))
                 candidate = self.placement.choose(backend, environment, demand,capabilities=capabilities,
                                                  execution_capabilities=required)
-                if required:
+                if required or backend == 'fullvm':
                     selected = self.placement.watcher.snapshot().get(candidate)
                     contract = selected.environment_contract(backend, environment) if selected else None
                     if contract is None or not set(required) <= set(contract.capabilities):
@@ -149,7 +154,7 @@ class ClusterAPI:
                     args['environment_contract'] = contract.as_dict()
             else:
                 candidate = receipt['node']
-                if required and 'environment_contract' in receipt['args']:
+                if (required or backend == 'fullvm') and 'environment_contract' in receipt['args']:
                     # The original request digest is computed above, before
                     # resolving publication metadata. Reconciliation preserves
                     # the first observed revision rather than choosing today's.
@@ -173,9 +178,14 @@ class ClusterAPI:
             raise AuthorizationDenied('Sandbox belongs to another project')
         if route.node not in self.nodes:
             raise ValueError('Owning node is not configured; re-placement is prohibited')
-        if operation != 'query_request' and (route.backend == 'container') != (operation.startswith('container_')
-                or args.get('backend') == 'container'):
-            raise ValueError('Operation/backend mismatch')
+        if operation in ('container_screenshot','container_desktop_input') and route.backend != 'fullvm':
+            raise ValueError('Desktop operations require a FullVM route')
+        if operation != 'query_request':
+            shared_qemu_rpc = operation.startswith('container_')
+            requested = args.get('backend', 'microvm')
+            if (shared_qemu_rpc and route.backend == 'microvm') or (
+                    not shared_qemu_rpc and route.backend != requested):
+                raise ValueError('Operation/backend mismatch')
         required = required_extension(args.get('action'), args) if operation == 'native' else None
         if required and required not in self.nodes[route.node].health().capabilities:
             raise UnsupportedCapability('Owning Node does not support this native extension')

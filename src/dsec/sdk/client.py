@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import asdict
 from dsec.contracts.sandbox import (UnsupportedCapability, DSecMicroVMRunArgs,
-                                   DSecContainerRunArgs, DSecFnCallRunArgs, DSecTB2RunArgs)
+                                   DSecContainerRunArgs, DSecFnCallRunArgs, DSecFullVMRunArgs, DSecTB2RunArgs)
 from dsec.sdk.sandbox_transport import SandboxClient, ServiceError
 from dsec.contracts.resources import NodeDemand
 from dsec.sdk.native import NativeSandboxMixin
@@ -144,12 +144,38 @@ class _SandboxClient:
         if not isinstance(args, DSecContainerRunArgs):
             raise TypeError("run_container requires DSecContainerRunArgs")
         if args.execution_mode != 'container':
-            raise ValueError('Use run_fncall for independent function invocations')
+            raise ValueError('Use run_fncall or run_fullvm for the requested execution mode')
         args.validate()
         result = await asyncio.to_thread(self._transport.call, "container_create",
             request_id=request_id, resource_demand=self._node_hint(resource_demand), spec=args.wire_spec(),
             **self._requirements(required_capabilities))
         return DSecContainerSandbox(self._transport, result["id"], args, features=self._features)
+
+    async def run_fullvm(self, args: DSecFullVMRunArgs, *, request_id=None,
+                         resource_demand=None, required_capabilities=()):
+        self._require_container_service()
+        if 'fullvm-rpc-v1' not in self._features:
+            raise UnsupportedCapability('Upgrade API for fullvm-rpc-v1')
+        self._validate_fullvm(args)
+        result = await asyncio.to_thread(self._transport.call, 'container_create',
+            request_id=request_id, resource_demand=self._node_hint(resource_demand),
+            spec=args.wire_spec(), **self._requirements(required_capabilities))
+        return DSecFullVMSandbox(self._transport, result['id'], args, features=self._features)
+
+    @staticmethod
+    def _validate_fullvm(args):
+        if not isinstance(args, DSecFullVMRunArgs) or args.execution_mode != 'fullvm':
+            raise TypeError('Expected DSecFullVMRunArgs')
+        args.validate()
+
+    async def attach_fullvm(self, sandbox_id, args: DSecFullVMRunArgs):
+        self._require_container_service()
+        self._validate_fullvm(args)
+        sandbox = DSecFullVMSandbox(self._transport, sandbox_id, args, features=self._features)
+        status = await sandbox.status()
+        if status.get('backend') != 'fullvm' or status['state'] != 'RUNNING':
+            raise RuntimeError('FullVM is not running')
+        return sandbox
 
     async def run_fncall(self, args: DSecFnCallRunArgs, *, request_id=None, resource_demand=None):
         self._require_container_service()
@@ -189,7 +215,7 @@ class _SandboxClient:
         if not isinstance(args, DSecContainerRunArgs):
             raise TypeError("attach_container requires DSecContainerRunArgs")
         if args.execution_mode != 'container':
-            raise ValueError('Use attach_fncall for function slots')
+            raise ValueError('Use attach_fncall or attach_fullvm for the requested execution mode')
         args.validate()
         sandbox = DSecContainerSandbox(self._transport, sandbox_id, args, features=self._features)
         if (await sandbox.status())["state"] != "RUNNING":
@@ -246,6 +272,28 @@ class DSecContainerSandbox(NativeSandboxMixin):
 
     async def stop(self, *, request_id: str | None = None):
         return await self._call("container_stop", request_id=request_id)
+
+
+class DSecFullVMSandbox(DSecContainerSandbox):
+    backend = 'fullvm'
+
+    def _require_desktop(self):
+        if 'fullvm-desktop-v1' not in self._features:
+            raise UnsupportedCapability('Upgrade API/Edge for FullVM desktop operations')
+
+    async def screenshot(self):
+        """Return PNG bytes and the dimensions of the current virtual display."""
+        import base64
+        self._require_desktop()
+        result = await self._call('container_screenshot')
+        return dict(format='png',width=result['width'],height=result['height'],
+                    data=base64.b64decode(result['data'],validate=True))
+
+    async def desktop_input(self, events, *, request_id=None):
+        """Send a bounded keyboard/pointer batch with an optional stable request ID."""
+        from dsec.contracts.desktop import input_events
+        self._require_desktop()
+        return await self._call('container_desktop_input',request_id=request_id,events=input_events(events))
 
 
 class DSecFnCallExecutor:

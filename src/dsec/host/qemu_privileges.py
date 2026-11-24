@@ -12,6 +12,7 @@ import tempfile
 
 from dsec.host import node_probe, qemu_profile_helper
 from dsec.host.install_template import INSTALLER
+from dsec.runtime.backends.qemu import QemuArtifact, uefi_profile_files
 from dsec.runtime.backends.qemu_container import ExecutionCatalog
 from dsec.runtime.isolation import qemu_launch
 
@@ -28,19 +29,27 @@ def render(cfg,out,user,*,clang='clang',layer_root=None):
     helper='/usr/local/libexec/'+name;config='/etc/dsec/'+name+'.json';state='/var/lib/dsec/'+name
     if catalog.host_isolation['helper']!=helper:raise ValueError('Broker belongs to another host instance')
     binaries={json.dumps(item['binary'],sort_keys=True) for item in catalog.environments.values()}
-    kernels={json.dumps(item['kernel'],sort_keys=True) for item in catalog.environments.values()}
-    if len(binaries)!=1 or len(kernels)!=1:
+    kernels={json.dumps(item['kernel'],sort_keys=True) for item in catalog.environments.values() if 'kernel' in item}
+    if len(binaries)!=1 or len(kernels)>1:
         raise ValueError('One broker binds one QEMU binary/kernel pair; use separate Nodes for different pairs')
-    artifacts={name:json.loads(next(iter(values))) for name,values in (('binary',binaries),('kernel',kernels))}
-    from dsec.runtime.backends.qemu import QemuArtifact
+    artifacts={name:json.loads(next(iter(values))) for name,values in (('binary',binaries),('kernel',kernels)) if values}
     for item in artifacts.values():QemuArtifact(**item).verify()
     python=str(Path(sys.executable).resolve(strict=True));launcher=str(Path(qemu_launch.__file__).resolve(strict=True))
     runtime_root=cfg['worker'].get('container_root',str(Path(cfg['state_root'])/'containers'))
     settings=dict(uid=account.pw_uid,prefix='dsec-'+cfg['instance'],runtime_root=runtime_root,
-        binary=artifacts['binary']['path'],kernel=artifacts['kernel']['path'],python=python,launcher=launcher,
+        python=python,launcher=launcher,**{name:item['path'] for name,item in artifacts.items()},
         pins={**{name:item['sha256'] for name,item in artifacts.items()},
               'python':hashlib.sha256(Path(python).read_bytes()).hexdigest(),
               'launcher':hashlib.sha256(Path(launcher).read_bytes()).hexdigest()})
+    boots=[]
+    for item in catalog.environments.values():
+        files=uefi_profile_files(item)
+        if files is not None and files not in boots:
+            qemu_profile_helper.validate_uefi_files(settings,files,check_files=True)
+            for pin in files.values():QemuArtifact(**pin).verify()
+            boots.append(files)
+    if boots:
+        settings['uefi_boots']=boots
     shared=[layer for item in catalog.environments.values() for layer in item.get('readonly_layers',[])]
     if layer_root is not None:
         root=Path(layer_root)
@@ -116,8 +125,9 @@ def render(cfg,out,user,*,clang='clang',layer_root=None):
             "compile(blobs['profile-helper.py'], 'profile-helper.py', 'exec')\n    compile(blobs['network-helper.py'], 'network-helper.py', 'exec')")
     compile(source,helper,'exec');compile(installer,'install-qemu-privileges.py','exec')
     contents['install-qemu-privileges.py']=installer.encode()
-    example_layers=next((item['readonly_layers'] for item in catalog.environments.values() if item.get('readonly_layers')),[])
-    contents['sample.profile']=qemu_profile_helper.render_profile(settings,'a'*32,example_layers).encode()
+    example_layers=[] if boots else next((item['readonly_layers'] for item in catalog.environments.values() if item.get('readonly_layers')),[])
+    contents['sample.profile']=qemu_profile_helper.render_profile(
+        settings,'a'*32,example_layers,boots[0] if boots else None).encode()
     destination=Path(out).resolve();destination.mkdir(mode=0o700,parents=True,exist_ok=False)
     for filename,blob in contents.items():
         path=destination/filename;path.write_bytes(blob);path.chmod(0o600)

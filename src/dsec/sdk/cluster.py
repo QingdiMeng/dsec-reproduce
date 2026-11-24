@@ -87,7 +87,7 @@ class ClusterTransport:
             envelope['resource_demand'] = resource_demand
         readonly = operation in ('project.get', 'project.list', 'admission.list', 'sandbox.list',
             'audit.list', 'node.list', 'node.get', 'node.security', 'credential.rotation.get', 'health', 'node_status', 'status', 'container_status',
-            'query_request', 'container_query_request', 'container_query_action', 'native_events') or (
+            'query_request', 'container_query_request', 'container_query_action', 'native_events', 'container_screenshot') or (
             operation == 'native' and args.get('action') in ('read', 'capabilities'))
         return self.rpc.send(self.token, envelope, readonly=readonly)
 

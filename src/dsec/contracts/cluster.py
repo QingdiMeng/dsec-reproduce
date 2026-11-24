@@ -87,7 +87,7 @@ class SandboxRoute:
 
     def __post_init__(self):
         identifier(self.project); identifier(self.node); request_id(self.admission_id)
-        if self.backend not in ('microvm', 'container') or not re.fullmatch(
+        if self.backend not in ('microvm', 'container', 'fullvm') or not re.fullmatch(
                 r'[0-9a-f]{12}' if self.backend == 'microvm' else r'[0-9a-f]{32}', self.local_id):
             raise ValueError('Invalid sandbox route')
 

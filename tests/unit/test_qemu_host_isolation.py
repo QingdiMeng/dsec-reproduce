@@ -126,6 +126,42 @@ class BrokerTests(unittest.TestCase):
         self.run.assert_not_called()
         self.assertFalse((self.root/(self.sid+'.json')).exists())
 
+    def test_uefi_policy_uses_only_approved_boot_files_and_own_writable_state(self):
+        pins = {}
+        for name in ('code','template','base'):
+            path = self.root/name
+            path.write_bytes(name.encode())
+            path.chmod(0o444)
+            pins[name] = dict(path=str(path),sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+        self.cfg['uefi_boots'] = [pins]
+        changed = dict(pins, base=dict(pins['base'],path='/srv/foreign.qcow2'))
+        with self.assertRaisesRegex(ValueError,'not approved'):
+            broker.operate(self.cfg,'prepare',self.sid,['[]',json.dumps(changed)])
+        prepared = broker.operate(self.cfg,'prepare',self.sid,['[]',json.dumps(pins)])
+        self.assertEqual(prepared['uefi'],pins)
+        text = broker.render_profile(self.cfg,self.sid,uefi=pins)
+        for pin in pins.values():
+            self.assertIn(f'"{pin["path"]}" rk,',text)
+            self.assertNotIn(f'"{pin["path"]}" rw',text)
+        self.assertIn(f'/{self.sid}/root.qcow2" rwk,',text)
+        self.assertIn(f'/{self.sid}/uefi-vars.fd" rwk,',text)
+        self.assertIn(f'/{self.sid}/display.png" rw,',text)
+        self.assertNotIn('/root.ext4',text)
+        self.assertEqual(self.claim()['uefi'],pins)
+        Path(pins['base']['path']).unlink()
+        self.dead=True
+        self.assertEqual(self.retire()['state'],'RETIRED')
+
+    def test_uefi_only_broker_can_fence_retirement_before_prepare(self):
+        self.cfg.pop('kernel')
+        self.cfg['pins'].pop('kernel')
+        self.cfg['uefi_boots'] = [dict(code=dict(path='/srv/boot.fd',sha256='a'*64),
+                                       template=dict(path='/srv/root.qcow2',sha256='b'*64))]
+        self.assertEqual(self.retire()['state'],'RETIRED')
+        self.assertEqual(self.retire()['state'],'RETIRED')
+        with self.assertRaisesRegex(RuntimeError,'retired'):
+            self.claim()
+
     def test_profile_is_per_instance_and_does_not_grant_exec_or_host_secrets(self):
         text=broker.render_profile(self.cfg,self.sid)
         self.assertIn('/'+self.sid+'/root.ext4',text)

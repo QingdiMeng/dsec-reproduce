@@ -14,12 +14,13 @@ from unittest.mock import Mock, patch
 
 from dsec.contracts.sandbox import DSecContainerRunArgs, DSecFnCallRunArgs, UnsupportedCapability
 from dsec.runtime.backends.docker_guest import Supervisor, bounded_shell, receive, send
-from dsec.runtime.backends.qemu_container import ExecutionCatalog, QemuContainer, QemuContainerBackend
+from dsec.runtime.backends.qemu_container import ExecutionCatalog, QemuContainer, QemuContainerBackend, private_disk_mb
 from dsec.runtime.container_edge import ContainerRuntime
 from dsec.runtime.requests import RequestJournal
 from dsec.sdk.client import DSecFnCallExecutor
 from dsec.runtime.container_journal import ContainerLifecycleJournal
 from dsec.contracts.rpc import ServiceError
+from dsec.contracts.errors import RequestOutcomeUnknown
 
 
 class Docker:
@@ -72,6 +73,19 @@ class CatalogHistoryTests(unittest.TestCase):
         self.assertTrue(catalog.accepts_digest('python',catalog.digest))
         value=json.loads(catalog.path.read_text());value.pop('catalog_history');catalog.path.write_text(json.dumps(value))
         self.assertFalse(ExecutionCatalog(catalog.path).accepts_digest('python',self.pin['sha256']))
+
+    def test_uefi_fullvm_can_share_catalog_with_direct_boot(self):
+        artifact = self.environment['binary']
+        item = dict(mode='fullvm', binary=artifact, template=artifact, memory_mb=4096,
+                    cpu_count=4, display='virtio-2d',
+                    uefi=dict(code=artifact, variables=artifact, image_tool=artifact, disk_mb=51200))
+        entries = dict(self.old['environments'], osworld=item)
+        catalog = self.load(environments=entries)
+        self.assertTrue(catalog.accepts_digest('python',self.pin['sha256']))
+        self.assertGreater(private_disk_mb(item), 51200)
+        for bad in (dict(item,kernel=artifact), dict(item,network='isolated')):
+            with self.assertRaises(ValueError):
+                self.load(environments=dict(entries,osworld=bad))
 
     def test_changed_environment_or_cid_owner_is_not_an_additive_upgrade(self):
         for field,value in (('memory_mb',1536),('image','sha256:'+'b'*64),('inner_memory_mb',768),('disk_cache','direct')):
@@ -253,7 +267,7 @@ class EdgeTests(unittest.TestCase):
             pool=Mock(); pool.snapshot.return_value={}
             vm=SimpleNamespace(directory=root,lock=threading.RLock(),
                                status=lambda:dict(state='STOPPED',process_alive=False))
-            handle=QemuContainer(SimpleNamespace(pool=pool),'a'*32,lease,vm,Mock())
+            handle=QemuContainer(SimpleNamespace(pool=pool,item=dict(mode="container")),'a'*32,lease,vm,Mock())
             with self.assertRaisesRegex(RuntimeError,'ownership'):
                 handle.stop()
             self.assertEqual(other.read_bytes(),b'preserve')
@@ -261,6 +275,23 @@ class EdgeTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'ownership'):
                 handle.stop()
             self.assertFalse((root/'retired.json').exists())
+
+    def test_uefi_stop_retires_overlay_and_firmware_variables(self):
+        from dsec.runtime.isolation.vsock import CIDLease
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lease = CIDLease(20000,'a'*32,temporary)
+            pool = Mock()
+            pool.snapshot.return_value = {}
+            backend = SimpleNamespace(pool=pool, item=dict(mode='fullvm', uefi={}))
+            vm = SimpleNamespace(directory=root, lock=threading.RLock(),
+                                 status=lambda:dict(state='STOPPED',process_alive=False))
+            handle = QemuContainer(backend,'a'*32,lease,vm,Mock())
+            private = [root/name for name in ('root.qcow2','uefi-vars.fd')]
+            for path in private:
+                path.write_bytes(b'private')
+            self.assertTrue(handle.stop()['resource_cleanup_complete'])
+            self.assertFalse(any(path.exists() for path in private))
 
     def test_failed_creation_requires_explicit_terminal_proof_and_is_never_recreated(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -304,6 +335,26 @@ class EdgeTests(unittest.TestCase):
         self.assertEqual(asyncio.run(fn.invoke('true',request_id='a'*32)),dict(output='ok'))
         args = transport.call.call_args.kwargs
         self.assertEqual(args['spec']['execution_mode'],'fncall')
+
+    def test_desktop_input_id_fences_duplicate_and_lost_qmp_replies(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            vm = SimpleNamespace(directory=Path(temporary),lock=threading.RLock(),
+                status=lambda:dict(state='RUNNING',process_alive=True),qmp=Mock())
+            handle = QemuContainer(SimpleNamespace(item=dict(mode='fullvm',display='virtio-2d')),
+                                   'a'*32,None,vm,None)
+            events = [dict(type='abs',data=dict(axis='x',value=1234))]
+            with self.assertRaises(ValueError):
+                handle.desktop_input([dict(type='abs',data=dict(axis='x',value=True))],request_id='a'*32)
+            vm.qmp._send_input.assert_not_called()
+            first = handle.desktop_input(events,request_id='a'*32)
+            self.assertEqual(handle.desktop_input(events,request_id='a'*32),first)
+            vm.qmp._send_input.assert_called_once()
+            vm.qmp._send_input.side_effect = EOFError('lost QMP reply')
+            for _ in range(2):
+                with self.assertRaises(RequestOutcomeUnknown):
+                    handle.desktop_input(events,request_id='b'*32)
+            self.assertEqual(vm.qmp._send_input.call_count,2)
+            self.assertEqual(handle.query_request('b'*32)['state'],'UNKNOWN')
 
     def test_host_action_proof_survives_guest_failure_and_blocks_replay(self):
         with tempfile.TemporaryDirectory() as temporary:

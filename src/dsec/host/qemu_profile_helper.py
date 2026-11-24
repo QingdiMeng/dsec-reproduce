@@ -30,20 +30,27 @@ def safe_path(value):
 
 
 def validate(cfg):
-    required={'uid','prefix','runtime_root','binary','kernel','python','launcher','pins'}
-    if (not required<=set(cfg)<=required|{'tun_root','layer_root'}
+    required={'uid','prefix','runtime_root','binary','python','launcher','pins'}
+    if (not required<=set(cfg)<=required|{'kernel','tun_root','layer_root','uefi_boots'}
+            or not ('kernel' in cfg or cfg.get('uefi_boots'))
             or type(cfg['uid']) is not int or cfg['uid']<=0
             or not re.fullmatch('dsec-[a-z0-9-]{1,40}',cfg['prefix'])):
         raise ValueError('Invalid fixed AppArmor broker configuration')
-    for name in ('runtime_root','binary','kernel','python','launcher'):safe_path(cfg[name])
+    pins = {'binary','python','launcher'} | ({'kernel'} if 'kernel' in cfg else set())
+    for name in pins|{'runtime_root'}:safe_path(cfg[name])
     if 'tun_root' in cfg:safe_path(cfg['tun_root'])
     if 'layer_root' in cfg:
         root=safe_path(cfg['layer_root']);private=safe_path(cfg['runtime_root'])
         if len(root.parts)<3 or root.is_relative_to(private) or private.is_relative_to(root):
             raise ValueError('Shared publication root must be scoped and disjoint from private state')
-    if set(cfg['pins'])!={'binary','kernel','python','launcher'} or any(
+    if set(cfg['pins'])!=pins or any(
             not re.fullmatch('[a-f0-9]{64}',value) for value in cfg['pins'].values()):
         raise ValueError('Pinned broker artifacts required')
+    boots = cfg.get('uefi_boots',[])
+    if not isinstance(boots,list):
+        raise ValueError('Expected administrator-approved UEFI boot files')
+    for files in boots:
+        validate_uefi_files(cfg,files)
 
 
 def profile_name(cfg,sid):
@@ -73,16 +80,55 @@ def checked_layers(cfg,layers,*,check_files=False):
     return layers
 
 
-def render_profile(cfg,sid,layers=None):
+def validate_uefi_files(cfg,files,*,check_files=False):
+    if not isinstance(files,dict) or not {'code','template'}<=files.keys()<={'code','template','base'}:
+        raise ValueError('Expected pinned UEFI firmware and QCOW2 files')
+    paths=set()
+    for pin in files.values():
+        if (not isinstance(pin,dict) or set(pin)!={'path','sha256'}
+                or not isinstance(pin['sha256'],str) or not re.fullmatch('[a-f0-9]{64}',pin['sha256'])):
+            raise ValueError('Invalid UEFI file pin')
+        path=safe_path(pin['path'])
+        if path.is_relative_to(cfg['runtime_root']) or path in paths:
+            raise ValueError('UEFI boot files must be distinct and outside private VM state')
+        paths.add(path)
+        if check_files:
+            info=path.lstat()
+            if path.resolve(strict=True)!=path or not stat.S_ISREG(info.st_mode) or info.st_mode&0o222:
+                raise ValueError('UEFI boot file must be canonical, regular and read-only')
+    return files
+
+
+def checked_uefi(cfg,files,*,check_files=False):
+    if files is None:
+        if 'kernel' not in cfg:
+            raise ValueError('Broker is configured for UEFI boot only')
+        return None
+    if files not in cfg.get('uefi_boots',[]):
+        raise ValueError('UEFI boot files are not approved by the administrator')
+    return validate_uefi_files(cfg,files,check_files=check_files)
+
+
+def render_profile(cfg,sid,layers=None,uefi=None):
     validate(cfg);name=profile_name(cfg,sid);directory=str(Path(cfg['runtime_root'])/sid)
-    tun = ('  "'+cfg['tun_root']+'/'+sid+'/tun" rw,\n') if 'tun_root' in cfg else ''
+    checked_uefi(cfg,uefi)
+    if uefi is not None and layers:
+        raise ValueError('UEFI profile does not attach pmem')
+    tun = ('  "'+cfg['tun_root']+'/'+sid+'/tun" rw,\n') if 'tun_root' in cfg and uefi is None else ''
     shared=''.join('  "'+layer['path']+'" mr,\n' for layer in checked_layers(cfg,layers or []))
+    if uefi is None:
+        boot_reads=f'  "{cfg["kernel"]}" r,\n'
+        disk_rules=f'  "{directory}/root.ext4" rwk,\n'
+    else:
+        boot_reads=''.join(f'  "{pin["path"]}" rk,\n' for _,pin in sorted(uefi.items()))
+        disk_rules=(f'  "{directory}/root.qcow2" rwk,\n'
+                    f'  "{directory}/uefi-vars.fd" rwk,\n'
+                    f'  "{directory}/display.png" rw,\n')
     # No blanket file/execute/capability rule. A VMM has its own disk and two
     # private listeners; it cannot read the Edge's key/journals or another VM.
     return f'''profile {name} flags=(mediate_deleted) {{
   "{cfg['binary']}" mr,
-  "{cfg['kernel']}" r,
-  "/usr/lib/**" mr,
+{boot_reads}  "/usr/lib/**" mr,
   "/lib/**" mr,
   "/lib64/**" mr,
   "/etc/ld.so.cache" r,
@@ -102,8 +148,7 @@ def render_profile(cfg,sid,layers=None):
   owner /proc/[0-9]*/task/[0-9]*/{{stat,status,comm}} r,
   "/sys/devices/system/**" r,
   "/sys/kernel/mm/**" r,
-  "{directory}/root.ext4" rwk,
-  "{directory}/console.log" rw,
+{disk_rules}  "{directory}/console.log" rw,
   "{directory}/vmm.log" w,
   "{directory}/qmp.sock" rw,
   "{directory}/bootstrap.sock" rw,
@@ -188,26 +233,48 @@ def checked_config():
 
 
 def operate(cfg,operation,sid,arguments):
+    if operation=='retire' and arguments:
+        raise ValueError('Unexpected retire arguments')
     profile=profile_name(cfg,sid)
     record_path=STATE/(sid+'.json');policy_path=STATE/(sid+'.profile')
     old=json.loads(record_path.read_text()) if record_path.exists() else None
     if old and (old.get('state') not in ('PREPARING','PREPARED','CLAIMED','RETIRED') or
                 set(old)!={'profile','sha256','state'}|({'process'} if old.get('state')=='CLAIMED' else set())|
-                ({'readonly_layers'} if 'readonly_layers' in old else set())):
+                ({'readonly_layers'} if 'readonly_layers' in old else set())|
+                ({'uefi'} if 'uefi' in old else set())):
         raise RuntimeError('Corrupt profile ledger; recovery required')
     layers=old.get('readonly_layers',[]) if old else []
+    uefi=old.get('uefi') if old else None
     if operation=='prepare':
-        if len(arguments)>1 or (arguments and len(arguments[0])>16384):raise ValueError('Bounded prepare layers required')
+        if len(arguments)>2 or any(len(argument)>16384 for argument in arguments):
+            raise ValueError('Bounded prepare artifacts required')
         requested=checked_layers(cfg,json.loads(arguments[0]) if arguments else [],check_files=True)
-        if old and requested!=layers:raise RuntimeError('Persisted shared layer identity changed')
+        selected=checked_uefi(cfg,json.loads(arguments[1]) if len(arguments)==2 else None,check_files=True)
+        if old and (requested!=layers or selected!=uefi):
+            raise RuntimeError('Persisted shared layer identity changed')
         layers=requested
+        uefi=selected
     checked_layers(cfg,layers)
-    text=render_profile(cfg,sid,layers);digest=hashlib.sha256(text.encode()).hexdigest()
+    if operation=='retire' and old is None and not policy_path.exists() and 'kernel' not in cfg:
+        # Prepare may have failed before creating a policy. An empty UEFI-only
+        # ledger needs no profile definition, but must fence future claims.
+        if any(line.startswith(profile+' (') for line in
+               Path('/sys/kernel/security/apparmor/profiles').read_text().splitlines()):
+            raise RuntimeError('Unowned policy is already loaded')
+        value=dict(profile=profile,sha256=None,state='RETIRED')
+        save(record_path,value)
+        return value
+    if old and old['state']=='RETIRED' and old['sha256'] is None:
+        if operation=='retire' and not arguments:
+            return old
+        raise RuntimeError('Profile already retired; no new launch')
+    text=render_profile(cfg,sid,layers,uefi);digest=hashlib.sha256(text.encode()).hexdigest()
     if old and (old['profile']!=profile or old['sha256']!=digest):
         raise RuntimeError('Persisted profile identity changed')
     def commit(state,**fields):
         value=dict(profile=profile,sha256=digest,state=state,**fields)
         if layers:value['readonly_layers']=layers
+        if uefi is not None:value['uefi']=uefi
         save(record_path,value);return value
     lines=lambda:Path('/sys/kernel/security/apparmor/profiles').read_text().splitlines()
     loaded=lambda:profile+' (enforce)' in lines()
@@ -243,7 +310,6 @@ def operate(cfg,operation,sid,arguments):
         if not loaded():raise RuntimeError('Profile missing before launch claim')
         return commit('CLAIMED',process=saved)
     if operation=='retire':
-        if arguments:raise ValueError('Unexpected retire arguments')
         if old and old['state']=='CLAIMED':prove_dead(old['process'])
         if old is None and policy_path.exists():raise RuntimeError('Profile ledger missing; retirement refused')
         # Persist the fence *before* unload; a delayed claim must reject even

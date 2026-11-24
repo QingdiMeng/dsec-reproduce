@@ -153,23 +153,111 @@ exec python3 -B /opt/dsec/docker_guest.py serve
         readonly_layers=list(readonly_layers),shared_mounts=list(shared_mounts))
 
 
+def build_fullvm(base, source, output, *, disk_mb=512, command_timeout_ms=30000, desktop=False):
+    """Build a direct-boot Linux guest; Docker is only the offline rootfs exporter."""
+    from dsec.contracts.execution import command_timeout
+    command_timeout(command_timeout_ms)
+    if not 256 <= disk_mb <= 8192:
+        raise ValueError('FullVM template must be 256..8192 MiB')
+    source = Path(source).resolve(strict=True)
+    output = Path(output).resolve()
+    if output.exists():
+        raise FileExistsError(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.dsec-fullvm-build-', dir=output.parent) as temporary:
+        work = Path(temporary)
+        root = work/'root'
+        root.mkdir()
+        root.chmod(0o755)  # mkfs copies root mode even under a private build umask.
+        export_image(base, root, work/'root.tar', preserve_permissions=True)
+        for name in ('bin/sh','bin/mount','usr/bin/setpriv'):
+            if not (root/name).exists():
+                raise ValueError('FullVM base lacks '+name)
+        if not any((root/name).exists() for name in ('usr/local/bin/python3','usr/bin/python3')):
+            raise ValueError('FullVM base lacks Python 3')
+        if desktop and not (root/'opt/dsec-desktop/start').is_file():
+            raise ValueError('Desktop base requires the trusted /opt/dsec-desktop/start hook')
+        trusted = root/'opt/dsec'
+        trusted.mkdir(parents=True)
+        trusted.chmod(0o755)
+        for module, target in (
+            ('runtime/backends/docker_guest.py','docker_guest.py'),
+            ('runtime/isolation/guest_auth.py','guest_auth.py'),
+            ('contracts/execution.py','execution_contract.py')):
+            shutil.copy2(source/'src/dsec'/module, trusted/target)
+            (trusted/target).chmod(0o644)
+        (trusted/'config.json').write_text(json.dumps(dict(mode='fullvm',
+                                                          command_timeout_ms=command_timeout_ms)))
+        subprocess.run(['cc','-static','-DDSEC_NATIVE_STANDALONE',
+            f'-DDSEC_MAX_TIMEOUT_MS={command_timeout_ms}','-O2','-Wall','-Wextra','-Werror',
+            '-o',str(trusted/'native-agent'),str(source/'guest_native.c')],check=True)
+        (trusted/'native-agent').chmod(0o755)
+        for name in ('proc','sys','dev','tmp','run','work'):
+            (root/name).mkdir(exist_ok=True)
+        init = root/'dsec-init'
+        init.write_text("""#!/bin/sh
+set -eu
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# The unprivileged offline exporter does not preserve guest UID/GID ownership.
+find / -xdev -exec chown -h 0:0 '{}' +
+chmod 755 / /run /opt /opt/dsec
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+if ! mountpoint -q /dev; then mount -t devtmpfs devtmpfs /dev; fi
+mkdir -p /dev/pts /dev/shm /run/dsec-native
+mount -t devpts devpts /dev/pts
+mount -t tmpfs -o mode=1777 tmpfs /dev/shm
+chmod 1777 /tmp
+chmod 700 /work /run/dsec-native
+chown 1000:1000 /work /run/dsec-native
+exec python3 -B /opt/dsec/docker_guest.py serve
+""")
+        if desktop:
+            init.write_text(init.read_text().replace('exec python3 -B',
+                '/opt/dsec-desktop/start\nexec python3 -B',1))
+        init.chmod(0o755)
+        disk = work/'guest.ext4'
+        with disk.open('wb') as stream:
+            stream.truncate(disk_mb*1024**2)
+        subprocess.run(['mkfs.ext4','-q','-F','-d',str(root),str(disk)],check=True)
+        disk.chmod(0o444)
+        os.link(disk,output)
+    with output.open('rb') as stream:
+        digest = hashlib.file_digest(stream,'sha256').hexdigest()
+    return dict(template=str(output),sha256=digest,mode='fullvm',base_image=base,
+                bytes=output.stat().st_size,command_timeout_ms=command_timeout_ms,
+                **({'display':'virtio-2d'} if desktop else {}))
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('base','docker-tools','source','out','mode'):
+    for name in ('base','source','out','mode'):
         parser.add_argument('--'+name,required=True)
-    task=parser.add_mutually_exclusive_group(required=True)
+    parser.add_argument('--desktop',action='store_true',help='Enable the trusted FullVM desktop startup hook')
+    parser.add_argument('--docker-tools')
+    task=parser.add_mutually_exclusive_group()
     task.add_argument('--task-image')
     task.add_argument('--task-archive',type=Path)
     parser.add_argument('--task-archive-sha256')
-    parser.add_argument('--disk-mb',type=int,default=2048)
+    parser.add_argument('--disk-mb',type=int)
     parser.add_argument('--command-timeout-ms',type=int,default=30000)
     parser.add_argument('--storage-driver',choices=('vfs','overlay2'),default='vfs')
     parser.add_argument('--network-policy',type=Path)
     parser.add_argument('--readonly-layers',type=Path,help='JSON list of pinned EROFS/DAX layer artifacts, bottom first')
     parser.add_argument('--shared-mount',action='append',default=[],help='Composed directory exposed inside the task')
     args = parser.parse_args()
+    if args.mode == 'fullvm':
+        if any((args.docker_tools,args.task_image,args.task_archive,args.task_archive_sha256,
+                args.network_policy,args.readonly_layers,args.shared_mount,args.storage_driver!='vfs')):
+            parser.error('FullVM uses a standalone local guest, without inner Docker options')
+        print(json.dumps(build_fullvm(args.base,args.source,args.out,
+            disk_mb=512 if args.disk_mb is None else args.disk_mb,command_timeout_ms=args.command_timeout_ms,desktop=args.desktop)))
+        return
+    if args.desktop:
+        parser.error('--desktop requires --mode fullvm')
+    if not args.docker_tools or not (args.task_image or args.task_archive):
+        parser.error('Container and FnCall require --docker-tools and a task image/archive')
     print(json.dumps(build(args.base,args.docker_tools,args.task_image,args.source,args.out,
-                           mode=args.mode,disk_mb=args.disk_mb,storage_driver=args.storage_driver,
+                           mode=args.mode,disk_mb=2048 if args.disk_mb is None else args.disk_mb,storage_driver=args.storage_driver,
                            network=json.loads(args.network_policy.read_text()) if args.network_policy else None,
                            readonly_layers=json.loads(args.readonly_layers.read_text()) if args.readonly_layers else (),
                            shared_mounts=args.shared_mount,task_archive=args.task_archive,task_archive_sha256=args.task_archive_sha256,command_timeout_ms=args.command_timeout_ms)))

@@ -17,7 +17,7 @@ from unittest.mock import Mock, patch
 
 from dsec.contracts.execution import ShellRequest
 from dsec.contracts.sandbox import UnsupportedCapability
-from dsec.runtime.backends.qemu import QemuArtifact, QemuConfig, QemuVM
+from dsec.runtime.backends.qemu import QemuArtifact, QemuConfig, QemuUEFI, QemuVM
 from dsec.runtime.backends.qmp import QMP, QMPError
 from dsec.runtime.sessions.channel import VsockCommandChannel
 from dsec.runtime.sessions.native import NativeChannel
@@ -127,6 +127,40 @@ class QemuTests(unittest.TestCase):
             with self.assertRaises((ValueError, UnsupportedCapability)):
                 QemuVM(config, '/not-created')
 
+    def test_virtio_2d_is_opt_in_and_uses_the_standard_boot_path(self):
+        self.instrument()
+        self.vm.config = replace(self.config,display='virtio-2d')
+        self.assertEqual(self.vm.boot()['state'],'RUNNING')
+        argv = self.vm.record['argv']
+        self.assertIn('virtio-keyboard-pci',argv)
+        self.assertIn('virtio-tablet-pci',argv)
+        self.assertEqual(sum(value.startswith('virtio-gpu-pci,') for value in argv),1)
+        self.assertNotIn('gl=on',','.join(argv))
+
+    def test_uefi_boot_pins_the_entire_readonly_backing_chain(self):
+        boot = QemuUEFI(self.config.binary, self.config.kernel, self.config.binary,
+                        disk_mb=51200, base=self.config.binary)
+        self.vm.config = replace(self.config, kernel=None, uefi=boot).validate()
+        pins = self.vm._artifacts()
+        args = self.vm._argv('fixture-uuid', pins)
+        self.assertNotIn('-kernel', args)
+        self.assertIn('virtio-blk-pci,drive=root,bootindex=0', args)
+        self.assertIn(f'if=pflash,format=raw,readonly=on,file={boot.code.path}', args)
+        drive = json.loads(args[args.index('-blockdev')+1])
+        self.assertEqual(drive['file']['filename'], str(self.path/'root.qcow2'))
+        self.assertFalse(drive['read-only'])
+        self.assertTrue(drive['backing']['read-only'])
+        base = drive['backing']['backing']
+        self.assertTrue(base['read-only'])
+        self.assertIsNone(base['backing'])
+        with patch('dsec.runtime.backends.qemu.subprocess.check_output', return_value=json.dumps({
+                'backing-filename':'/unexpected', 'format-specific':{'data':{}},
+                'virtual-size':51200*2**20})):
+            with self.assertRaisesRegex(ValueError, 'backing chain'):
+                self.vm._prepare_disk(pins)
+        self.assertFalse((self.path/'root.qcow2').exists())
+        self.assertFalse((self.path/'uefi-vars.fd').exists())
+
     def test_startup_budget_is_bounded_and_distinct_from_qmp_readiness(self):
         for timeout in (True,0,241,float('inf'),float('nan')):
             with self.assertRaises(ValueError):replace(self.config,startup_timeout_s=timeout).validate()
@@ -152,6 +186,24 @@ class QemuTests(unittest.TestCase):
             self.vm._provision_channel(deadline=40)
         sock.settimeout.assert_called_once_with(30)
         read.assert_called_once_with(sock,len(BOOT_ACK),deadline=40)
+
+    def test_uefi_bootstrap_waits_for_open_guest_port_before_sending_key(self):
+        from dsec.runtime.isolation.guest_auth import BOOT_ACK, BOOT_READY
+        boot = QemuUEFI(self.config.binary,self.config.kernel,self.config.binary,disk_mb=51200)
+        self.vm.config = replace(self.config,kernel=None,uefi=boot)
+        self.vm.auth_key = b'a'*32
+        sock = Mock()
+        events = Mock()
+        events.attach_mock(sock.sendall,'send_key')
+        events.read.side_effect = [BOOT_READY, BOOT_ACK]
+        context = Mock()
+        context.__enter__ = Mock(return_value=sock)
+        context.__exit__ = Mock(return_value=False)
+        with patch('dsec.runtime.backends.qemu.socket.socket',return_value=context), \
+                patch('dsec.runtime.backends.qemu.time.monotonic',return_value=10), \
+                patch('dsec.runtime.backends.qemu.read_exact',events.read):
+            self.vm._provision_channel(deadline=40)
+        self.assertEqual([entry[0] for entry in events.mock_calls],['read','send_key','read'])
 
     def test_private_directory_and_artifact_identity_required(self):
         self.config.template.verify()

@@ -61,7 +61,7 @@ class RemoteNode:
         return self.rpc.send(self.token, dict(operation='node_call',
             request_id=operation_id, sandbox_id=route.encode(self.route_key),
             edge_operation=operation, args=args), readonly=operation in (
-                'status', 'container_status', 'query_request', 'container_query_request', 'container_query_action', 'native_events'))
+                'status', 'container_status', 'query_request', 'container_query_request', 'container_query_action', 'native_events', 'container_screenshot'))
 
     def probe(self):
         value = self.rpc.send(self.token, dict(operation='node_probe', request_id=uuid.uuid4().hex), readonly=True, timeout=5)

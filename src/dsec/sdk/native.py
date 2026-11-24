@@ -62,8 +62,8 @@ class NativeSandboxMixin(NativeFilesMixin):
     async def _native(self, action, *, request_id=None, _operation="native", **args):
         if NATIVE_FEATURE not in getattr(self, "_features", ()):
             raise UnsupportedCapability("Upgrade Edge for native sessions and files")
-        backend = "container" if self.backend in ("container", "tb2") else "microvm"
-        if backend == "container":
+        backend = "container" if self.backend == "tb2" else self.backend
+        if backend in ("container", "fullvm"):
             from dataclasses import asdict
             args.update(spec=(self._run_args.wire_spec() if hasattr(self._run_args, 'wire_spec')
                               else asdict(self._run_args)), kind="tb2" if self.backend == "tb2" else "container")

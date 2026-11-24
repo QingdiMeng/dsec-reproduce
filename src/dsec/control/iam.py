@@ -199,7 +199,7 @@ class IAM:
 
     def admit(self, token, project, operation_id, digest, node, backend, demand, *, args=None):
         identifier(project); identifier(node); request_id(operation_id)
-        if not re.fullmatch(r'[0-9a-f]{64}', digest) or backend not in ('microvm', 'container'):
+        if not re.fullmatch(r'[0-9a-f]{64}', digest) or backend not in ('microvm', 'container', 'fullvm'):
             raise ValueError('Invalid admission identity')
         if demand.concurrency != 1:
             raise ValueError('One sandbox per quota admission required')

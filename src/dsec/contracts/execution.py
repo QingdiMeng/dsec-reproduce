@@ -5,7 +5,7 @@ wire protocol has no such field; Edge owns its request identity and journal.
 Absent timeout evidence stays absent in legacy container results.
 """
 from dataclasses import dataclass
-from typing import NotRequired, Protocol, TypedDict
+from typing import Protocol, TypedDict
 
 
 DEFAULT_COMMAND_TIMEOUT_MS = 30000
@@ -27,11 +27,14 @@ class ShellRequest:
     request_id: str | None = None
 
 
-class ShellResult(TypedDict):
+class _RequiredShellResult(TypedDict):
     exit_code: int
     output: str
     truncated: bool
-    timed_out: NotRequired[bool]
+
+
+class ShellResult(_RequiredShellResult, total=False):
+    timed_out: bool
 
 
 class CommandChannel(Protocol):

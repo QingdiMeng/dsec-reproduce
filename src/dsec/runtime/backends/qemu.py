@@ -25,7 +25,7 @@ from dsec.contracts.sandbox import UnsupportedCapability
 from dsec.runtime.backends.qmp import QMP
 from dsec.runtime.sessions.channel import VsockCommandChannel
 from dsec.runtime.sessions.native import NativeChannel
-from dsec.runtime.isolation.guest_auth import BOOT_ACK, FEATURE, read_exact, validate_key
+from dsec.runtime.isolation.guest_auth import BOOT_ACK, BOOT_READY, FEATURE, read_exact, validate_key
 from dsec.storage.snapshots import _copy_sparse
 
 
@@ -82,9 +82,44 @@ class QemuReadOnlyLayer:
 
 
 @dataclass(frozen=True)
+class QemuUEFI:
+    code: QemuArtifact
+    variables: QemuArtifact
+    image_tool: QemuArtifact
+    disk_mb: int
+    base: QemuArtifact | None = None
+
+    @classmethod
+    def from_dict(cls, item):
+        if not isinstance(item, dict) or not {'code','variables','image_tool','disk_mb'} <= item.keys() <= {
+                'code','variables','image_tool','disk_mb','base'}:
+            raise ValueError('Pinned UEFI boot configuration required')
+        try:
+            return cls(**{name: value if name == 'disk_mb' else QemuArtifact(**value)
+                          for name, value in item.items()}).validate()
+        except TypeError as exc:
+            raise ValueError('Pinned UEFI boot artifacts required') from exc
+
+    def validate(self):
+        if type(self.disk_mb) is not int or not 1 <= self.disk_mb <= 1024**2:
+            raise ValueError('UEFI disk virtual size must be declared in MiB')
+        return self
+
+
+def uefi_profile_files(artifacts):
+    if 'uefi' not in artifacts:
+        return None
+    boot = artifacts['uefi']
+    files = dict(code=boot['code'], template=artifacts['template'])
+    if 'base' in boot:
+        files['base'] = boot['base']
+    return files
+
+
+@dataclass(frozen=True)
 class QemuConfig:
     binary: QemuArtifact
-    kernel: QemuArtifact
+    kernel: QemuArtifact | None
     template: QemuArtifact
     guest_cid: int
     memory_mb: int = 512
@@ -93,6 +128,8 @@ class QemuConfig:
     startup_timeout_s: float = 15
     disk_cache: str = 'buffered'
     readonly_layers: tuple[QemuReadOnlyLayer, ...] = ()
+    display: str = 'none'
+    uefi: QemuUEFI | None = None
 
     def validate(self):
         if (type(self.guest_cid) is not int or not 1024 <= self.guest_cid < 2**32-1
@@ -100,9 +137,16 @@ class QemuConfig:
                 or type(self.cpu_count) is not int or not 1 <= self.cpu_count <= 32
                 or type(self.production) is not bool
                 or self.disk_cache not in ('buffered','direct')
+                or self.display not in ('none','virtio-2d')
                 or type(self.startup_timeout_s) not in (int,float)
                 or not math.isfinite(self.startup_timeout_s) or not 1<=self.startup_timeout_s<=240):
             raise ValueError('Invalid QEMU resource/CID configuration')
+        if (self.kernel is None) == (self.uefi is None):
+            raise ValueError('Choose exactly one of direct kernel boot or UEFI')
+        if self.uefi is not None:
+            self.uefi.validate()
+            if self.readonly_layers or self.disk_cache != 'buffered':
+                raise ValueError('UEFI requires buffered QCOW2 without pmem layers')
         if not isinstance(self.readonly_layers,tuple) or len(self.readonly_layers)>8:
             raise ValueError('At most eight explicit ordered pmem layers supported')
         for layer in self.readonly_layers:
@@ -117,11 +161,27 @@ class QemuConfig:
             raise UnsupportedCapability('QEMU production requires Edge leases, host confinement and network policy acceptance')
         return self
 
+    def boot_artifacts(self, *, verify=True):
+        def pin(artifact):
+            path = str(artifact.verify()) if verify else artifact.path
+            return dict(path=path, sha256=artifact.sha256)
+
+        result = dict(binary=pin(self.binary), template=pin(self.template))
+        if self.uefi is None:
+            result['kernel'] = pin(self.kernel)
+        else:
+            boot = self.uefi
+            result['uefi'] = {name: pin(getattr(boot, name)) for name in ('code','variables','image_tool')}
+            result['uefi']['disk_mb'] = boot.disk_mb
+            if boot.base is not None:
+                result['uefi']['base'] = pin(boot.base)
+        return result
+
 
 class QemuVM:
     """Single owner, serialized lifecycle. Stop completion is terminal.
 
-    This raw-disk primitive boots a trusted guest. Records permit adoption of an
+    This primitive boots a trusted guest. Records permit adoption of an
     attested RUNNING process, not replay of interrupted boot or guest operations.
     A guest CID is an administrator-reserved host-wide resource allocated by
     Edge. Kernel CID collisions reject boot, never replace a VM.
@@ -139,10 +199,13 @@ class QemuVM:
             raise ValueError('Private QMP socket path is too long')
         self.directory, self.record_path = path, path/'qemu.json'
         self.host = None
+        if config.uefi is not None and network is not None:
+            raise UnsupportedCapability('UEFI FullVM requires an offline environment')
         if host_isolation is not None:
             from dsec.runtime.isolation.qemu_host import HostIsolation
             self.host = HostIsolation(host_isolation,path,config.memory_mb,config.cpu_count)
             self.host.readonly_layers=[asdict(layer) for layer in config.readonly_layers]
+            self.host.uefi = uefi_profile_files(config.boot_artifacts(verify=False))
         self.network = None
         if network is not None:
             if self.host is None:raise ValueError('Isolated QEMU networking requires host confinement')
@@ -171,12 +234,12 @@ class QemuVM:
         self.record.update(state=self.state, reason=self.reason)
         atomic_json(self.record_path, self.record)
 
-    def _artifacts(self):
-        result={name: {'path':str(getattr(self.config, name).verify()),
-                       'sha256':getattr(self.config, name).sha256}
-                for name in ('binary', 'kernel', 'template')}
+    def _artifacts(self, *, verify=True):
+        result = self.config.boot_artifacts(verify=verify)
         if self.config.readonly_layers:
-            for layer in self.config.readonly_layers:layer.verify()
+            if verify:
+                for layer in self.config.readonly_layers:
+                    layer.verify()
             result['readonly_layers']=[asdict(layer) for layer in self.config.readonly_layers]
         return result
 
@@ -184,7 +247,16 @@ class QemuVM:
         # blockdev JSON prevents commas/options in a path from adding drives.
         root = {'driver':'raw', 'node-name':'root', 'file':{
             'driver':'file', 'filename':str(self.directory/'root.ext4')}, 'read-only':False}
-        if self.config.disk_cache=='direct':
+        boot = artifacts.get('uefi')
+        if boot is not None:
+            def image(path, backing):
+                return {'driver':'qcow2', 'read-only':True, 'backing':backing,
+                        'file':{'driver':'file', 'filename':path, 'read-only':True}}
+            base = image(boot['base']['path'], None) if 'base' in boot else None
+            root = {'driver':'qcow2', 'node-name':'root', 'read-only':False,
+                    'file':{'driver':'file', 'filename':str(self.directory/'root.qcow2')},
+                    'backing':image(artifacts['template']['path'], base)}
+        elif self.config.disk_cache=='direct':
             # Bypass host file caching; guest writeback must not fill the VMM
             # cgroup with a second dirty copy. Keep flushes enabled for durability.
             root['cache']=dict(direct=True,**{'no-flush':False})
@@ -199,12 +271,21 @@ class QemuVM:
                 '-display', 'none', '-monitor', 'none', '-nic', 'none', '-no-reboot', '-S',
                 '-sandbox', 'on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny',
                 '-chardev', qmp, '-mon', 'chardev=qmp,mode=control',
-                '-chardev', serial, '-serial', 'chardev:serial0',
-                '-kernel', artifacts['kernel']['path'], '-append',
-                'console=ttyS0 reboot=k panic=1 root=/dev/vda rw init=/dsec-init',
-                '-blockdev', json.dumps(root, separators=(',', ':')),
-                '-device', 'virtio-blk-pci,drive=root', '-device',
-                f'vhost-vsock-pci,guest-cid={self.config.guest_cid}']
+                '-chardev', serial, '-serial', 'chardev:serial0']
+        if boot is None:
+            argv += ['-kernel', artifacts['kernel']['path'], '-append',
+                     'console=ttyS0 reboot=k panic=1 root=/dev/vda rw init=/dsec-init']
+        else:
+            code = boot['code']['path'].replace(',', ',,')
+            variables = str(self.directory/'uefi-vars.fd').replace(',', ',,')
+            argv += ['-drive', f'if=pflash,format=raw,readonly=on,file={code}',
+                     '-drive', f'if=pflash,format=raw,file={variables}']
+        drive = 'virtio-blk-pci,drive=root' + (',bootindex=0' if boot is not None else '')
+        argv += ['-blockdev', json.dumps(root, separators=(',', ':')), '-device', drive,
+                 '-device', f'vhost-vsock-pci,guest-cid={self.config.guest_cid}']
+        if self.config.display == 'virtio-2d':
+            argv += ['-device','virtio-gpu-pci,id=dsecdisplay,xres=1024,yres=768,max_outputs=1',
+                     '-device','virtio-keyboard-pci','-device','virtio-tablet-pci']
         if self.config.readonly_layers:
             # Reserve a hotplug address window. No preallocation or per-VM copy;
             # read-only shared ROM prevents a guest from dirtying a common inode.
@@ -258,6 +339,9 @@ class QemuVM:
                 deadline=deadline if deadline is not None else time.monotonic()+15
                 sock.settimeout(max(.001,deadline-time.monotonic()))
                 sock.connect(str(self.directory/'bootstrap.sock'))
+                if self.config.uefi is not None:
+                    if read_exact(sock, len(BOOT_READY), deadline=deadline) != BOOT_READY:
+                        raise ValueError('Guest channel bootstrap readiness mismatch')
                 sock.sendall(self.auth_key)
                 if read_exact(sock, len(BOOT_ACK), deadline=deadline) != BOOT_ACK:
                     raise ValueError('Guest channel bootstrap acknowledgement mismatch')
@@ -336,6 +420,38 @@ class QemuVM:
             finally:
                 process.close()
 
+    def _prepare_disk(self, artifacts):
+        boot = artifacts.get('uefi')
+        if boot is None:
+            disk = self.directory/'root.ext4'
+            if disk.exists() or disk.is_symlink():
+                raise FileExistsError('Private writable disk already exists')
+            _copy_sparse(artifacts['template']['path'], disk)
+        else:
+            disk, variables = (self.directory/name for name in ('root.qcow2','uefi-vars.fd'))
+            if any(path.exists() or path.is_symlink() for path in (disk, variables)):
+                raise FileExistsError('Private UEFI disk or firmware variables already exist')
+            tool = boot['image_tool']['path']
+            base = boot.get('base',{}).get('path')
+            template = artifacts['template']['path']
+            chain = [(template,base)] + ([(base,None)] if base else [])
+            for path, backing in chain:
+                info = json.loads(subprocess.check_output(
+                    [tool,'info','-f','qcow2','--output=json',path], timeout=20))
+                details = info['format-specific']['data']
+                if (info.get('backing-filename') != backing or info.get('dirty-flag')
+                        or details.get('corrupt') or details.get('data-file')
+                        or details.get('data-file-raw')
+                        or info['virtual-size'] != boot['disk_mb'] * 2**20):
+                    raise ValueError('QCOW2 backing chain or virtual size differs from its pin')
+            subprocess.run([tool,'create','-q','-f','qcow2','-F','qcow2','-b',template,str(disk)],
+                           check=True, timeout=30)
+            _copy_sparse(boot['variables']['path'], variables)
+            variables.chmod(0o600)
+        disk.chmod(0o600)
+        if disk.stat().st_nlink != 1:
+            raise ValueError('Private disk must not be hard-linked')
+
     def boot(self):
         with self.lock:
             self._require_owner()
@@ -348,13 +464,7 @@ class QemuVM:
             try:
                 if self.host is not None:
                     self.record['host_isolation']=self.host.prepare();self._save()
-                disk = self.directory/'root.ext4'
-                if disk.exists() or disk.is_symlink():
-                    raise FileExistsError('Private writable disk already exists')
-                _copy_sparse(artifacts['template']['path'], disk)
-                disk.chmod(0o600)
-                if disk.stat().st_nlink != 1:
-                    raise ValueError('Private disk must not be hard-linked')
+                self._prepare_disk(artifacts)
                 if self.network is not None:
                     self.record['network_isolation']=self.network.prepare()
                     self.record['argv']=self._argv(self.record['machine_uuid'],artifacts,self.network.record)
@@ -554,10 +664,7 @@ class QemuVM:
                 # Persist the fence even if stop precedes boot. Otherwise a
                 # later controller could reuse this directory after CID return.
                 # No artifact read or VMM effect is needed to stop an empty VM.
-                artifacts = {name: {'path': getattr(self.config, name).path,
-                                    'sha256': getattr(self.config, name).sha256}
-                             for name in ('binary', 'kernel', 'template')}
-                self.record = self._initial_record(artifacts)
+                self.record = self._initial_record(self._artifacts(verify=False))
                 self.state = 'STOPPED'; self._save(); return self.status()
             self.state = 'STOPPING'; self._save()
             self._terminate()

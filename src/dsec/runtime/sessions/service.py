@@ -15,12 +15,14 @@ def native_operation(server, sandbox_id, args, request_id):
         raise ValueError("Unknown native action")
     if action in ("run", "stream", "http"):
         values["operation_id"] = request_id
-    if backend == "container":
+    if backend in ("container", "fullvm"):
         runtime = server.container_runtime
         runtime._journal()  # Require the existing container owner lock.
         kind, spec = runtime._spec(values)
         values.pop("kind", None)
         values.pop("spec", None)
+        if kind == "container" and spec.route_backend != backend:
+            raise ValueError("Native operation/backend mismatch")
         if kind != "container":
             raise UnsupportedCapability("Legacy TB2 server images need a native agent upgrade")
         with runtime.native_operation(kind, spec, sandbox_id, request_id) as entry:

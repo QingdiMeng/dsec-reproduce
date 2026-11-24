@@ -86,7 +86,7 @@ class DSecContainerRunArgs:
         return result
 
     def validate(self):
-        if self.execution_mode not in ('container', 'fncall'):
+        if self.execution_mode not in ('container', 'fncall', 'fullvm'):
             raise UnsupportedCapability('Unknown container execution mode')
         if (not isinstance(self.environment_id, str) or
                 not re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,127}", self.environment_id) or
@@ -108,6 +108,10 @@ class DSecContainerRunArgs:
             raise ValueError("cpus must be finite and positive")
         return self
 
+    @property
+    def route_backend(self):
+        return 'fullvm' if self.execution_mode == 'fullvm' else 'container'
+
     def lifecycle_args(self):
         return {"environment_id": self.environment_id, "storage": self.storage,
                 "memory_mb": self.memory_limit_mb, "cpus": self.cpu_cores_limit,
@@ -123,6 +127,12 @@ class DSecContainerRunArgs:
 class DSecFnCallRunArgs(DSecContainerRunArgs):
     """A tenant-owned warm function slot; each invocation starts with clean tmpfs."""
     execution_mode: str = 'fncall'
+
+
+@dataclass(frozen=True)
+class DSecFullVMRunArgs(DSecContainerRunArgs):
+    """An entire QEMU guest; limits describe the outer VM, with no inner container."""
+    execution_mode: str = 'fullvm'
 
 
 @dataclass(frozen=True)
@@ -146,6 +156,10 @@ class DSecTB2RunArgs:
                 not math.isfinite(self.cpu_cores_limit) or self.cpu_cores_limit <= 0):
             raise ValueError("cpus must be finite and positive")
         return self
+
+    @property
+    def route_backend(self):
+        return 'fullvm' if self.execution_mode == 'fullvm' else 'container'
 
     def lifecycle_args(self):
         return {"environment_id": "tb2-openenv", "task_id": self.task_id,

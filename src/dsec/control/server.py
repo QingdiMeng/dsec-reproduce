@@ -193,7 +193,7 @@ class Handler(socketserver.StreamRequestHandler):
                     "qemu_environments":runtime.execution_environments() if runtime else {},
                     "environment_contracts":[item.as_dict() for item in contracts],
                     "monitor_errors":manager.errors,"warm_pool":manager.warm_pool_status(),
-                    "protocol_features":["container-rpc-v1", "fncall-rpc-v1", "busy-nonadmission-v1", NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_FEATURE, HTTP_FEATURE, ENVIRONMENT_REQUIREMENTS_FEATURE] + (
+                    "protocol_features":["container-rpc-v1", "fncall-rpc-v1", "fullvm-rpc-v1", "fullvm-desktop-v1", "busy-nonadmission-v1", NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_FEATURE, HTTP_FEATURE, ENVIRONMENT_REQUIREMENTS_FEATURE] + (
                         ["node-admission-v1"] if getattr(self.server, 'node_admission', None) else []),
                     "admission_worker_socket":self.server.admission_worker_socket,**counts}
         if op=="node_status":

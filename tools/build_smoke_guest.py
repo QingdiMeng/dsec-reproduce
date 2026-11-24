@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 
 
-def export_image(image, root, archive):
+def export_image(image, root, archive, *, preserve_permissions=False):
     """Export a pinned image via a stopped, networkless temporary container."""
     if not re.fullmatch(r'sha256:[0-9a-f]{64}', image):
         raise ValueError('Supply an exact local Docker image ID')
@@ -23,7 +23,8 @@ def export_image(image, root, archive):
             subprocess.run(['docker', 'export', cid], stdout=stream, check=True)
     finally:
         subprocess.run(['docker', 'rm', cid], check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(['tar', '--no-same-owner', '-xf', str(archive), '-C', str(root)], check=True)
+    permissions = ['--same-permissions'] if preserve_permissions else []
+    subprocess.run(['tar', '--no-same-owner', *permissions, '-xf', str(archive), '-C', str(root)], check=True)
 
 
 def build(image, source, output):

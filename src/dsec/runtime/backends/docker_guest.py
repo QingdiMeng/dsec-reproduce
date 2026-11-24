@@ -13,6 +13,7 @@ import selectors
 import signal
 import socket
 import subprocess
+import sys
 import threading
 import time
 
@@ -162,7 +163,49 @@ def bounded_shell(command, timeout_ms, output_limit):
                        kill_tree=timed_out or process.poll() is None or sys.exc_info()[0] is not None)
 
 
-class Supervisor:
+class GuestSupervisor:
+    def dispatch(self, value):
+        if not isinstance(value, dict) or value.get('operation') not in ('status', 'execute', 'query'):
+            raise ValueError('Unknown guest operation')
+        operation = value['operation']
+        # Inspection never queues behind a command or FnCall cleanup. Atomic
+        # journal replacement exposes either the old intent or a complete proof.
+        if operation == 'status':
+            if set(value) != {'operation'}:raise ValueError('Unexpected status arguments')
+            return self.status()
+        rid = value.get('request_id')
+        if not isinstance(rid, str) or not re.fullmatch('[0-9a-f]{32}', rid):
+            raise ValueError('Request ID required')
+        path = self.root / (rid+'.json')
+        if operation == 'query':
+            if set(value) != {'operation','request_id'}:raise ValueError('Unexpected query arguments')
+            return json.loads(path.read_text()) if path.exists() else dict(state='NOT_FOUND',request_id=rid)
+        with self.lock:
+            self.status()
+            if (set(value) != {'operation','request_id','command','timeout_ms','output_limit'} or
+                    not isinstance(value['command'], str) or len(value['command'].encode()) > 65536 or
+                    type(value['timeout_ms']) is not int or not 1 <= value['timeout_ms'] <= self.command_timeout_ms or
+                    type(value['output_limit']) is not int or not 1 <= value['output_limit'] <= 262144):
+                raise ValueError('Invalid bounded invocation')
+            digest = hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+            if path.exists():
+                record = json.loads(path.read_text())
+                if record['digest'] != digest:
+                    raise ValueError('Request ID conflict')
+                return record  # PENDING/UNKNOWN never replay untrusted work.
+            record = dict(request_id=rid, digest=digest, state='UNKNOWN')
+            save(path, record)  # Durable intent before Docker exec or cleanup.
+            try:
+                result = self.execute(value)
+                record.update(state='DONE', response=dict(ok=True, result=result))
+                save(path, record)
+                return record
+            except BaseException:
+                self.fail()
+                raise
+
+
+class Supervisor(GuestSupervisor):
     def __init__(self, config, root='/var/lib/dsec-control', *, run=None):
         self.config = config
         if (not {'mode','image','memory_mb','cpus'}<=set(config)<=
@@ -250,53 +293,68 @@ class Supervisor:
             result.update(self.layer_proof)
         return result
 
-    def dispatch(self, value):
-        if not isinstance(value, dict) or value.get('operation') not in ('status', 'execute', 'query'):
-            raise ValueError('Unknown guest operation')
-        operation = value['operation']
-        # Inspection never queues behind a command or FnCall cleanup. Atomic
-        # journal replacement exposes either the old intent or a complete proof.
-        if operation == 'status':
-            if set(value) != {'operation'}:raise ValueError('Unexpected status arguments')
-            return self.status()
-        rid = value.get('request_id')
-        if not isinstance(rid, str) or not re.fullmatch('[0-9a-f]{32}', rid):
-            raise ValueError('Request ID required')
-        path = self.root / (rid+'.json')
-        if operation == 'query':
-            if set(value) != {'operation','request_id'}:raise ValueError('Unexpected query arguments')
-            return json.loads(path.read_text()) if path.exists() else dict(state='NOT_FOUND',request_id=rid)
-        with self.lock:
-            self.status()
-            if (set(value) != {'operation','request_id','command','timeout_ms','output_limit'} or
-                    not isinstance(value['command'], str) or len(value['command'].encode()) > 65536 or
-                    type(value['timeout_ms']) is not int or not 1 <= value['timeout_ms'] <= self.command_timeout_ms or
-                    type(value['output_limit']) is not int or not 1 <= value['output_limit'] <= 262144):
-                raise ValueError('Invalid bounded invocation')
-            digest = hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
-            if path.exists():
-                record = json.loads(path.read_text())
-                if record['digest'] != digest:
-                    raise ValueError('Request ID conflict')
-                return record  # PENDING/UNKNOWN never replay untrusted work.
-            record = dict(request_id=rid, digest=digest, state='UNKNOWN')
-            save(path, record)  # Durable intent before Docker exec or cleanup.
-            try:
-                result = json.loads(self.run(['exec', self.name, 'python3', '-B', '/dsec-helper.py',
-                    'shell', json.dumps({key:value[key] for key in ('command','timeout_ms','output_limit')})],
-                    timeout=value['timeout_ms']/1000+5))
-                if self.config['mode'] == 'fncall':
-                    self.save_state('CLEANING')
-                    self.run(['restart', '--time', '1', self.name], timeout=10)
-                    self.status()  # Same container ID; tmpfs and processes replaced.
-                    self.save_state('READY')
-                record.update(state='DONE', response=dict(ok=True, result=result))
-                save(path, record)
-                return record
-            except BaseException:
-                # A possibly dirty function slot is never made available again.
-                self.failed = True; self.save_state('FAILED')
-                raise
+    def execute(self, value):
+        result = json.loads(self.run(['exec', self.name, 'python3', '-B', '/dsec-helper.py',
+            'shell', json.dumps({key:value[key] for key in ('command','timeout_ms','output_limit')})],
+            timeout=value['timeout_ms']/1000+5))
+        if self.config['mode'] == 'fncall':
+            self.save_state('CLEANING')
+            self.run(['restart', '--time', '1', self.name], timeout=10)
+            self.status()  # Same container ID; tmpfs and processes replaced.
+            self.save_state('READY')
+        return result
+
+    def fail(self):
+        # A possibly dirty function slot is never made available again.
+        self.failed = True
+        self.save_state('FAILED')
+
+
+class FullVMSupervisor(GuestSupervisor):
+    """No inner container: native and shell operations run as the guest user."""
+
+    def __init__(self, config, root='/var/lib/dsec-control'):
+        if set(config) != {'mode','command_timeout_ms'} or config['mode'] != 'fullvm':
+            raise ValueError('Invalid FullVM guest configuration')
+        self.config = config
+        self.command_timeout_ms = command_timeout(config['command_timeout_ms'])
+        self.root = Path(root)
+        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.lock = threading.Lock()
+        self.failed = False
+
+    @staticmethod
+    def _user(*command):
+        return ['/usr/bin/setpriv', '--no-new-privs', '--reuid=1000',
+                '--regid=1000', '--clear-groups', '--', *command]
+
+    @staticmethod
+    def _env():
+        return dict(PATH='/usr/local/bin:/usr/bin:/bin', HOME='/work', USER='dsec')
+
+    def start(self):
+        self.native = subprocess.Popen(self._user('/opt/dsec/native-agent', '--unix',
+            '/run/dsec-native/agent.sock'), cwd='/work', env=self._env(), umask=0o077)
+        deadline = time.monotonic() + 5
+        while not Path('/run/dsec-native/agent.sock').is_socket():
+            if self.native.poll() is not None or time.monotonic() >= deadline:
+                raise RuntimeError('FullVM native agent failed to start')
+            time.sleep(.025)
+
+    def status(self):
+        if self.failed or self.native.poll() is not None:
+            raise RuntimeError('FullVM guest supervisor unavailable')
+        return dict(mode='fullvm', state='RUNNING', network='none',
+                    command_timeout_ms=self.command_timeout_ms, transport_auth=guest_auth.FEATURE)
+
+    def execute(self, value):
+        return json.loads(subprocess.check_output(self._user(sys.executable,
+            '-E', '-s', '-B', '/opt/dsec/docker_guest.py', 'shell',
+            json.dumps({key:value[key] for key in ('command','timeout_ms','output_limit')})),
+            cwd='/work', env=self._env(), timeout=value['timeout_ms']/1000+5))
+
+    def fail(self):
+        self.failed = True
 
 
 def serve_connection(supervisor, sock, address, auth_key, *, native=False):
@@ -347,7 +405,7 @@ def serve(supervisor, auth_key):
                 if not slots.acquire(blocking=False):
                     sock.close(); continue
                 threading.Thread(target=connection, args=(sock,address), kwargs=dict(native=native), daemon=True).start()
-    if supervisor.config['mode'] == 'container':
+    if supervisor.config['mode'] != 'fncall':
         threading.Thread(target=listener, args=(5001,True), daemon=True).start()
     listener(PORT, False)
 
@@ -358,7 +416,10 @@ if __name__ == '__main__':
         print(json.dumps(bounded_shell(**json.loads(sys.argv[2]))))
     elif sys.argv[1:] == ['serve']:
         import guest_auth
-        key = guest_auth.bootstrap_key()
-        serve(Supervisor(json.loads(Path('/opt/dsec/config.json').read_text())), key)
+        config = json.loads(Path('/opt/dsec/config.json').read_text())
+        fullvm = config['mode'] == 'fullvm'
+        key = guest_auth.bootstrap_key(private_device=fullvm,
+            announce_ready=fullvm and os.environ.get('DSEC_BOOTSTRAP_READY')=='1')
+        serve((FullVMSupervisor if fullvm else Supervisor)(config), key)
     else:
         raise SystemExit('Expected shell or serve')

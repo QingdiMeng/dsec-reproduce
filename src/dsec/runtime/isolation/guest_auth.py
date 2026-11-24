@@ -15,6 +15,7 @@ FEATURE = 'dsec-vsock-auth-v1'
 GREETING = b'DSECA1\n'
 KEY_BYTES = 32
 BOOT_ACK = b'DSEC-BOOT-OK\n'
+BOOT_READY = b'DSEC-BOOT-READY\n'
 
 
 def remaining(sock, deadline):
@@ -108,7 +109,8 @@ def authenticate_server(sock, key, port):
         sock.settimeout(old_timeout)
 
 
-def bootstrap_key(*, sysfs='/sys/class/virtio-ports', deadline_seconds=10):
+def bootstrap_key(*, sysfs='/sys/class/virtio-ports', deadline_seconds=10, private_device=False,
+                  announce_ready=False):
     """Read once from a dedicated virtio-serial device before starting Docker.
 
     No file is written in the guest. Inner containers receive neither this
@@ -121,6 +123,18 @@ def bootstrap_key(*, sysfs='/sys/class/virtio-ports', deadline_seconds=10):
             if name.read_text().strip() == FEATURE:
                 fd = os.open('/dev/'+name.parent.name, os.O_RDWR | os.O_NONBLOCK)
                 try:
+                    if private_device:
+                        os.fchmod(fd, 0o600)
+                    if announce_ready:
+                        # Firmware-booted guests open this port later than a direct init.
+                        pending = memoryview(BOOT_READY)
+                        while pending and time.monotonic() < deadline:
+                            try:
+                                pending = pending[os.write(fd, pending):]
+                            except BlockingIOError:
+                                time.sleep(.01)
+                        if pending:
+                            raise TimeoutError('Guest channel readiness could not be sent')
                     key = bytearray()
                     while len(key) < KEY_BYTES and time.monotonic() < deadline:
                         try:

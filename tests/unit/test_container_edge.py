@@ -227,6 +227,21 @@ class ContainerEdgeTests(unittest.IsolatedAsyncioTestCase):
             await monitor.finish()
         await sandbox.stop(request_id='b' * 32)
 
+    async def test_stopped_status_and_new_stop_id_expose_authoritative_cleanup_proof(self):
+        sandbox = await self.client.run_container(self.spec, request_id='a' * 32)
+        self.assertNotEqual((await sandbox.status()).get('resource_cleanup_complete'), True)
+        await sandbox.stop(request_id='b' * 32)
+        status = await sandbox.status()
+        self.assertEqual(status['state'], 'STOPPED')
+        self.assertIs(status['resource_cleanup_complete'], True)
+        # A fresh stop after retirement uses the same backend absence proof.
+        stopped = await sandbox.stop(request_id='c' * 32)
+        self.assertIs(stopped['resource_cleanup_complete'], True)
+        backend = Backend.made[0]
+        with patch.object(backend, 'prove_stopped', side_effect=RuntimeError('cleanup unproved')):
+            with self.assertRaises(ServiceError):
+                await sandbox.status()
+
     async def test_repeated_create_and_stop_keep_old_digest_without_second_effect(self):
         first = await self.client.run_container(self.spec, request_id='a' * 32)
         second = await self.client.run_container(self.spec, request_id='a' * 32)

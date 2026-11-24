@@ -28,8 +28,8 @@ from dsec.contracts.environments import check_environment_binding
 
 CONTAINER_OPERATIONS = frozenset((
     "container_create", "container_status", "container_execute", "container_stop",
-    "container_query_request", "container_query_action"))
-CONTAINER_MUTATING = frozenset(("container_create", "container_execute", "container_stop"))
+    "container_query_request", "container_query_action", "container_screenshot", "container_desktop_input"))
+CONTAINER_MUTATING = frozenset(("container_create", "container_execute", "container_stop", "container_desktop_input"))
 
 
 @dataclass(frozen=True)
@@ -68,12 +68,12 @@ class ContainerRuntime:
         path = self.configuration.get('DSEC_QEMU_EXECUTION_CATALOG')
         if not path:
             return {}
-        import math
+        from dsec.runtime.backends.qemu_container import private_disk_mb
         catalog = self._execution_catalog()
         return {name:dict(mode=item['mode'],containment='qemu-kvm',network=item.get('network','none'),
             minimum=dict(concurrency=1,cpu=item['cpu_count'],memory_mb=item['memory_mb']+
                          (catalog.host_isolation['memory_overhead_mb'] if catalog.host_isolation else 0),
-                         disk_mb=math.ceil(Path(item['template']['path']).stat().st_size/1024**2),network_mbps=0))
+                         disk_mb=private_disk_mb(item),network_mbps=0))
                 for name,item in catalog.environments.items()}
 
     def execution_contracts(self):
@@ -151,7 +151,7 @@ class ContainerRuntime:
     def native_operation(self, kind, spec, sandbox_id, request_id):
         # Registration and stop admission share the existing lifecycle lock.
         # Readers then run concurrently; the lock is not held over guest I/O.
-        if getattr(spec, 'execution_mode', 'container') != 'container':
+        if getattr(spec, 'execution_mode', 'container') == 'fncall':
             raise UnsupportedCapability('FnCall has no persistent native sessions')
         token = object()
         with self._operation(sandbox_id):
@@ -222,10 +222,14 @@ class ContainerRuntime:
         allowed = {"spec", "kind"} | {
             "container_create": {"environment_contract"},
             "container_execute": {"command", "timeout_ms", "output_limit"},
-            "container_query_action": {"lookup_id"}}.get(operation, set())
+            "container_query_action": {"lookup_id"},
+            "container_desktop_input": {"events"}}.get(operation, set())
         if set(args) - allowed:
             raise ValueError("Unexpected container arguments")
         kind, spec = self._spec(args)
+        backend_kind = getattr(spec, 'route_backend', 'container')
+        if operation in ('container_screenshot','container_desktop_input') and backend_kind != 'fullvm':
+            raise UnsupportedCapability('Desktop operations require FullVM')
         journal = self._journal()
         if operation == "container_create":
             if sandbox_id is not None:
@@ -238,14 +242,19 @@ class ContainerRuntime:
                 if journal.lookup(request_id)['state'] == 'NOT_FOUND':
                     try:
                         check_environment_binding(args['environment_contract'], self.execution_contracts(),
-                                                  'container', spec.environment_id)
+                                                  backend_kind, spec.environment_id)
                     except (ValueError, UnsupportedCapability) as exc:
                         raise ServiceError('AdmissionDenied', str(exc)) from exc
-            backend = self._backend(kind, spec)
+            try:
+                backend = self._backend(kind, spec)
+            except UnsupportedCapability as exc:
+                if backend_kind == 'fullvm' and journal.lookup(request_id)['state'] == 'NOT_FOUND':
+                    raise ServiceError('AdmissionDenied', str(exc)) from exc
+                raise
             def create():
                 lease_id = None
                 if self.node_admission is not None:
-                    lease_id = self.node_admission.allocate('container',
+                    lease_id = self.node_admission.allocate(backend_kind,
                         minimum=getattr(backend, 'minimum_demand',
                             NodeDemand(spec.cpu_cores_limit, spec.memory_limit_mb, 1, 0)),
                         configured_limits={'memory_mb':spec.memory_limit_mb, 'cpu':spec.cpu_cores_limit})
@@ -257,9 +266,9 @@ class ContainerRuntime:
                 made = backend.create(**options)
                 self._remember(kind, spec, backend, made)
                 if self.node_admission is not None:
-                    self.node_admission.created('container', made.id)
+                    self.node_admission.created(backend_kind, made.id)
                 return {"id": made.id}
-            context = (self.node_admission.request('container', request_id,
+            context = (self.node_admission.request(backend_kind, request_id,
                        create_args, resource_demand) if self.node_admission is not None
                        else nullcontext())
             with self._operation(request_id), context:
@@ -277,7 +286,7 @@ class ContainerRuntime:
             def stop():
                 backend = self._backend(kind, spec)
                 if backend.prove_stopped(sandbox_id):
-                    result = {"id": sandbox_id, "backend": kind, "state": "STOPPED",
+                    result = {"id": sandbox_id, "backend": "fullvm" if backend_kind == "fullvm" else kind, "state": "STOPPED",
                               "resource_cleanup_complete": True}
                 else:
                     result = self._entry(kind, spec, sandbox_id).sandbox.stop()
@@ -286,7 +295,7 @@ class ContainerRuntime:
                 if self.node_admission is not None:
                     if not backend.prove_stopped(sandbox_id):
                         raise RuntimeError('Container cleanup has not been proven')
-                    self.node_admission.stopped('container', sandbox_id)
+                    self.node_admission.stopped(backend_kind, sandbox_id)
                 return result
             with self._operation(sandbox_id):
                 with self.lock:
@@ -298,13 +307,19 @@ class ContainerRuntime:
         if operation == 'container_query_action' and hasattr(backend, 'query_action'):
             return backend.query_action(sandbox_id,args['lookup_id'])
         if operation == "container_status" and backend.prove_stopped(sandbox_id):
-            return {"id": sandbox_id, "backend": kind, "state": "STOPPED",
+            return {"id": sandbox_id, "backend": "fullvm" if backend_kind == "fullvm" else kind, "state": "STOPPED",
                     "resource_cleanup_complete": True}
         sandbox = self._entry(kind, spec, sandbox_id).sandbox
         if operation == "container_status":
-            return {**sandbox.status(), "container_name": sandbox.name}
+            status = sandbox.status()
+            return status if backend_kind == 'fullvm' else {**status, "container_name": sandbox.name}
         if operation == "container_query_action":
             return sandbox.query_request(args["lookup_id"])
+        if operation in ('container_screenshot','container_desktop_input'):
+            with self._operation(sandbox_id):
+                if operation == 'container_screenshot':
+                    return sandbox.screenshot()
+                return sandbox.desktop_input(args['events'],request_id=request_id)
         with self._operation(sandbox_id):
             return sandbox.run_shell(args["command"], timeout_ms=args.get("timeout_ms", 5000),
                                      output_limit=args.get("output_limit", 65536),
@@ -337,6 +352,7 @@ class ContainerRuntime:
             return proof
         try:
             spec.validate()
+            backend_kind = spec.route_backend
             backend = self._backend("container", spec)
             failed = getattr(backend, 'prove_failed_create', None)
             if operation == 'create' and failed and failed(sandbox_id):
@@ -344,7 +360,7 @@ class ContainerRuntime:
                     if not failed(sandbox_id):
                         return None
                     if self.node_admission is not None:
-                        self.node_admission.stopped('container',sandbox_id)
+                        self.node_admission.stopped(backend_kind,sandbox_id)
                     return dict(type='ExecutionCreateFailed',message='Guest startup failed; cleanup proved',
                                 details=dict(cleanup_complete=True))
                 return journal.recover(request_id,failure,failed=True)
@@ -355,8 +371,8 @@ class ContainerRuntime:
                     return {"id": sandbox_id}
                 if operation == "stop" and backend.prove_stopped(sandbox_id):
                     if self.node_admission is not None:
-                        self.node_admission.stopped('container', sandbox_id)
-                    return {"id": sandbox_id, "backend": "container", "state": "STOPPED",
+                        self.node_admission.stopped(backend_kind, sandbox_id)
+                    return {"id": sandbox_id, "backend": backend_kind, "state": "STOPPED",
                             "resource_cleanup_complete": True}
                 return None
             return journal.recover(request_id, verify)
@@ -390,9 +406,13 @@ class ContainerRuntime:
             sid = record['request_id']
             backend = self._backend(kind, spec)
             minimum = getattr(backend, 'minimum_demand', NodeDemand(spec.cpu_cores_limit, spec.memory_limit_mb, 1, 0))
-            self.node_admission.adopt_container(sid, minimum)
+            backend_kind = getattr(spec, 'route_backend', 'container')
+            if backend_kind == 'fullvm':
+                self.node_admission.adopt_container(sid, minimum, backend=backend_kind)
+            else:
+                self.node_admission.adopt_container(sid, minimum)
             if backend.prove_stopped(sid):
-                self.node_admission.stopped('container', sid)
+                self.node_admission.stopped(backend_kind, sid)
 
     def _container_backend(self, args):
         execution = self.configuration.get('DSEC_QEMU_EXECUTION_CATALOG')
@@ -406,8 +426,8 @@ class ContainerRuntime:
                 self.backends[key] = QemuContainerBackend(catalog, args.environment_id,
                     self.configuration['DSEC_CONTAINER_ROOT'])
             return self.backends[key]
-        if args.execution_mode == 'fncall':
-            raise UnsupportedCapability('FnCall requires a configured QEMU execution catalog')
+        if args.execution_mode != 'container':
+            raise UnsupportedCapability('Execution mode requires a configured QEMU execution catalog')
         key = (args.environment_id, args.storage)
         if key not in (("e1-real", "local"), ("e2-full", "local"), ("e2-full", "threefs_lazy")):
             catalog_path = self.configuration.get("DSEC_ENVIRONMENT_CATALOG")

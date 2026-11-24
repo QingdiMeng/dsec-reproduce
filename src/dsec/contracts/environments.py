@@ -41,7 +41,7 @@ class EnvironmentView:
                 not re.fullmatch('[a-z0-9][a-z0-9.-]{0,127}', self.environment_id)):
             raise ValueError('Invalid environment identity')
         if ((self.backend, self.execution_mode) not in
-                (('microvm', 'microvm'), ('container', 'container'), ('container', 'fncall')) or
+                (('microvm', 'microvm'), ('container', 'container'), ('container', 'fncall'), ('fullvm', 'fullvm')) or
                 not isinstance(self.revision, str) or not re.fullmatch('[a-f0-9]{64}', self.revision)):
             raise ValueError('Invalid environment backend/mode/revision')
         if (not isinstance(self.capabilities, tuple) or

@@ -99,10 +99,7 @@ def main():
     if args.qemu_execution_catalog:
         from dsec.runtime.backends.qemu_container import ExecutionCatalog
         catalog = ExecutionCatalog(args.qemu_execution_catalog)
-        for item in catalog.environments.values():
-            from dsec.runtime.backends.qemu import QemuArtifact
-            for key in ('binary','kernel','template'):
-                QemuArtifact(**item[key]).verify()
+        catalog.verify_boot_artifacts()
         os.environ['DSEC_QEMU_EXECUTION_CATALOG'] = str(catalog.path)
         os.environ.setdefault('DSEC_CONTAINER_ROOT', str(Path(args.root).resolve().parent/'containers'))
     if args.node_budget and args.admission_worker_socket:
