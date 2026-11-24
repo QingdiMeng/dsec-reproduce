@@ -73,8 +73,33 @@ print(json.dumps([str(mount), str(path)]))
     return mount, path
 
 
+class FileVerificationCache:
+    """Reuse full hashes within one publication or one loaded runtime catalog."""
+
+    def __init__(self):
+        self._verified = {}
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _identity(info):
+        return (info.st_dev, info.st_ino, info.st_mode, info.st_size,
+                info.st_mtime_ns, info.st_ctime_ns)
+
+    def verify(self, path: Path, expected: str, error: str) -> int:
+        key = (path, expected)
+        with self._lock:
+            info = path.stat()
+            identity = self._identity(info)
+            if self._verified.get(key) != identity:
+                actual = file_sha256(path)
+                if actual != expected or self._identity(path.stat()) != identity:
+                    raise ValueError(error)
+                self._verified[key] = identity
+            return info.st_size
+
+
 class EnvironmentCatalog:
-    def __init__(self, filename: str | Path):
+    def __init__(self, filename: str | Path, *, verification: FileVerificationCache | None = None):
         self.path = Path(filename).resolve(strict=True)
         payload = json.loads(self.path.read_text())
         entries = payload.get("environments")
@@ -84,27 +109,7 @@ class EnvironmentCatalog:
             raise ValueError("Invalid DSec environment ID")
         self.entries = entries
         self.digest = file_sha256(self.path)
-        self._verified_files = {}
-        self._verification_lock = threading.Lock()
-
-    def _verify_file(self, path: Path, expected: str, error: str) -> None:
-        """Hash once per daemon lifetime, then reject changed file identities."""
-        key = (str(path), expected)
-
-        def identity():
-            stat = path.stat()
-            return (stat.st_dev, stat.st_ino, stat.st_mode, stat.st_size,
-                    stat.st_mtime_ns, stat.st_ctime_ns)
-
-        with self._verification_lock:
-            before = identity()
-            if self._verified_files.get(key) == before:
-                return
-            actual = file_sha256(path)
-            after = identity()
-            if before != after or actual != expected:
-                raise ValueError(error)
-            self._verified_files[key] = after
+        self._verification = verification if verification is not None else FileVerificationCache()
 
     def resolve(self, environment_id: str, storage: str) -> dict:
         if environment_id not in self.entries:
@@ -142,7 +147,7 @@ class EnvironmentCatalog:
                                      "threefs_mount": mount})
                 else:
                     path = Path(layer["file"]).resolve(strict=True)
-                    self._verify_file(path, layer["sha256"], f"EROFS layer changed: {name}")
+                    self._verification.verify(path, layer["sha256"], f"EROFS layer changed: {name}")
                     resolved.append({"name": name, "file": path,
                                      "sha256": layer["sha256"], "source": "local"})
             if storage == "threefs_lazy" and not any(
@@ -160,12 +165,12 @@ class EnvironmentCatalog:
             raise ValueError(f"Invalid EROFS environment: {environment_id}")
         metadata = Path(item["metadata"]).resolve(strict=True)
         helper = Path(item["mount_helper"]).resolve(strict=True)
-        self._verify_file(metadata, item["metadata_sha256"], "EROFS metadata changed")
+        self._verification.verify(metadata, item["metadata_sha256"], "EROFS metadata changed")
         if storage == "local":
             data = Path(item["local_blob"]).resolve(strict=True)
             if data.stat().st_size != item["data_bytes"]:
                 raise ValueError("Local EROFS data changed")
-            self._verify_file(data, item["data_sha256"], "Local EROFS data changed")
+            self._verification.verify(data, item["data_sha256"], "Local EROFS data changed")
             remote_mount = None
         elif storage == "threefs_lazy":
             remote_mount, data = resolve_threefs_file(
@@ -217,13 +222,13 @@ class MicroVMEnvironmentCatalog(EnvironmentCatalog):
             boot = Path(item["boot_template"]).resolve(strict=True)
             if not DIGEST.fullmatch(item.get("boot_sha256", "")):
                 raise ValueError("MicroVM boot template changed")
-            self._verify_file(boot, item["boot_sha256"], "MicroVM boot template changed")
+            self._verification.verify(boot, item["boot_sha256"], "MicroVM boot template changed")
         if not isinstance(item.get("kernel"), str):
             raise ValueError("Invalid microVM guest kernel")
         kernel = Path(item["kernel"]).resolve(strict=True)
         if not DIGEST.fullmatch(item.get("kernel_sha256", "")):
             raise ValueError("MicroVM guest kernel changed")
-        self._verify_file(kernel, item["kernel_sha256"], "MicroVM guest kernel changed")
+        self._verification.verify(kernel, item["kernel_sha256"], "MicroVM guest kernel changed")
         layers = item.get("layers")
         if not isinstance(layers, list) or not 1 <= len(layers) <= 17:
             raise ValueError("Invalid microVM EROFS layer list")
@@ -252,7 +257,7 @@ class MicroVMEnvironmentCatalog(EnvironmentCatalog):
                 if not isinstance(layer.get("file"), str):
                     raise ValueError("Invalid local microVM layer")
                 path = Path(layer["file"]).resolve(strict=True)
-                self._verify_file(path, layer["sha256"],
+                self._verification.verify(path, layer["sha256"],
                                   f"MicroVM EROFS layer changed: {name}")
                 source = "local"
             names.add(name)
@@ -276,7 +281,7 @@ class MicroVMEnvironmentCatalog(EnvironmentCatalog):
                     not DIGEST.fullmatch(item.get("dax_binary_sha256", ""))):
                 raise ValueError("DAX EROFS requires a pinned Firecracker binary")
             dax_binary = Path(item["dax_binary"]).resolve(strict=True)
-            self._verify_file(dax_binary, item["dax_binary_sha256"],
+            self._verification.verify(dax_binary, item["dax_binary_sha256"],
                               "DAX Firecracker binary changed")
         elif item.get("dax_binary") is not None or item.get("dax_binary_sha256") is not None:
             raise ValueError("DAX Firecracker binary has no DAX EROFS layer")
@@ -297,7 +302,7 @@ class MicroVMEnvironmentCatalog(EnvironmentCatalog):
                     not DIGEST.fullmatch(root.get("image_sha256", "")):
                 raise ValueError("Invalid OverlayBD root identity")
             overlaybd_image = Path(root["image"]).resolve(strict=True)
-            self._verify_file(overlaybd_image, root["image_sha256"],
+            self._verification.verify(overlaybd_image, root["image_sha256"],
                               "OverlayBD root image config changed")
             image = json.loads(overlaybd_image.read_text())
             lowers = root.get("lowers")
@@ -317,7 +322,7 @@ class MicroVMEnvironmentCatalog(EnvironmentCatalog):
                 path = Path(lower["file"]).resolve(strict=True)
                 if path.stat().st_size != lower["bytes"]:
                     raise ValueError("OverlayBD lower changed")
-                self._verify_file(path, lower["sha256"], "OverlayBD lower changed")
+                self._verification.verify(path, lower["sha256"], "OverlayBD lower changed")
         elif root_backend != "file-ext4" or item.get("overlaybd_root") is not None:
             raise ValueError("Unsupported microVM root block backend")
         published_environment(environment_id, 'microvm', 'microvm', item)

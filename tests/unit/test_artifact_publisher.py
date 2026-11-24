@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from dsec.storage import publication
 from artifact_publisher import publish_microvm
 from environment_catalog import MicroVMEnvironmentCatalog
 from dsec.contracts.environments import artifact_revision
@@ -112,6 +113,89 @@ class ArtifactPublisherTest(unittest.TestCase):
             poisoned.write_bytes(b"other")
             with self.assertRaisesRegex(ValueError, "Published object changed"):
                 publish_microvm(source, "tools", destination, root / "store")
+            self.assertFalse(destination.exists())
+
+    def test_each_publication_reads_shared_source_and_existing_object_once(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work).resolve()
+            source, files = self.fixture(root)
+            store = root / "store"
+            publish_microvm(source, "tools", root / "first.json", store)
+            target = store / "objects" / (sha(b"tools") + ".erofs")
+            original_open = Path.open
+            reads = []
+
+            def record(path, mode="r", *args, **kwargs):
+                if mode == "rb" and path in (files["tools.erofs"], target):
+                    reads.append(path)
+                return original_open(path, mode, *args, **kwargs)
+
+            for name in ("second", "third"):
+                reads.clear()
+                with patch.object(Path, "open", record):
+                    publish_microvm(source, "tools", root / (name + ".json"), store)
+                self.assertEqual(reads, [files["tools.erofs"], target])
+
+    def test_source_replaced_after_catalog_resolution_is_rejected(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            source, files = self.fixture(root)
+            store = root / "store"
+            publish_microvm(source, "tools", root / "first.json", store)
+            copy_object = publication._copy_object
+
+            def replace_before_copy(path, *args, **kwargs):
+                if path == files["tools.erofs"]:
+                    replacement = root / "replacement"
+                    replacement.write_bytes(b"other")
+                    replacement.replace(path)
+                return copy_object(path, *args, **kwargs)
+
+            destination = root / "second.json"
+            with patch.object(publication, "_copy_object", replace_before_copy):
+                with self.assertRaisesRegex(ValueError, "Artifact digest mismatch"):
+                    publish_microvm(source, "tools", destination, store)
+            self.assertFalse(destination.exists())
+
+    def test_target_replaced_before_commit_preserves_previous_catalog(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            source, _ = self.fixture(root)
+            store = root / "store"
+            destination = root / "published.json"
+            publish_microvm(source, "tools", destination, store)
+            before = destination.read_bytes()
+            catalog = json.loads(source.read_text())
+            catalog["environments"]["next"] = catalog["environments"]["tools"]
+            source.write_text(json.dumps(catalog))
+            commit = publication._atomic_catalog
+
+            def replace_before_commit(path, name, entry, verification):
+                replacement = root / "replacement"
+                replacement.write_bytes(b"other")
+                replacement.replace(entry["layers"][0]["file"])
+                return commit(path, name, entry, verification)
+
+            with patch.object(publication, "_atomic_catalog", replace_before_commit):
+                with self.assertRaisesRegex(ValueError, "EROFS layer changed"):
+                    publish_microvm(source, "next", destination, store)
+            self.assertEqual(destination.read_bytes(), before)
+
+    def test_conflicting_link_winner_is_checked_before_publication(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            source, _ = self.fixture(root)
+            link = publication.os.link
+
+            def competing_link(temp, target):
+                if target.suffix == ".erofs":
+                    target.write_bytes(b"other")
+                return link(temp, target)
+
+            destination = root / "published.json"
+            with patch.object(publication.os, "link", competing_link):
+                with self.assertRaisesRegex(ValueError, "Published object changed"):
+                    publish_microvm(source, "tools", destination, root / "store")
             self.assertFalse(destination.exists())
 
     def test_remote_layer_is_verified_at_publication_and_lazy_at_runtime(self):

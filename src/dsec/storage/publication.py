@@ -18,7 +18,7 @@ import stat
 import subprocess
 import tempfile
 
-from dsec.storage.catalog import DIGEST, IDENTIFIER, MicroVMEnvironmentCatalog
+from dsec.storage.catalog import DIGEST, IDENTIFIER, FileVerificationCache, MicroVMEnvironmentCatalog
 from dsec.contracts.environments import artifact_revision
 
 
@@ -41,7 +41,7 @@ def _sync_directory(path: Path) -> None:
 
 
 def _copy_object(source: Path, store: Path, suffix: str, expected: str | None = None,
-                 *, executable: bool = False) -> tuple[Path, str, int]:
+                 *, executable: bool = False, verification: FileVerificationCache | None = None) -> tuple[Path, str, int]:
     source = source.resolve(strict=True)
     before = source.stat()
     if not stat.S_ISREG(before.st_mode):
@@ -50,24 +50,23 @@ def _copy_object(source: Path, store: Path, suffix: str, expected: str | None = 
         raise ValueError("Invalid expected artifact SHA-256")
     store.mkdir(mode=0o700, parents=True, exist_ok=True)
     store = store.resolve(strict=True)
+    if verification is None:
+        verification = FileVerificationCache()
+
+    def verify_existing(destination: Path, digest: str, size: int) -> None:
+        if not stat.S_ISREG(destination.lstat().st_mode):
+            raise ValueError(f"Published object is not a regular file: {destination}")
+        if executable and not destination.stat().st_mode & 0o111:
+            raise ValueError(f"Published executable lost execute permission: {destination}")
+        error = f"Published object changed: {destination}"
+        if verification.verify(destination, digest, error) != size:
+            raise ValueError(error)
+
     if expected is not None:
         destination = store / (expected + suffix)
         if destination.exists() or destination.is_symlink():
-            if not stat.S_ISREG(destination.lstat().st_mode):
-                raise ValueError(f"Published object is not a regular file: {destination}")
-            if executable and not destination.stat().st_mode & 0o111:
-                raise ValueError(f"Published executable lost execute permission: {destination}")
-            source_digest, source_size = _digest_file(source)
-            after = source.stat()
-            if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns,
-                    before.st_ctime_ns) != (after.st_dev, after.st_ino, after.st_size,
-                                         after.st_mtime_ns, after.st_ctime_ns):
-                raise ValueError(f"Artifact changed during publication: {source}")
-            if source_digest != expected:
-                raise ValueError(f"Artifact digest mismatch: {source}")
-            actual, existing_size = _digest_file(destination)
-            if (actual, existing_size) != (expected, source_size):
-                raise ValueError(f"Published object changed: {destination}")
+            source_size = verification.verify(source, expected, f"Artifact digest mismatch: {source}")
+            verify_existing(destination, expected, source_size)
             return destination, expected, source_size
     fd, temporary = tempfile.mkstemp(prefix=".publish-", dir=store)
     temp = Path(temporary)
@@ -95,13 +94,7 @@ def _copy_object(source: Path, store: Path, suffix: str, expected: str | None = 
             os.link(temp, destination)
             _sync_directory(store)
         except FileExistsError:
-            if not stat.S_ISREG(destination.lstat().st_mode):
-                raise ValueError(f"Published object is not a regular file: {destination}")
-            if executable and not destination.stat().st_mode & 0o111:
-                raise ValueError(f"Published executable lost execute permission: {destination}")
-            actual, existing_size = _digest_file(destination)
-            if (actual, existing_size) != (value, total):
-                raise ValueError(f"Published object changed: {destination}")
+            verify_existing(destination, value, total)
         return destination, value, total
     finally:
         temp.unlink(missing_ok=True)
@@ -139,7 +132,8 @@ def _validate_remote_store(mount: Path, store: Path) -> tuple[Path, Path]:
     return mount, store
 
 
-def _atomic_catalog(path: Path, environment_id: str, entry: dict) -> None:
+def _atomic_catalog(path: Path, environment_id: str, entry: dict,
+                    verification: FileVerificationCache) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     lock = path.with_name(path.name + ".lock")
     with lock.open("a+") as guard:
@@ -159,9 +153,10 @@ def _atomic_catalog(path: Path, environment_id: str, entry: dict) -> None:
                 stream.flush()
                 os.fsync(stream.fileno())
             os.chmod(temp, 0o600)
-            MicroVMEnvironmentCatalog(temp).resolve(environment_id, "local")
+            candidate = MicroVMEnvironmentCatalog(temp, verification=verification)
+            candidate.resolve(environment_id, "local")
             if any("threefs_file" in layer for layer in entry["layers"]):
-                MicroVMEnvironmentCatalog(temp).resolve(environment_id, "threefs_lazy")
+                candidate.resolve(environment_id, "threefs_lazy")
             os.replace(temp, path)
             _sync_directory(path.parent)
         finally:
@@ -178,7 +173,8 @@ def publish_microvm(source_catalog: Path, environment_id: str, destination_catal
         raise ValueError("3FS mount and store must be provided together")
     remote = (_validate_remote_store(threefs_mount, threefs_store)
               if threefs_mount is not None else None)
-    catalog = MicroVMEnvironmentCatalog(source_catalog)
+    verification = FileVerificationCache()
+    catalog = MicroVMEnvironmentCatalog(source_catalog, verification=verification)
     resolved = catalog.resolve(environment_id, "local")
     source = copy.deepcopy(catalog.entries[environment_id])
     if remote is None and any("threefs_file" in layer for layer in source["layers"]):
@@ -193,14 +189,16 @@ def publish_microvm(source_catalog: Path, environment_id: str, destination_catal
     store = local_store.resolve() / "objects"
     for path_key, sha_key, suffix in (("boot_template", "boot_sha256", ".ext4"),
                                       ("kernel", "kernel_sha256", ".kernel")):
-        path, digest, _ = _copy_object(Path(source[path_key]), store, suffix, source[sha_key])
+        path, digest, _ = _copy_object(Path(source[path_key]), store, suffix, source[sha_key],
+                                       verification=verification)
         source[path_key], source[sha_key] = str(path), digest
     if resolved["dax_binary"] is not None:
         path, digest, _ = _copy_object(Path(source["dax_binary"]), store, ".vmm",
-                                       source["dax_binary_sha256"], executable=True)
+                                       source["dax_binary_sha256"], executable=True, verification=verification)
         source["dax_binary"], source["dax_binary_sha256"] = str(path), digest
     for layer in source["layers"]:
-        path, digest, size = _copy_object(Path(layer["file"]), store, ".erofs", layer["sha256"])
+        path, digest, size = _copy_object(Path(layer["file"]), store, ".erofs", layer["sha256"],
+                                          verification=verification)
         layer.update(file=str(path), sha256=digest, bytes=size)
         if remote is not None and not layer.get("dax", False):
             mount, remote_store = remote
@@ -210,7 +208,7 @@ def publish_microvm(source_catalog: Path, environment_id: str, destination_catal
         root = source["overlaybd_root"]
         for lower in root["lowers"]:
             path, digest, size = _copy_object(Path(lower["file"]), store, ".commit",
-                                             lower["sha256"])
+                                             lower["sha256"], verification=verification)
             lower.update(file=str(path), sha256=digest, bytes=size)
         image = {"lowers": [{"file": lower["file"]} for lower in root["lowers"]], "upper": {}}
         path, digest = _publish_json(image, store)
@@ -220,7 +218,7 @@ def publish_microvm(source_catalog: Path, environment_id: str, destination_catal
         # Rebind only after verified byte-preserving publication, never infer
         # capabilities from the presence of an agent or a backend name.
         source['execution_contract']['artifact_revision'] = artifact_revision(source)
-    _atomic_catalog(destination_catalog.resolve(), environment_id, source)
+    _atomic_catalog(destination_catalog.resolve(), environment_id, source, verification)
     return {"environment_id": environment_id,
             "environment_sha256": MicroVMEnvironmentCatalog(destination_catalog).environment_digest(environment_id),
             "catalog": str(destination_catalog.resolve()),

@@ -592,7 +592,7 @@
       "state": "partial",
       "owner": "maintainer",
       "scope": "固定制品、发布目录、部分 fs-verity 对象及声明路径重绑定。",
-      "limits": "重复/历史实例恢复校验仍有全量读取；冷读取与通用 compaction 未闭环。",
+      "limits": "本地已有共享层在同次发布中源和目标各全读一次。新 Edge 进程首次加载全读一次。通用 compaction 与跨进程免扫描仍未闭环。",
       "sources": [
         {
           "path": "src/dsec/storage/publication.py"
@@ -617,7 +617,9 @@
       ],
       "evidence": [
         "EV-VERITY-COST",
-        "EV-ENV-1030"
+        "EV-ENV-1030",
+        "EV-PUBLICATION-READ-1124",
+        "EV-PUBLICATION-REUSE-1124"
       ],
       "roadmap": [
         "RM-101",
@@ -1570,6 +1572,40 @@
           "section": "2026-11-24 TASK-002 正式 API 下的会话文件与 HTTP"
         }
       ]
+    },
+    {
+      "id": "EV-PUBLICATION-READ-1124",
+      "title": "两个本地环境共享层发布与 Edge 接管的读取归因",
+      "date": "2026-11-24",
+      "date_kind": "run",
+      "kind": "linux",
+      "verdict": "passed",
+      "identity": "Installed wheel 6f914048 and Firecracker 1.17.0, two environments, local ext4 and one 48,201,728-byte shared EROFS layer.",
+      "scope": "Six publications, two Edge restarts over two live VMs. Reused content scanned four times per publication. Runtime recovery reused the per-process catalog validation. Both environments rejected the changed object.",
+      "limits": "Counters cover host artifact reads on this local filesystem. No remote storage, fleet benchmark or persistent receipt optimization.",
+      "records": [
+        {
+          "path": "docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md",
+          "section": "2026-11-24 TASK-003 共享 EROFS 层的重复校验"
+        }
+      ]
+    },
+    {
+      "id": "EV-PUBLICATION-REUSE-1124",
+      "title": "发布内复用校验的本地 Linux 对照",
+      "date": "2026-11-24",
+      "date_kind": "run",
+      "kind": "linux",
+      "verdict": "passed",
+      "identity": "Installed wheel 59204ca6 on ext4, using the TASK-003 Firecracker fixtures and probes.",
+      "scope": "Five hits each read the shared source and destination once. Two live VMs survived two Edge restarts. Both environments rejected replaced bytes. Private inputs and copies retired.",
+      "limits": "Single host with a warm shared layer on object hits. New objects still read three times. No cross-process receipt or remote performance claim.",
+      "records": [
+        {
+          "path": "docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md",
+          "section": "2026-11-24 TASK-023 本地发布校验复用"
+        }
+      ]
     }
   ],
   "work": [
@@ -1635,8 +1671,8 @@
       "id": "TASK-003",
       "title": "定位重复发布/接管的全量制品读取",
       "kind": "performance",
-      "state": "candidate",
-      "owner": "unassigned",
+      "state": "done",
+      "owner": "maintainer",
       "capabilities": [
         "CAP-PUBLICATION"
       ],
@@ -1654,7 +1690,9 @@
         "EV-DAX-1026",
         "EV-VERITY-COST"
       ],
-      "evidence": [],
+      "evidence": [
+        "EV-PUBLICATION-READ-1124"
+      ],
       "depends_on": [],
       "reopens": []
     },
@@ -2248,6 +2286,36 @@
       ],
       "evidence": [
         "EV-OSWORLD-UEFI-ACCEPTANCE-CLEANUP-1111"
+      ],
+      "reopens": []
+    },
+    {
+      "id": "TASK-023",
+      "title": "复用单次环境发布内的本地制品校验",
+      "kind": "performance",
+      "state": "done",
+      "owner": "maintainer",
+      "capabilities": [
+        "CAP-PUBLICATION"
+      ],
+      "delta": "将命中已有共享层的发布全读次数从四次降至两次。",
+      "reuse": "沿用 catalog 的文件身份和 SHA-256 校验、对象池硬链接提交、临时目录原子替换及 TASK-003 的两环境探针。",
+      "trigger": "TASK-003 的 Linux 实测定位到源和目标各有一遍重复哈希。",
+      "prior_evidence": [
+        "EV-PUBLICATION-READ-1124"
+      ],
+      "acceptance": [
+        "源和目标各全读一次，独立发布重新校验",
+        "在阶段边界替换文件时拒绝错误摘要，保持目录原子性",
+        "复测六次发布、两次 Edge 重启、两台 VM 接管与清理"
+      ],
+      "resources": "本地单测及 Linux ext4/KVM，两台 256 MiB VM。",
+      "stop_condition": "固定样本完成并记录校验失效、实际读取和回收结果。",
+      "depends_on": [
+        "TASK-003"
+      ],
+      "evidence": [
+        "EV-PUBLICATION-REUSE-1124"
       ],
       "reopens": []
     }

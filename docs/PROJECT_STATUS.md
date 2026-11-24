@@ -27,7 +27,7 @@
 | CAP-NETWORK：QEMU 独立网络与固定策略 | 限定范围已验收 | EV-QEMU-NETWORK | netns/TAP/TC eBPF、固定 DNS/公网允许、宿主/metadata/私网拒绝及身份化回收；边界：无 IPv6/ICMP/热策略/带宽整形或规模承诺。 |
 | CAP-STORAGE：EROFS/OverlayFS、OverlayBD/ublk、3FS 源 | 限定范围已验收 | EV-R3-1008 | 单机既有分层只读/私有写、本地与真实 3FS 源功能、外部 Rust OverlayBD/ublk 集成；边界：不是跨主机 3FS 可用性/性能；未通用化所有存储能力声明。 |
 | CAP-DAX：EROFS＋pmem/DAX 只读页共享 | 限定范围已验收 | EV-DAX-1026 | 受测 QEMU Container/FnCall 与单个 SWE-Gym 环境的本地只读共享和写隔离；边界：压缩层、3FS 直接 DAX、整机收益与 Docker 优势没有由此证明。 |
-| CAP-PUBLICATION：通用环境发布与完整性 | 部分实现/验收 | EV-VERITY-COST、EV-ENV-1030 | 固定制品、发布目录、部分 fs-verity 对象及声明路径重绑定；边界：重复/历史实例恢复校验仍有全量读取；冷读取与通用 compaction 未闭环。 |
+| CAP-PUBLICATION：通用环境发布与完整性 | 部分实现/验收 | EV-VERITY-COST、EV-ENV-1030、EV-PUBLICATION-READ-1124、EV-PUBLICATION-REUSE-1124 | 固定制品、发布目录、部分 fs-verity 对象及声明路径重绑定；边界：本地已有共享层在同次发布中源和目标各全读一次。新 Edge 进程首次加载全读一次。通用 compaction 与跨进程免扫描仍未闭环。 |
 | CAP-SNAPSHOT-REUSE：MicroVM 快照、prepared-state fork 和 ready 池 | 限定范围已验收 | EV-R3-1008、EV-NATIVE-1010 | 真实 MicroVM pause/restore、原状态接管、prepared-state 分叉隔离及 ready 租约交接；边界：不是 Container offload，也不是完整磁盘 pack_diff 发布。 |
 | CAP-PACK-DIFF：磁盘增量环境 pack_diff | 未实现 | — | 独立构建→增量导出→去除构建残留→不可变发布→新实例恢复的完整工作流；边界：目前只有快照/COW/fork 基础，完整用户路径未实现。 |
 | CAP-RESOURCES：资源准入、调度与可观测性 | 限定范围已验收 | EV-R3-1008、EV-ENV-1030 | Edge 物理预算、episode/API 配额分离、等待原因与所有者证明回收；边界：模型/GPU 不归 core 管理；全面成本/规模另验。 |
@@ -71,7 +71,7 @@
 
 ### TASK-003：定位重复发布/接管的全量制品读取
 
-状态：候选，未承诺；类型：`performance`；负责人：`unassigned`。
+状态：完成；类型：`performance`；负责人：`maintainer`。
 
 - 关联能力：CAP-PUBLICATION；依赖：无。
 - 新增价值：确定哪次校验导致额外读入，并据固定证据决定是否实现复用。
@@ -81,7 +81,7 @@
 - 资源：需要 Linux 和足够临时磁盘；不使用 GPU；先核对现有对象与缓存控制。
 - 验收：固定两个共享层环境，各运行一次首次验证和两次重复准备/接管；按校验阶段记录实际读字节、耗时及内容变更后的失效行为；保留中性/负结果，形成一个实施或停止决定
 - 停止条件：达到固定样本数即停止；没有证据前不扩展至 89 任务或改写完整性机制。
-- 完成证据：未完成，不得推断通过
+- 完成证据：EV-PUBLICATION-READ-1124
 
 ### TASK-004：独立故障域 HA 最终验收
 
@@ -360,6 +360,20 @@
 - 验收：Allow unrelated container additions and detect a stopped or restarted original container and a leaked test etcd；Rerun the official Trash task with the HTTPS SDK and obtain a passing original report
 - 停止条件：Obtain an original passing report and confirm the run’s resources are retired.
 - 完成证据：EV-OSWORLD-UEFI-ACCEPTANCE-CLEANUP-1111
+
+### TASK-023：复用单次环境发布内的本地制品校验
+
+状态：完成；类型：`performance`；负责人：`maintainer`。
+
+- 关联能力：CAP-PUBLICATION；依赖：TASK-003。
+- 新增价值：将命中已有共享层的发布全读次数从四次降至两次。
+- 复用：沿用 catalog 的文件身份和 SHA-256 校验、对象池硬链接提交、临时目录原子替换及 TASK-003 的两环境探针。
+- 触发原因：TASK-003 的 Linux 实测定位到源和目标各有一遍重复哈希。
+- 既有证据：EV-PUBLICATION-READ-1124
+- 资源：本地单测及 Linux ext4/KVM，两台 256 MiB VM。
+- 验收：源和目标各全读一次，独立发布重新校验；在阶段边界替换文件时拒绝错误摘要，保持目录原子性；复测六次发布、两次 Edge 重启、两台 VM 接管与清理
+- 停止条件：固定样本完成并记录校验失效、实际读取和回收结果。
+- 完成证据：EV-PUBLICATION-REUSE-1124
 
 ## 实现、测试与决策索引
 
@@ -857,3 +871,21 @@ OSWorld FullVM acceptance runner and Docker cleanup；运行日期：2026-11-11�
 - 覆盖：NoPlacement with empty admission list. One MicroVM, exact 69,888-byte session file, bounded HTTP 200 and one guest execution for two POST submissions using the same ID. Released VM and Node.
 - 限制：One Linux MicroVM, loopback HTTP, bounded response; external network paths and other backends outside this run.
 - 记录：[2026-11-24 TASK-002 正式 API 下的会话文件与 HTTP](../docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md)
+
+### EV-PUBLICATION-READ-1124
+
+两个本地环境共享层发布与 Edge 接管的读取归因；运行日期：2026-11-24；层级：`linux`；结论：`passed`。
+
+- 版本身份：Installed wheel 6f914048 and Firecracker 1.17.0, two environments, local ext4 and one 48,201,728-byte shared EROFS layer.
+- 覆盖：Six publications, two Edge restarts over two live VMs. Reused content scanned four times per publication. Runtime recovery reused the per-process catalog validation. Both environments rejected the changed object.
+- 限制：Counters cover host artifact reads on this local filesystem. No remote storage, fleet benchmark or persistent receipt optimization.
+- 记录：[2026-11-24 TASK-003 共享 EROFS 层的重复校验](../docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md)
+
+### EV-PUBLICATION-REUSE-1124
+
+发布内复用校验的本地 Linux 对照；运行日期：2026-11-24；层级：`linux`；结论：`passed`。
+
+- 版本身份：Installed wheel 59204ca6 on ext4, using the TASK-003 Firecracker fixtures and probes.
+- 覆盖：Five hits each read the shared source and destination once. Two live VMs survived two Edge restarts. Both environments rejected replaced bytes. Private inputs and copies retired.
+- 限制：Single host with a warm shared layer on object hits. New objects still read three times. No cross-process receipt or remote performance claim.
+- 记录：[2026-11-24 TASK-023 本地发布校验复用](../docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md)
