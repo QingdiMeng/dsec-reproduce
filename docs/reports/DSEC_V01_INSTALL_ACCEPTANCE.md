@@ -1421,3 +1421,26 @@ VM ID 读回各自的数据。对已缓存的测试目标以相同长度、不�
 Linux 安装版发布器和目录测试 20 项通过。工作区实测证据在
 `.runtime/publication-reuse-20261124/` 的 `trace.jsonl`、`recovery.json` 和
 `cleanup.json`。跨进程凭据与远端 3FS 成本仍需独立验收。
+
+## 2026-11-24 TASK-024 构建依赖的文件级增量发布
+
+实验机使用核心 wheel `3c749c467a09f3ee5da72155892166ee0982ad2dbb066f23f0468fd81a11d9af`、
+Firecracker 1.17、64 MiB Alpine 原生 ext4 父盘和 Linux e2fsprogs。
+客户端通过带证书校验的回环 HTTPS API 调用公开 SDK，使用真实 etcd；
+本次 Controller 与 NodeGateway 在同一进程，Edge 和 VM 单独运行。
+每次只启动一台 VM。本次验证制品交接和恢复，不测多机放置。
+
+1. Builder 写入可执行文件 `/opt/dsec-tools/answer` 和 `/tmp/reference-answer`，
+   前者返回 42。清单只批准可执行文件的模式、大小和 SHA-256。
+   SDK 捕获的增量共 349 B，解码后只有批准的文件和清单。
+2. 替换预期父摘要后，发布被拒绝，既有环境目录字节保持原样。有效增量成功发布，
+   父启动盘 SHA-256 与创建前一致。此次物化完整 64 MiB 子盘。
+3. 第一台子 VM 可直接执行依赖并返回 42，构建临时文件不存在。修改其中的程序并
+   停止 VM 后，新建父 VM 看不到程序或临时文件，第二台新子 VM 仍运行原程序返回 42。
+4. 四个不同的沙盒 ID 均达到 STOPPED，资源回收标志均为 true。临时 etcd 容器、
+   子对象库和 Edge socket 已回收。Linux 安装版 3 个针对性回归通过。
+   原始结果见工作区 `.runtime/pack-diff-20261124/report.json`。
+
+验收脚本的第一次启动沿用了修改父描述之前的能力声明，Edge 正确拒绝。第二次
+缺少 Edge 准入预算，无法获得可放置 Node。验收配置移除旧声明并显式传入独立
+实例的预算后完成上述检查。这两次尝试都未进入 VM 创建。

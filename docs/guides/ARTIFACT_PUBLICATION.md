@@ -4,6 +4,65 @@
 > refer to experiment files outside this repository. They are not runnable
 > instructions for the current release. Use the [documentation index](../README.md) for supported entry points.
 
+## 从隔离构建沙盒发布文件增量
+
+对于使用本地原生 ext4 根盘的 Firecracker 环境，发布者可以把构建沙盒中新增的
+普通文件打包，在另一台干净沙盒中直接使用。首次支持的是 `/opt` 下的文件，
+每份增量最多 64 个文件、合计 16 MiB，文件模式可选 0644 或 0755。
+
+父环境的维护者先确认 guest 的 `/opt` 确实由本地 boot ext4 提供，在父环境描述中
+声明 `"pack_diff_root": "direct-ext4-opt-v1"` 后再发布。使用 OverlayFS、挂载盘或
+OverlayBD 提供该路径的 guest 不适用。新增声明会改变环境版本，已有执行能力声明
+需要由维护者重新绑定并验证。以下步骤使用**已部署的父环境版本**。
+
+1. 发布者编写独立的 `policy.json`，指定父环境 ID、整个父环境条目的摘要，以及
+   每个目标文件的绝对路径、大小、模式和预期 SHA-256。父版本可由
+   `MicroVMEnvironmentCatalog(parent_catalog).environment_digest(parent_id)` 取得。
+   文件摘要取自发布者审查过的依赖或可重复构建产物。
+2. 使用项目的 HTTPS SDK 创建独立的 builder，执行自己的构建步骤，用
+   `capture` 导出文件。由调用方按正常生命周期停止 builder。
+
+```python
+import json
+from pathlib import Path
+from dsec.sdk import DSecMicroVMRunArgs
+from dsec_image.pack_diff import capture
+
+policy = json.loads(Path("policy.json").read_text())
+# client 是已打开、已认证的 DSecClient。demand 使用 Node 公布的资源配置。
+builder = await client.run_microvm(
+    DSecMicroVMRunArgs(environment_id=policy["parent"]), resource_demand=demand)
+try:
+    result = await builder.run_shell(build_command, timeout_ms=30000)
+    if result["exit_code"]:
+        raise RuntimeError("Dependency build failed")
+    await capture(builder, policy, Path("dependency.delta.json"))
+finally:
+    await builder.stop()
+```
+
+例如，文件项 `{"path":"/opt/tool","mode":493,"size":3,"sha256":"…"}` 表示
+一个 0755 的三字节可执行文件。顶层结构为
+`{"parent":"base","revision":"…","files":[…]}`，运行时用完整十六进制 SHA-256 替换省略号。
+
+3. 将增量交给受信发布者。发布者使用自己保管的 policy、同一父版本和
+   Linux e2fsprogs，在本地固定父盘的临时副本中创建新文件，再原子发布子目录条目。
+
+```bash
+python -m dsec_image.pack_diff --policy policy.json --delta dependency.delta.json \
+  --parent-catalog environments.json --child with-tool \
+  --destination environments.json --store /srv/dsec/artifacts
+```
+
+4. 按正常环境目录部署流程让 Node 加载新版本，使用
+   `DSecMicroVMRunArgs(environment_id="with-tool")` 启动。应用可直接执行
+   已发布的 `/opt/tool`。子环境如需向 Placement 声明原生能力，发布者需独立验证并绑定。
+
+传输制品只含批准的文件字节和清单。发布主机会物化完整的子 ext4 启动盘，
+沿用父环境的只读层。策略应独立于 builder 提供，敏感数据能否出现在获批文件中
+取决于发布者的内容审查。已存在目标、符号链接父目录和不匹配的父版本会终止发布。
+此版本覆盖新增文件，暂不支持覆盖、删除、整盘块差分、运行态内存或热加载目录。
+
 ## TASK-023 设计提案 · 单次发布内复用本地校验
 
 TASK-003 在两个共享 EROFS 层的环境上测到，发布器命中对象池后仍对源和目标各读两遍。

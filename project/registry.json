@@ -677,13 +677,23 @@
     {
       "id": "CAP-PACK-DIFF",
       "title": "磁盘增量环境 pack_diff",
-      "state": "planned",
+      "state": "partial",
       "owner": "maintainer",
-      "scope": "独立构建→增量导出→去除构建残留→不可变发布→新实例恢复的完整工作流。",
-      "limits": "目前只有快照/COW/fork 基础，完整用户路径未实现。",
-      "sources": [],
-      "tests": [],
-      "evidence": [],
+      "scope": "隔离 MicroVM 构建并捕获已批准的新增文件，绑定父版本，原子发布，独立子 VM 恢复。",
+      "limits": "本地原生 ext4 的 /opt 文件级增量，发布端物化完整子盘。任意磁盘块、覆盖/删除、OverlayBD 后端及在线目录更新仍待实现或验收。",
+      "sources": [
+        {
+          "path": "src/dsec_image/pack_diff.py"
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/unit/test_pack_diff.py"
+        }
+      ],
+      "evidence": [
+        "EV-PACK-DIFF-FILES-1124"
+      ],
       "roadmap": [
         "RM-103"
       ],
@@ -1606,6 +1616,23 @@
           "section": "2026-11-24 TASK-023 本地发布校验复用"
         }
       ]
+    },
+    {
+      "id": "EV-PACK-DIFF-FILES-1124",
+      "title": "原生 ext4 父环境的文件级增量发布与独立恢复",
+      "date": "2026-11-24",
+      "date_kind": "run",
+      "kind": "linux",
+      "verdict": "passed",
+      "identity": "Wheel 3c749c46, Firecracker 1.17, public HTTPS SDK and four sequential MicroVM identities.",
+      "scope": "Pinned add-only capture, incompatible parent rejection, executable child, clean original and independent sibling, STOPPED and reclaimed.",
+      "limits": "One host and etcd member, co-located controller and NodeGateway. Direct ext4 /opt, small approved files. No arbitrary block diff or deletion.",
+      "records": [
+        {
+          "path": "docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md",
+          "section": "2026-11-24 TASK-024 构建依赖的文件级增量发布"
+        }
+      ]
     }
   ],
   "work": [
@@ -2316,6 +2343,39 @@
       ],
       "evidence": [
         "EV-PUBLICATION-REUSE-1124"
+      ],
+      "reopens": []
+    },
+    {
+      "id": "TASK-024",
+      "title": "从构建 MicroVM 发布经筛选的环境文件增量",
+      "kind": "feature",
+      "state": "done",
+      "owner": "maintainer",
+      "capabilities": [
+        "CAP-PACK-DIFF",
+        "CAP-PUBLICATION"
+      ],
+      "delta": "发布端从隔离 builder 捕获明确批准的新依赖，在固定的本地原生 ext4 父环境上物化并发布独立子环境。",
+      "changed_boundary": "新增可移交的文件级增量和受信发布端入口。",
+      "reuse": "沿用 SDK native 文件、父环境摘要、私有写盘及内容寻址发布。",
+      "trigger": "RM-103 缺从隔离构建到新环境创建的可用路径。",
+      "prior_evidence": [
+        "EV-PUBLICATION-REUSE-1124",
+        "EV-NATIVE-1010"
+      ],
+      "acceptance": [
+        "捕获前核对构建实例与父版本，按发布者固定的文件名、模式、摘要筛选",
+        "拒绝错误父版本、错误内容和不完整发布",
+        "在 Linux 由新 VM 执行依赖，确认基线和构建残留隔离并回收资源"
+      ],
+      "resources": "普通账户、Linux ext4/KVM、已有 microVM 与 e2fsprogs。",
+      "stop_condition": "记录支持的父盘形态、增量和实机结果；运行态内存、任意路径删除及其他后端独立验收。",
+      "depends_on": [
+        "TASK-023"
+      ],
+      "evidence": [
+        "EV-PACK-DIFF-FILES-1124"
       ],
       "reopens": []
     }
