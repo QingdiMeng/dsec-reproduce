@@ -48,6 +48,45 @@ class Docker:
         raise AssertionError(argv)
 
 
+class CatalogHistoryTests(unittest.TestCase):
+    def setUp(self):
+        import hashlib
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name).resolve()
+        artifact=dict(path=str(self.root/'artifact'),sha256='a'*64)
+        self.environment=dict(mode='container',binary=artifact,kernel=artifact,template=artifact,
+            image='sha256:'+'a'*64,memory_mb=1024,cpu_count=1,inner_memory_mb=512,inner_cpus=1)
+        self.old=dict(schema=2,cid_pool=dict(root=str(self.root/'cids'),first=20000,last=20009),
+                      environments={'python':self.environment})
+        self.previous=self.root/'old.json';self.previous.write_text(json.dumps(self.old))
+        self.pin=dict(path=str(self.previous),sha256=hashlib.sha256(self.previous.read_bytes()).hexdigest())
+
+    def load(self,**changed):
+        value=dict(self.old,catalog_history=[self.pin],**changed)
+        path=self.root/'new.json';path.write_text(json.dumps(value));return ExecutionCatalog(path)
+
+    def test_explicit_additive_catalog_keeps_exact_old_environment_identity(self):
+        catalog=self.load(environments=dict(self.old['environments'],additional=dict(self.environment)))
+        self.assertTrue(catalog.accepts_digest('python',self.pin['sha256']))
+        self.assertFalse(catalog.accepts_digest('additional',self.pin['sha256']))
+        self.assertFalse(catalog.accepts_digest('python','b'*64))
+        self.assertTrue(catalog.accepts_digest('python',catalog.digest))
+        value=json.loads(catalog.path.read_text());value.pop('catalog_history');catalog.path.write_text(json.dumps(value))
+        self.assertFalse(ExecutionCatalog(catalog.path).accepts_digest('python',self.pin['sha256']))
+
+    def test_changed_environment_or_cid_owner_is_not_an_additive_upgrade(self):
+        for field,value in (('memory_mb',1536),('image','sha256:'+'b'*64),('inner_memory_mb',768),('disk_cache','direct')):
+            with self.subTest(field=field):
+                catalog=self.load(environments={'python':dict(self.environment,**{field:value})})
+                self.assertFalse(catalog.accepts_digest('python',self.pin['sha256']))
+        catalog=self.load(cid_pool=dict(self.old['cid_pool'],first=21000,last=21009))
+        self.assertFalse(catalog.accepts_digest('python',self.pin['sha256']))
+
+    def test_pinned_history_drift_rejects_before_backend_effects(self):
+        catalog=self.load();self.previous.write_text('{}')
+        with self.assertRaisesRegex(UnsupportedCapability,'Previous catalog changed'):catalog.unchanged()
+        with self.assertRaisesRegex(ValueError,'identity changed'):self.load()
+
+
 class GuestTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
@@ -264,7 +303,7 @@ class EdgeTests(unittest.TestCase):
             handle.stop.assert_called_once()
             with self.assertRaises(Exception):
                 handle.run_shell('touch x',request_id='b'*32)
-            self.assertEqual(control.call.call_count,1)
+            self.assertEqual(sum(call.args[0]=='execute' for call in control.call.call_args_list),1)
             restored = RequestJournal(temporary)
             self.assertEqual(restored.lookup('b'*32)['state'],'UNKNOWN')
 

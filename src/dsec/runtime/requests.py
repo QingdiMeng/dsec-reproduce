@@ -106,6 +106,18 @@ class RequestJournal:
             record["response"] = response
             atomic_json(path, record)
 
+    def recover_done(self, request_id, digest, result):
+        """Commit only a trusted backend's exact terminal proof; no effect replay."""
+        path=self._path(request_id)
+        with self.lock:
+            record=json.loads(path.read_text())
+            if record['digest']!=digest:raise ValueError('Recovery request identity changed')
+            if record['state']=='UNKNOWN' and record['operation']=='execute':
+                record.update(state='DONE',response=dict(ok=True,request_id=request_id,result=result),
+                              recovered_from_unknown=True)
+                atomic_json(path,record)
+            return self.lookup(request_id)
+
     def lookup(self, request_id):
         path = self._path(request_id)
         with self.lock:

@@ -21,6 +21,10 @@ if __package__:
 
 PORT = 5002
 MAX_FRAME = 2 * 1024 * 1024
+if __package__:
+    from dsec.contracts.execution import command_timeout, DEFAULT_COMMAND_TIMEOUT_MS
+else:
+    from execution_contract import command_timeout, DEFAULT_COMMAND_TIMEOUT_MS
 
 
 def receive(sock):
@@ -61,10 +65,58 @@ def save(path, value):
         os.close(fd)
 
 
+def command_children():
+    """Direct descendants of this helper thread, including adopted orphans."""
+    path=Path('/proc/self/task')/str(threading.get_native_id())/'children'
+    return {int(pid) for pid in path.read_text().split()}
+
+
+def subreaper():
+    # The standalone helper owns only one command. On Linux, orphaned double
+    # forks/setsid children must return here instead of escaping to container PID1.
+    import sys
+    if sys.platform!='linux':return None,set()
+    import ctypes
+    libc=ctypes.CDLL(None,use_errno=True);previous=ctypes.c_int()
+    if libc.prctl(37,ctypes.byref(previous),0,0,0) or libc.prctl(36,1,0,0,0):
+        raise OSError(ctypes.get_errno(),'Command descendant containment unavailable')
+    return (libc,previous.value),command_children()
+
+
+def retire_command(process, adoption, baseline, *, kill_tree=True):
+    try:
+        if kill_tree:
+            try:os.killpg(process.pid,signal.SIGKILL)
+            except ProcessLookupError:pass
+        process.wait(timeout=2)
+        if adoption is not None and kill_tree:
+            deadline=time.monotonic()+2
+            while True:
+                children=command_children()-baseline
+                if not children:break
+                for pid in children:
+                    try:os.kill(pid,signal.SIGKILL)
+                    except ProcessLookupError:pass
+                    try:os.waitpid(pid,os.WNOHANG)
+                    except ChildProcessError:pass
+                if time.monotonic()>=deadline:
+                    raise RuntimeError('Command descendant retirement not proved')
+                time.sleep(.01)
+    finally:
+        if adoption is not None:
+            libc,previous=adoption
+            if libc.prctl(36,previous,0,0,0):raise RuntimeError('Subreaper restoration failed')
+
+
 def bounded_shell(command, timeout_ms, output_limit):
     """Inner-container helper: drain output without buffering an unbounded pipe."""
-    process = subprocess.Popen(['/bin/sh', '-lc', command], cwd='/work',
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+    adoption,baseline=subreaper()
+    try:
+        process = subprocess.Popen(['/bin/sh', '-lc', command], cwd='/work',
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+    except BaseException:
+        if adoption is not None:adoption[0].prctl(36,adoption[1],0,0,0)
+        raise
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ)
     output = bytearray(); truncated = timed_out = False
@@ -102,20 +154,32 @@ def bounded_shell(command, timeout_ms, output_limit):
                     timed_out=timed_out, truncated=truncated)
     finally:
         selector.close(); process.stdout.close()
-        if process.poll() is None:
-            os.killpg(process.pid, signal.SIGKILL); process.wait(timeout=2)
+        # Timeout/failure retires all descendants, including new sessions. A
+        # successful Container shell may intentionally leave a background server;
+        # preserve that existing behavior. FnCall still resets the whole container.
+        import sys
+        retire_command(process,adoption,baseline,
+                       kill_tree=timed_out or process.poll() is None or sys.exc_info()[0] is not None)
 
 
 class Supervisor:
     def __init__(self, config, root='/var/lib/dsec-control', *, run=None):
         self.config = config
-        if (set(config) not in ({'mode', 'image', 'memory_mb', 'cpus'},
-                               {'mode', 'image', 'memory_mb', 'cpus', 'network'}) or
+        if (not {'mode','image','memory_mb','cpus'}<=set(config)<=
+                {'mode','image','memory_mb','cpus','network','layers','command_timeout_ms'} or
                 config['mode'] not in ('container', 'fncall') or
                 not re.fullmatch('sha256:[0-9a-f]{64}', config['image']) or
                 type(config['memory_mb']) is not int or config['memory_mb'] < 128 or
                 type(config['cpus']) not in (int, float) or not 0 < config['cpus'] <= 32):
             raise ValueError('Invalid pinned guest configuration')
+        self.command_timeout_ms=command_timeout(config.get('command_timeout_ms',DEFAULT_COMMAND_TIMEOUT_MS))
+        self.layers=config.get('layers')
+        if self.layers is not None:
+            if __package__:
+                from dsec.runtime.isolation import guest_layers
+            else:import guest_layers
+            self.layers=guest_layers.manifest(self.layers)
+            self.layer_proof=guest_layers.attest(self.layers)
         self.network=config.get('network')
         if self.network is not None and set(self.network)!={'dns','egress_proxy'}:
             raise ValueError('Pinned guest network policy required')
@@ -142,8 +206,14 @@ class Supervisor:
             '--security-opt', 'no-new-privileges', '--pids-limit', '128',
             '--memory', f"{self.config['memory_mb']}m", '--memory-swap', f"{self.config['memory_mb']}m",
             '--cpus', str(self.config['cpus']), '--user', '1000:1000', '--workdir', '/work',
+            '--mount', 'type=bind,src=/usr/local/bin/docker-init,dst=/dsec-init,readonly',
             '--mount', 'type=bind,src=/opt/dsec/docker_guest.py,dst=/dsec-helper.py,readonly',
+            '--mount', 'type=bind,src=/opt/dsec/execution_contract.py,dst=/execution_contract.py,readonly',
             '--tmpfs', '/tmp:rw,nosuid,nodev,size=64m,mode=1777']
+        if self.layers:
+            for target in self.layers['mounts']:
+                argv+=['--mount','type=bind,src=/var/lib/dsec-layers/merged'+target+',dst='+target+
+                       (',readonly' if mode=='fncall' else '')]
         if self.network and self.network['egress_proxy']:
             proxy=self.network['egress_proxy'];url=f"http://{proxy['ip']}:{proxy['port']}"
             for key in ('HTTP_PROXY','HTTPS_PROXY','http_proxy','https_proxy'):argv+=['--env',key+'='+url]
@@ -154,7 +224,7 @@ class Supervisor:
             argv += ['--mount', 'type=bind,src=/var/lib/dsec-work,dst=/work',
                 '--mount', 'type=bind,src=/opt/dsec/native-agent,dst=/dsec-native-agent,readonly',
                 '--mount', 'type=bind,src=/run/dsec-native,dst=/dsec-native']
-        argv += ['--entrypoint', '/bin/sh', self.config['image'], '-c', 'exec sleep infinity']
+        argv += ['--entrypoint', '/dsec-init', self.config['image'], '--', '/bin/sh', '-c', 'exec sleep infinity']
         self.container_id = self.run(argv)
         if not re.fullmatch('[0-9a-f]{64}', self.container_id):
             raise RuntimeError('Invalid guest container identity')
@@ -172,30 +242,35 @@ class Supervisor:
         result=dict(mode=self.config['mode'], image=self.config['image'],
                     container_id=self.container_id, state='RUNNING', network='isolated' if self.network else 'none',
                     memory_mb=self.config['memory_mb'], cpus=self.config['cpus'], transport_auth=guest_auth.FEATURE)
+        result['command_timeout_ms']=self.command_timeout_ms
         if self.network:result['network_policy']=self.network
+        if self.layers:
+            # Proof is checked before untrusted execution starts. Inner tasks
+            # cannot access the supervisor, pmem devices or backing mount paths.
+            result.update(self.layer_proof)
         return result
 
     def dispatch(self, value):
         if not isinstance(value, dict) or value.get('operation') not in ('status', 'execute', 'query'):
             raise ValueError('Unknown guest operation')
         operation = value['operation']
+        # Inspection never queues behind a command or FnCall cleanup. Atomic
+        # journal replacement exposes either the old intent or a complete proof.
+        if operation == 'status':
+            if set(value) != {'operation'}:raise ValueError('Unexpected status arguments')
+            return self.status()
+        rid = value.get('request_id')
+        if not isinstance(rid, str) or not re.fullmatch('[0-9a-f]{32}', rid):
+            raise ValueError('Request ID required')
+        path = self.root / (rid+'.json')
+        if operation == 'query':
+            if set(value) != {'operation','request_id'}:raise ValueError('Unexpected query arguments')
+            return json.loads(path.read_text()) if path.exists() else dict(state='NOT_FOUND',request_id=rid)
         with self.lock:
             self.status()
-            if operation == 'status':
-                if set(value) != {'operation'}:
-                    raise ValueError('Unexpected status arguments')
-                return self.status()
-            rid = value.get('request_id')
-            if not isinstance(rid, str) or not re.fullmatch('[0-9a-f]{32}', rid):
-                raise ValueError('Request ID required')
-            path = self.root / (rid+'.json')
-            if operation == 'query':
-                if set(value) != {'operation', 'request_id'}:
-                    raise ValueError('Unexpected query arguments')
-                return json.loads(path.read_text()) if path.exists() else dict(state='NOT_FOUND', request_id=rid)
             if (set(value) != {'operation','request_id','command','timeout_ms','output_limit'} or
                     not isinstance(value['command'], str) or len(value['command'].encode()) > 65536 or
-                    type(value['timeout_ms']) is not int or not 1 <= value['timeout_ms'] <= 30000 or
+                    type(value['timeout_ms']) is not int or not 1 <= value['timeout_ms'] <= self.command_timeout_ms or
                     type(value['output_limit']) is not int or not 1 <= value['output_limit'] <= 262144):
                 raise ValueError('Invalid bounded invocation')
             digest = hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
@@ -230,7 +305,8 @@ def serve_connection(supervisor, sock, address, auth_key, *, native=False):
     # Authentication must precede JSON parsing, dispatch, and connecting to the
     # inner native agent. A failed handshake never reaches an execution path.
     guest_auth.authenticate_server(sock, auth_key, 5001 if native else PORT)
-    sock.settimeout(40)
+    idle=max(40,supervisor.command_timeout_ms/1000+12) if native else 40
+    sock.settimeout(idle)
     if native:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as target:
             target.connect('/run/dsec-native/agent.sock')
@@ -238,7 +314,7 @@ def serve_connection(supervisor, sock, address, auth_key, *, native=False):
                 selector.register(sock, selectors.EVENT_READ, target)
                 selector.register(target, selectors.EVENT_READ, sock)
                 while True:
-                    events = selector.select(40)
+                    events = selector.select(idle)
                     if not events:
                         return
                     for key, _ in events:

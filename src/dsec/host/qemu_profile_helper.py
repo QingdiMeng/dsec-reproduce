@@ -31,12 +31,16 @@ def safe_path(value):
 
 def validate(cfg):
     required={'uid','prefix','runtime_root','binary','kernel','python','launcher','pins'}
-    if (set(cfg) not in (required,required|{'tun_root'})
+    if (not required<=set(cfg)<=required|{'tun_root','layer_root'}
             or type(cfg['uid']) is not int or cfg['uid']<=0
             or not re.fullmatch('dsec-[a-z0-9-]{1,40}',cfg['prefix'])):
         raise ValueError('Invalid fixed AppArmor broker configuration')
     for name in ('runtime_root','binary','kernel','python','launcher'):safe_path(cfg[name])
     if 'tun_root' in cfg:safe_path(cfg['tun_root'])
+    if 'layer_root' in cfg:
+        root=safe_path(cfg['layer_root']);private=safe_path(cfg['runtime_root'])
+        if len(root.parts)<3 or root.is_relative_to(private) or private.is_relative_to(root):
+            raise ValueError('Shared publication root must be scoped and disjoint from private state')
     if set(cfg['pins'])!={'binary','kernel','python','launcher'} or any(
             not re.fullmatch('[a-f0-9]{64}',value) for value in cfg['pins'].values()):
         raise ValueError('Pinned broker artifacts required')
@@ -47,9 +51,32 @@ def profile_name(cfg,sid):
     return cfg['prefix']+'-'+sid
 
 
-def render_profile(cfg,sid):
+def checked_layers(cfg,layers,*,check_files=False):
+    if not isinstance(layers,list) or len(layers)>8:raise ValueError('Bounded pinned shared layers required')
+    paths=set()
+    for layer in layers:
+        if (not isinstance(layer,dict) or set(layer)!={'path','sha256','bytes'}
+                or not isinstance(layer['sha256'],str) or not re.fullmatch('[a-f0-9]{64}',layer['sha256'])
+                or type(layer['bytes']) is not int or not 128*2**20<=layer['bytes']<=32*2**30
+                or layer['bytes']%(128*2**20)):
+            raise ValueError('Invalid shared layer pin')
+        path=safe_path(layer['path'])
+        if ('layer_root' not in cfg or path==Path(cfg['layer_root'])
+                or not path.is_relative_to(cfg['layer_root']) or str(path) in paths):
+            raise ValueError('Shared layer outside administrator-scoped publication root')
+        paths.add(str(path))
+        if check_files:
+            info=path.lstat()
+            if (path.resolve(strict=True)!=path or not stat.S_ISREG(info.st_mode)
+                    or info.st_mode & 0o222 or info.st_size!=layer['bytes']):
+                raise ValueError('Shared layer identity/permissions changed')
+    return layers
+
+
+def render_profile(cfg,sid,layers=None):
     validate(cfg);name=profile_name(cfg,sid);directory=str(Path(cfg['runtime_root'])/sid)
     tun = ('  "'+cfg['tun_root']+'/'+sid+'/tun" rw,\n') if 'tun_root' in cfg else ''
+    shared=''.join('  "'+layer['path']+'" mr,\n' for layer in checked_layers(cfg,layers or []))
     # No blanket file/execute/capability rule. A VMM has its own disk and two
     # private listeners; it cannot read the Edge's key/journals or another VM.
     return f'''profile {name} flags=(mediate_deleted) {{
@@ -80,7 +107,7 @@ def render_profile(cfg,sid):
   "{directory}/vmm.log" w,
   "{directory}/qmp.sock" rw,
   "{directory}/bootstrap.sock" rw,
-{tun}\
+{tun}{shared}\
   # Address-qualified denies also mask address-independent socket creation.
   # Allow creation and anonymous internal IPC; pathname sockets still require
   # the two exact file rules above. Abstract binds/connects remain ungranted.
@@ -161,17 +188,26 @@ def checked_config():
 
 
 def operate(cfg,operation,sid,arguments):
-    profile=profile_name(cfg,sid);text=render_profile(cfg,sid)
-    digest=hashlib.sha256(text.encode()).hexdigest()
+    profile=profile_name(cfg,sid)
     record_path=STATE/(sid+'.json');policy_path=STATE/(sid+'.profile')
     old=json.loads(record_path.read_text()) if record_path.exists() else None
     if old and (old.get('state') not in ('PREPARING','PREPARED','CLAIMED','RETIRED') or
-                set(old)!={'profile','sha256','state'}|({'process'} if old.get('state')=='CLAIMED' else set())):
+                set(old)!={'profile','sha256','state'}|({'process'} if old.get('state')=='CLAIMED' else set())|
+                ({'readonly_layers'} if 'readonly_layers' in old else set())):
         raise RuntimeError('Corrupt profile ledger; recovery required')
+    layers=old.get('readonly_layers',[]) if old else []
+    if operation=='prepare':
+        if len(arguments)>1 or (arguments and len(arguments[0])>16384):raise ValueError('Bounded prepare layers required')
+        requested=checked_layers(cfg,json.loads(arguments[0]) if arguments else [],check_files=True)
+        if old and requested!=layers:raise RuntimeError('Persisted shared layer identity changed')
+        layers=requested
+    checked_layers(cfg,layers)
+    text=render_profile(cfg,sid,layers);digest=hashlib.sha256(text.encode()).hexdigest()
     if old and (old['profile']!=profile or old['sha256']!=digest):
         raise RuntimeError('Persisted profile identity changed')
     def commit(state,**fields):
         value=dict(profile=profile,sha256=digest,state=state,**fields)
+        if layers:value['readonly_layers']=layers
         save(record_path,value);return value
     lines=lambda:Path('/sys/kernel/security/apparmor/profiles').read_text().splitlines()
     loaded=lambda:profile+' (enforce)' in lines()
@@ -179,7 +215,6 @@ def operate(cfg,operation,sid,arguments):
     if operation=='prepare':
         if old and old['state'] in ('CLAIMED','RETIRED'):
             raise RuntimeError('Profile already claimed or retired; no new launch')
-        if arguments:raise ValueError('Unexpected prepare arguments')
         if old is None:
             if policy_path.exists():raise RuntimeError('Profile ledger missing; recovery required')
             if present():raise RuntimeError('Unowned policy is already loaded')

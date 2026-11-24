@@ -183,6 +183,13 @@ class ContainerEdgeTests(unittest.IsolatedAsyncioTestCase):
         legacy = ContainerRuntime(dict(self.configuration, DSEC_CONTAINER_ROOT='/tmp/' + 'x' * 58))
         legacy._container_backend(self.spec)
 
+    async def test_typed_failed_create_and_cleanup_details_survive_local_rpc(self):
+        with patch.object(self.runtime,'dispatch',side_effect=ServiceError('ExecutionCreateFailed','guest failed',dict(cleanup_complete=True))):
+            with self.assertRaises(ServiceError) as raised:
+                await self.client.run_container(self.spec,request_id='a'*32)
+        self.assertEqual(raised.exception.kind,'ExecutionCreateFailed')
+        self.assertTrue(raised.exception.details['cleanup_complete'])
+
     async def test_client_needs_no_artifact_paths_and_close_leaves_sandbox_running(self):
         with patch.dict(os.environ, {}, clear=True):
             sandbox = await self.client.run_container(self.spec, request_id='a' * 32)

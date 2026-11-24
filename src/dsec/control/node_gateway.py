@@ -173,7 +173,7 @@ class NodeGateway:
                 response = proof['response']
                 if not response['ok']:
                     self._release_failed_create(receipt,proof)
-                    raise ServiceError(response['error']['type'], response['error']['message'])
+                    raise ServiceError(response['error']['type'], response['error']['message'],response['error'].get('details'))
                 return self._result(receipt, response['result'])
             if proof['state'] == 'UNKNOWN':
                 raise RequestOutcomeUnknown('Edge create outcome unknown; no replay or re-placement', receipt['request_id'])

@@ -13,6 +13,7 @@ from dsec.runtime.admission_guard import AdmissionDenied, check_create
 from dsec.runtime.container_edge import CONTAINER_OPERATIONS, CONTAINER_MUTATING
 from dsec.contracts.native import NATIVE_FEATURE, NATIVE_MUTATING, STREAM_FEATURE, SESSION_FILE_FEATURE, HTTP_FEATURE
 from dsec.contracts.errors import CommandOutcomeUnknown
+from dsec.contracts.rpc import ServiceError
 from dsec.runtime.sessions.service import dispatch_native
 from dsec.runtime.sessions.jobs import NativeJobs
 
@@ -155,7 +156,9 @@ class Handler(socketserver.StreamRequestHandler):
             if admitted:
                 return  # Side effect may have happened; PENDING is authoritative.
             error={"type":type(exc).__name__,"message":str(exc)}
-            if isinstance(exc, NodeAdmissionBusy):
+            if isinstance(exc,ServiceError):
+                error.update(type=exc.kind,details=exc.details)
+            elif isinstance(exc, NodeAdmissionBusy):
                 error['details']={'reasons':exc.reasons}
             response={"request_id":request_id,"ok":False,"error":error}
         try:

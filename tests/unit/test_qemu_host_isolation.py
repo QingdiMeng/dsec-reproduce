@@ -102,6 +102,30 @@ class BrokerTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'Corrupt'):self.retire()
         self.assertTrue(self.loaded)
 
+    def test_shared_layer_grant_is_fixed_at_prepare_and_retirement_needs_no_live_artifact(self):
+        pool=self.root/'layers';pool.mkdir();path=pool/'base.erofs'
+        with path.open('wb') as stream:stream.truncate(128*2**20)
+        path.chmod(0o444);self.cfg['layer_root']=str(pool)
+        layer=dict(path=str(path),sha256='a'*64,bytes=128*2**20)
+        prepared=broker.operate(self.cfg,'prepare',self.sid,[json.dumps([layer])])
+        self.assertEqual(prepared['readonly_layers'],[layer])
+        with self.assertRaisesRegex(RuntimeError,'layer identity changed'):
+            broker.operate(self.cfg,'prepare',self.sid,[json.dumps([dict(layer,sha256='b'*64)])])
+        self.assertEqual(self.claim()['readonly_layers'],[layer])
+        path.unlink();self.dead=True
+        self.assertEqual(self.retire()['state'],'RETIRED')
+        with self.assertRaisesRegex(RuntimeError,'fenced'):self.claim()
+
+    def test_no_layer_policy_remains_identical_and_outside_pool_cannot_be_granted(self):
+        old=broker.render_profile(self.cfg,self.sid)
+        self.cfg['layer_root']=str(self.root/'layers')
+        self.assertEqual(broker.render_profile(self.cfg,self.sid),old)
+        layer=dict(path='/etc/private.erofs',sha256='a'*64,bytes=128*2**20)
+        with self.assertRaisesRegex(ValueError,'scoped'):
+            broker.operate(self.cfg,'prepare',self.sid,[json.dumps([layer])])
+        self.run.assert_not_called()
+        self.assertFalse((self.root/(self.sid+'.json')).exists())
+
     def test_profile_is_per_instance_and_does_not_grant_exec_or_host_secrets(self):
         text=broker.render_profile(self.cfg,self.sid)
         self.assertIn('/'+self.sid+'/root.ext4',text)
@@ -123,6 +147,7 @@ class CgroupTests(unittest.TestCase):
     def fixture(self):
         temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)
         host=HostIsolation.__new__(HostIsolation);host.group=Path(temp.name).resolve()/'group';host.group.mkdir()
+        host.directory=Path(temp.name).resolve()
         host.record=None;host.created=True;host.broker=Mock(return_value=dict(state='RETIRED'))
         host.limits={'memory.max':'123','memory.swap.max':'0','memory.oom.group':'1','pids.max':'32','cpu.max':'100000 100000'}
         for key,value in host.limits.items():(host.group/key).write_text(value)
@@ -148,6 +173,16 @@ class CgroupTests(unittest.TestCase):
         host.record=dict(device=0,inode=0)
         with self.assertRaisesRegex(RuntimeError,'inode'):host.retire()
         host.broker.assert_not_called()
+
+    def test_retirement_saves_oom_and_peak_before_kernel_counters_disappear(self):
+        host=self.fixture();(host.group/'memory.peak').write_text('1342177280\n')
+        (host.group/'memory.events').write_text('max 9\noom 1\noom_kill 1\n')
+        def remove(group):
+            evidence=json.loads((host.directory/'host-resources-retired.json').read_text())
+            self.assertEqual(evidence['counters']['memory.peak'],'1342177280\n')
+            self.assertIn('oom_kill 1',evidence['counters']['memory.events'])
+            self.assertNotIn('io.stat',evidence['counters'])
+        with patch.object(Path,'rmdir',remove):host.retire()
 
     def test_attestation_rejects_a_vmm_outside_its_group(self):
         host=self.fixture();host.group=Path('/sys/fs/cgroup/dsec.service/vm-test')

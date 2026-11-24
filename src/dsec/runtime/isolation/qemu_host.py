@@ -49,6 +49,7 @@ class HostIsolation:
         self.limits={'memory.max':str((memory_mb+policy['memory_overhead_mb'])*2**20),
             'memory.swap.max':'0','memory.oom.group':'1','pids.max':str(policy['pids_max']),
             'cpu.max':f'{cpus*100000} 100000'}
+        self.readonly_layers=[]
         self.record=None
         self.created=False
 
@@ -83,16 +84,17 @@ class HostIsolation:
             (self.group/name).write_text(value)
         self.check_limits()
         info=self.group.stat()
-        prepared=self.broker('prepare')
+        prepared=self.broker('prepare',*([json.dumps(self.readonly_layers,separators=(',',':'))] if self.readonly_layers else []))
         if prepared['state']!='PREPARED':
             raise RuntimeError('AppArmor profile is not prepared')
         self.record=dict(policy=self.policy,group=str(self.group),device=info.st_dev,inode=info.st_ino,
                          limits=self.limits,profile=prepared['profile'],profile_sha256=prepared['sha256'])
+        if self.readonly_layers:self.record['readonly_layers']=self.readonly_layers
         return self.record
 
     def restore(self, record):
         if (record['policy']!=self.policy or record['group']!=str(self.group)
-                or record['limits']!=self.limits):
+                or record['limits']!=self.limits or record.get('readonly_layers',[])!=self.readonly_layers):
             raise ValueError('Saved host isolation policy changed')
         self.record=record
 
@@ -182,6 +184,13 @@ class HostIsolation:
                     raise RuntimeError('Host cgroup inode changed; retirement fenced')
             if 'populated 0' not in (self.group/'cgroup.events').read_text().splitlines():
                 raise RuntimeError('Host cgroup still populated; resources retained')
+            # Capture peak/OOM proof before removing the kernel's counters.
+            # Missing optional kernel fields stay absent, never invented as 0.
+            fields={name:(self.group/name).read_text() for name in
+                    ('memory.current','memory.peak','memory.events','memory.stat','cpu.stat','io.stat')
+                    if (self.group/name).is_file()}
+            atomic_json(self.directory/'host-resources-retired.json',
+                        dict(schema=1,cgroup=str(self.group),counters=fields))
         value=self.broker('retire')
         if value['state']!='RETIRED':
             raise RuntimeError('AppArmor profile retirement not proved')

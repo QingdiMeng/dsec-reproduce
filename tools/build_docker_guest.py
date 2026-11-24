@@ -18,12 +18,34 @@ from build_smoke_guest import export_image
 
 
 def build(base, docker_tools, task_image, source, output, *, mode, disk_mb=2048,
-          inner_memory_mb=512, inner_cpus=1, network=None):
+          inner_memory_mb=512, inner_cpus=1, network=None,storage_driver='vfs',
+          readonly_layers=(), shared_mounts=(),task_archive=None,task_archive_sha256=None,command_timeout_ms=30000):
+    from dsec.contracts.execution import command_timeout
+    command_timeout(command_timeout_ms)
     if mode not in ('fncall','container') or not 1024 <= disk_mb <= 8192:
         raise ValueError('Unsupported guest mode/size')
+    if storage_driver not in ('vfs','overlay2'):raise ValueError('Unsupported inner Docker storage driver')
     if network is not None:
         from dsec.runtime.isolation.network_policy import policy
         network=policy(network)
+    if (task_image is None)==(task_archive is None):raise ValueError('Select one pinned task image or archive')
+    if task_archive is not None:
+        import re
+        task_archive=Path(task_archive)
+        if (not task_archive.is_absolute() or task_archive.is_symlink() or task_archive.resolve(strict=True)!=task_archive
+                or not task_archive.is_file() or not isinstance(task_archive_sha256,str)
+                or not re.fullmatch('[a-f0-9]{64}',task_archive_sha256)):
+            raise ValueError('Canonical task archive and SHA-256 required')
+        with task_archive.open('rb') as stream:actual=hashlib.file_digest(stream,'sha256').hexdigest()
+        if actual!=task_archive_sha256:raise ValueError('Task archive identity mismatch')
+    elif task_archive_sha256 is not None:raise ValueError('Archive pin requires an archive')
+    layers=None
+    if readonly_layers:
+        from dsec.runtime.backends.qemu import QemuReadOnlyLayer
+        from dsec.storage.erofs import guest_manifest
+        for layer in readonly_layers:QemuReadOnlyLayer(**layer).verify()
+        layers=guest_manifest(readonly_layers,list(shared_mounts))
+    elif shared_mounts:raise ValueError('Shared mounts require EROFS/DAX layers')
     source = Path(source).resolve(strict=True)
     output = Path(output).resolve()
     if output.exists():
@@ -46,16 +68,26 @@ def build(base, docker_tools, task_image, source, output, *, mode, disk_mb=2048,
         trusted = root/'opt/dsec'; trusted.mkdir(parents=True)
         shutil.copy2(source/'src/dsec/runtime/backends/docker_guest.py', trusted/'docker_guest.py')
         shutil.copy2(source/'src/dsec/runtime/isolation/guest_auth.py', trusted/'guest_auth.py')
+        shutil.copy2(source/'src/dsec/contracts/execution.py', trusted/'execution_contract.py')
+        if layers is not None:
+            shutil.copy2(source/'src/dsec/runtime/isolation/guest_layers.py',trusted/'guest_layers.py')
+            shutil.copy2(source/'src/dsec/contracts/layers.py',trusted/'layer_contract.py')
+            (trusted/'layers.json').write_text(json.dumps(layers))
         if network is not None:
             shutil.copy2(source/'src/dsec/runtime/isolation/guest_network.py', trusted/'guest_network.py')
-        subprocess.run(['cc','-static','-DDSEC_NATIVE_STANDALONE','-O2','-Wall','-Wextra','-Werror',
+        subprocess.run(['cc','-static','-DDSEC_NATIVE_STANDALONE',f'-DDSEC_MAX_TIMEOUT_MS={command_timeout_ms}','-O2','-Wall','-Wextra','-Werror',
             '-o',str(trusted/'native-agent'),str(source/'guest_native.c')],check=True)
         # The task image also needs Python for the bounded command helper.
-        actual = subprocess.check_output(['docker','image','inspect',task_image,'--format','{{.Id}}'],text=True).strip()
-        if actual != task_image or not task_image.startswith('sha256:') or len(task_image) != 71:
-            raise ValueError('Exact already-local task image ID required')
-        with (trusted/'task.tar').open('wb') as stream:
-            subprocess.run(['docker','save',task_image],stdout=stream,check=True)
+        if task_archive is None:
+            actual = subprocess.check_output(['docker','image','inspect',task_image,'--format','{{.Id}}'],text=True).strip()
+            if actual != task_image or not task_image.startswith('sha256:') or len(task_image) != 71:
+                raise ValueError('Exact already-local task image ID required')
+            with (trusted/'task.tar').open('wb') as stream:
+                subprocess.run(['docker','save',task_image],stdout=stream,check=True)
+        else:
+            shutil.copyfile(task_archive,trusted/'task.tar')
+            with (trusted/'task.tar').open('rb') as stream:actual=hashlib.file_digest(stream,'sha256').hexdigest()
+            if actual!=task_archive_sha256:raise ValueError('Task archive identity mismatch')
         # Containerd-backed Docker may expose a manifest ID on the host while
         # classic Docker identifies the loaded image by its configuration blob.
         # Derive that exact identity from the pinned exported archive, not a tag.
@@ -68,8 +100,9 @@ def build(base, docker_tools, task_image, source, output, *, mode, disk_mb=2048,
             if len(config_blob) > 8*1024**2:
                 raise ValueError('Oversized task image config')
             inner_image = 'sha256:'+hashlib.sha256(config_blob).hexdigest()
-        config=dict(mode=mode,image=inner_image,memory_mb=inner_memory_mb,cpus=inner_cpus)
+        config=dict(mode=mode,image=inner_image,memory_mb=inner_memory_mb,cpus=inner_cpus,command_timeout_ms=command_timeout_ms)
         if network is not None:config['network']=network
+        if layers is not None:config['layers']=layers
         (trusted/'config.json').write_text(json.dumps(config))
         for name in ('proc','sys','dev','tmp','run','var/lib/dsec-work'):
             (root/name).mkdir(parents=True,exist_ok=True)
@@ -98,6 +131,11 @@ docker --host=unix:///run/dsec-docker/docker.sock load -i /opt/dsec/task.tar
 exec python3 -B /opt/dsec/docker_guest.py serve
 ''')
         init.chmod(0o755)
+        if storage_driver!='vfs':
+            init.write_text(init.read_text().replace('--storage-driver=vfs','--storage-driver='+storage_driver,1))
+        if layers is not None:
+            init.write_text(init.read_text().replace('dockerd --host=',
+                'python3 -B /opt/dsec/guest_layers.py /opt/dsec/layers.json\ndockerd --host=',1))
         if network is not None:
             init.write_text(init.read_text().replace('dockerd --host=',
                 'python3 -B /opt/dsec/guest_network.py /opt/dsec/config.json\ndockerd --host=',1))
@@ -110,19 +148,31 @@ exec python3 -B /opt/dsec/docker_guest.py serve
         digest = hashlib.file_digest(stream,'sha256').hexdigest()
     return dict(template=str(output),sha256=digest,mode=mode,base_image=base,
         docker_tools_image=docker_tools,task_image=task_image,inner_image=inner_image,
-        bytes=output.stat().st_size,network=network or False)
+        task_archive=str(task_archive) if task_archive else None,task_archive_sha256=task_archive_sha256,
+        bytes=output.stat().st_size,network=network or False,storage_driver=storage_driver,command_timeout_ms=command_timeout_ms,
+        readonly_layers=list(readonly_layers),shared_mounts=list(shared_mounts))
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('base','docker-tools','task-image','source','out','mode'):
+    for name in ('base','docker-tools','source','out','mode'):
         parser.add_argument('--'+name,required=True)
+    task=parser.add_mutually_exclusive_group(required=True)
+    task.add_argument('--task-image')
+    task.add_argument('--task-archive',type=Path)
+    parser.add_argument('--task-archive-sha256')
     parser.add_argument('--disk-mb',type=int,default=2048)
+    parser.add_argument('--command-timeout-ms',type=int,default=30000)
+    parser.add_argument('--storage-driver',choices=('vfs','overlay2'),default='vfs')
     parser.add_argument('--network-policy',type=Path)
+    parser.add_argument('--readonly-layers',type=Path,help='JSON list of pinned EROFS/DAX layer artifacts, bottom first')
+    parser.add_argument('--shared-mount',action='append',default=[],help='Composed directory exposed inside the task')
     args = parser.parse_args()
     print(json.dumps(build(args.base,args.docker_tools,args.task_image,args.source,args.out,
-                           mode=args.mode,disk_mb=args.disk_mb,
-                           network=json.loads(args.network_policy.read_text()) if args.network_policy else None)))
+                           mode=args.mode,disk_mb=args.disk_mb,storage_driver=args.storage_driver,
+                           network=json.loads(args.network_policy.read_text()) if args.network_policy else None,
+                           readonly_layers=json.loads(args.readonly_layers.read_text()) if args.readonly_layers else (),
+                           shared_mounts=args.shared_mount,task_archive=args.task_archive,task_archive_sha256=args.task_archive_sha256,command_timeout_ms=args.command_timeout_ms)))
 
 
 if __name__ == '__main__':

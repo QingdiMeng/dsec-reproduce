@@ -8,6 +8,16 @@ from dataclasses import dataclass
 from typing import NotRequired, Protocol, TypedDict
 
 
+DEFAULT_COMMAND_TIMEOUT_MS = 30000
+MAX_COMMAND_TIMEOUT_MS = 300000
+
+
+def command_timeout(value):
+    if type(value) is not int or not 1 <= value <= MAX_COMMAND_TIMEOUT_MS:
+        raise ValueError('Command timeout ceiling must be 1..300000 milliseconds')
+    return value
+
+
 @dataclass(frozen=True)
 class ShellRequest:
     """Value only; the Edge validates backend limits before dispatch."""

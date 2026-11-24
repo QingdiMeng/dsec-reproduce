@@ -127,6 +127,32 @@ class QemuTests(unittest.TestCase):
             with self.assertRaises((ValueError, UnsupportedCapability)):
                 QemuVM(config, '/not-created')
 
+    def test_startup_budget_is_bounded_and_distinct_from_qmp_readiness(self):
+        for timeout in (True,0,241,float('inf'),float('nan')):
+            with self.assertRaises(ValueError):replace(self.config,startup_timeout_s=timeout).validate()
+        self.instrument();self.vm.config=replace(self.config,startup_timeout_s=30)
+        clock=[0];attempts=[];self.vm._provision_channel=Mock()
+        def ready():
+            attempts.append(True)
+            if len(attempts)==1:clock[0]=20;raise ConnectionRefusedError('task still importing')
+            return {}
+        self.vm.ready_probe=ready
+        with patch('dsec.runtime.backends.qemu.time.monotonic',side_effect=lambda:clock[0]),patch('dsec.runtime.backends.qemu.time.sleep'):
+            self.assertEqual(self.vm.boot()['state'],'RUNNING')
+        self.vm._provision_channel.assert_called_once_with(deadline=30)
+        self.assertEqual(self.vm.record['startup_timeout_s'],30)
+
+    def test_boot_auth_ack_uses_the_same_startup_deadline(self):
+        from dsec.runtime.isolation.guest_auth import BOOT_ACK
+        self.vm.auth_key=b'a'*32;sock=Mock();context=Mock()
+        context.__enter__=Mock(return_value=sock);context.__exit__=Mock(return_value=False)
+        with patch('dsec.runtime.backends.qemu.socket.socket',return_value=context), \
+                patch('dsec.runtime.backends.qemu.time.monotonic',return_value=10), \
+                patch('dsec.runtime.backends.qemu.read_exact',return_value=BOOT_ACK) as read:
+            self.vm._provision_channel(deadline=40)
+        sock.settimeout.assert_called_once_with(30)
+        read.assert_called_once_with(sock,len(BOOT_ACK),deadline=40)
+
     def test_private_directory_and_artifact_identity_required(self):
         self.config.template.verify()
         Path(self.config.template.path).write_bytes(b'changed')
@@ -153,6 +179,22 @@ class QemuTests(unittest.TestCase):
         # QEMU rejects these options with fd=; only the root broker creates
         # the TAP and decides its header mode. No helper/script fallback.
         self.assertFalse(set(options)&{'ifname','script','downscript','vnet_hdr','helper','queues','fds','vhostfds'})
+
+    def test_direct_disk_cache_bypasses_host_pages_without_disabling_flushes(self):
+        from dataclasses import replace
+        self.vm.detach();vm=QemuVM(replace(self.config,disk_cache='direct'),self.path);self.addCleanup(vm.detach)
+        args=vm._argv('fixture-uuid',vm._artifacts());disk=json.loads(args[args.index('-blockdev')+1])
+        self.assertEqual(disk['cache'],{'direct':True,'no-flush':False})
+        self.assertEqual(disk['file']['cache'],disk['cache'])
+        self.assertEqual(vm._initial_record(vm._artifacts())['disk_cache'],'direct')
+        with self.assertRaises(ValueError):replace(self.config,disk_cache='unsafe').validate()
+
+    def test_adoption_cannot_change_saved_disk_cache_policy(self):
+        from dataclasses import replace
+        self.instrument();self.vm.boot();self.vm.detach()
+        vm=QemuVM(replace(self.config,disk_cache='direct'),self.path);self.addCleanup(vm.detach)
+        with self.assertRaises(ValueError):vm.adopt()
+        vm.detach()
 
     def test_rejected_old_tap_arguments_are_readable_only_after_complete_retirement(self):
         self.vm.host=Mock(policy={});self.vm.network=Mock(policy={})

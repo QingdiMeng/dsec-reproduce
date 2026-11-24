@@ -18,6 +18,10 @@ TLC_VERSION = "1.7.4"
 TLC_URL = f"https://github.com/tlaplus/tlaplus/releases/download/v{TLC_VERSION}/tla2tools.jar"
 TLC_SHA256 = "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 CASES = (
+    ("qemu-command", "QemuCommandRecovery", "none", None),
+    ("qemu-command-replay", "QemuCommandRecovery", "replay", "AtMostOnce"),
+    ("qemu-command-unmatched", "QemuCommandRecovery", "unmatched", "DoneRequiresExactProof"),
+    ("qemu-command-blocking", "QemuCommandRecovery", "blocking_inspection", "InspectionDoesNotQueue"),
     ("qemu-network-lease", "QemuNetworkLease", "none", None),
     ("qemu-network-early-up", "QemuNetworkLease", "early_up", "ActiveHasPolicy"),
     ("qemu-network-repeat-lend", "QemuNetworkLease", "repeat_lend", "OneShotDescriptor"),

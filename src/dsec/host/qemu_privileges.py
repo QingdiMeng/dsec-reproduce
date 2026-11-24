@@ -16,7 +16,7 @@ from dsec.runtime.backends.qemu_container import ExecutionCatalog
 from dsec.runtime.isolation import qemu_launch
 
 
-def render(cfg,out,user,*,clang='clang'):
+def render(cfg,out,user,*,clang='clang',layer_root=None):
     account=pwd.getpwnam(user);group=grp.getgrnam('kvm')
     if account.pw_uid!=os.getuid() or account.pw_uid<=0 or not re.fullmatch('[a-z_][a-z0-9_-]{0,31}',user):
         raise ValueError('Render as the named unprivileged runtime user')
@@ -41,6 +41,20 @@ def render(cfg,out,user,*,clang='clang'):
         pins={**{name:item['sha256'] for name,item in artifacts.items()},
               'python':hashlib.sha256(Path(python).read_bytes()).hexdigest(),
               'launcher':hashlib.sha256(Path(launcher).read_bytes()).hexdigest()})
+    shared=[layer for item in catalog.environments.values() for layer in item.get('readonly_layers',[])]
+    if layer_root is not None:
+        root=Path(layer_root)
+        if root.is_symlink() or root.resolve(strict=True)!=root or not root.is_dir():
+            raise ValueError('Canonical existing shared publication root required')
+        settings['layer_root']=str(root)
+    if shared:
+        if layer_root is None:
+            raise ValueError('Explicit shared layer publication root required; render with layer_root')
+        from dsec.runtime.backends.qemu import QemuReadOnlyLayer
+        for layer in shared:
+            qemu_profile_helper.checked_layers(settings,[layer],check_files=True)
+            if not Path(layer['path']).is_relative_to(settings['layer_root']):raise ValueError('Layer outside publication root')
+            QemuReadOnlyLayer(**layer).verify()
     network_contents={};network_specs=[];network_state=None
     if catalog.network is not None:
         from dsec.host import qemu_network_helper
@@ -102,7 +116,8 @@ def render(cfg,out,user,*,clang='clang'):
             "compile(blobs['profile-helper.py'], 'profile-helper.py', 'exec')\n    compile(blobs['network-helper.py'], 'network-helper.py', 'exec')")
     compile(source,helper,'exec');compile(installer,'install-qemu-privileges.py','exec')
     contents['install-qemu-privileges.py']=installer.encode()
-    contents['sample.profile']=qemu_profile_helper.render_profile(settings,'a'*32).encode()
+    example_layers=next((item['readonly_layers'] for item in catalog.environments.values() if item.get('readonly_layers')),[])
+    contents['sample.profile']=qemu_profile_helper.render_profile(settings,'a'*32,example_layers).encode()
     destination=Path(out).resolve();destination.mkdir(mode=0o700,parents=True,exist_ok=False)
     for filename,blob in contents.items():
         path=destination/filename;path.write_bytes(blob);path.chmod(0o600)

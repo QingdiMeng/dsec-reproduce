@@ -20,7 +20,8 @@ from dsec.contracts.errors import RequestOutcomeUnknown
 from dsec.contracts.resources import NodeDemand
 from dsec.contracts.sandbox import UnsupportedCapability
 from dsec.runtime.backends.docker_guest import PORT, receive, send
-from dsec.runtime.backends.qemu import QemuArtifact, QemuConfig, QemuVM
+from dsec.contracts.execution import command_timeout, DEFAULT_COMMAND_TIMEOUT_MS
+from dsec.runtime.backends.qemu import QemuArtifact, QemuConfig, QemuVM, QemuReadOnlyLayer
 from dsec.runtime.isolation.vsock import CIDLease, CIDLeaseConflict, QemuCIDPool
 from dsec.runtime.isolation.guest_auth import FEATURE, authenticate_client, credential
 from dsec.runtime.requests import RequestJournal
@@ -50,13 +51,30 @@ class ExecutionCatalog:
         self.digest = hashlib.sha256(data).hexdigest()
         value = json.loads(data)
         required={'schema','cid_pool','environments'}
-        if (not required<=set(value)<=required|{'host_isolation','network'} or value['schema'] != 2 or
+        if (not required<=set(value)<=required|{'host_isolation','network','catalog_history'} or value['schema'] != 2 or
                 not isinstance(value['environments'], dict) or not value['environments']):
             raise ValueError('QEMU execution catalog schema 2 with authenticated guests required; drain old instances')
         if set(value['cid_pool']) != {'root', 'first', 'last'}:
             raise ValueError('Explicit shared CID pool required')
         self.pool = value['cid_pool']
         self.environments = value['environments']
+        history=value.get('catalog_history',[])
+        if not isinstance(history,list) or len(history)>16:raise ValueError('Bounded explicit catalog history required')
+        self.snapshots=[]
+        for pin in history:
+            if (not isinstance(pin,dict) or set(pin)!={'path','sha256'} or
+                    not isinstance(pin['sha256'],str) or not re.fullmatch('[a-f0-9]{64}',pin['sha256'])):
+                raise ValueError('Pinned previous catalog required')
+            path=Path(pin['path'])
+            if not path.is_absolute() or path.is_symlink() or path.resolve(strict=True)!=path:
+                raise ValueError('Canonical previous catalog required')
+            blob=path.read_bytes()
+            if hashlib.sha256(blob).hexdigest()!=pin['sha256']:raise ValueError('Previous catalog identity changed')
+            previous=json.loads(blob)
+            if not isinstance(previous,dict) or not isinstance(previous.get('environments'),dict):
+                raise ValueError('Invalid previous catalog')
+            self.snapshots.append((path,pin['sha256'],previous))
+        self.value=value
         self.host_isolation = None
         if 'host_isolation' in value:
             from dsec.runtime.isolation.qemu_host import configuration
@@ -67,11 +85,13 @@ class ExecutionCatalog:
             self.network=configuration(value['network'])
             if self.host_isolation is None:raise ValueError('Networked environments require host_isolation')
         for name, item in self.environments.items():
+            fields={'mode','binary','kernel','template','image','memory_mb','cpu_count','inner_memory_mb','inner_cpus'}
             if (not re.fullmatch('[a-z0-9][a-z0-9.-]{0,127}', name) or
-                    set(item) not in ({'mode','binary','kernel','template','image',
-                                  'memory_mb','cpu_count','inner_memory_mb','inner_cpus'},
-                                  {'mode','binary','kernel','template','image','memory_mb','cpu_count',
-                                   'inner_memory_mb','inner_cpus','network'}) or
+                    not fields<=set(item)<=fields|{'network','startup_timeout_s','disk_cache','readonly_layers','shared_mounts','command_timeout_ms'} or
+                    item.get('disk_cache','buffered') not in ('buffered','direct') or
+                    type(item.get('startup_timeout_s',15)) not in (int,float) or
+                    not math.isfinite(item.get('startup_timeout_s',15)) or
+                    not 1<=item.get('startup_timeout_s',15)<=240 or
                     item.get('network','none') not in ('none','isolated') or
                     item['mode'] not in ('container','fncall') or
                     not re.fullmatch('sha256:[0-9a-f]{64}', item['image']) or
@@ -82,6 +102,19 @@ class ExecutionCatalog:
                     type(item['inner_cpus']) not in (int,float) or
                     not math.isfinite(item['inner_cpus']) or not 0 < item['inner_cpus'] <= item['cpu_count']):
                 raise ValueError('Invalid execution environment')
+            command_timeout(item.get('command_timeout_ms',DEFAULT_COMMAND_TIMEOUT_MS))
+            layers=item.get('readonly_layers',[])
+            if not isinstance(layers,list):raise ValueError('Explicit ordered pmem layers required')
+            try:
+                typed=tuple(QemuReadOnlyLayer(**layer) for layer in layers)
+            except (TypeError,ValueError) as exc:raise ValueError('Invalid pinned pmem layers') from exc
+            if layers:
+                from dsec.contracts.layers import manifest
+                manifest(dict(schema=1,layers=[dict(sha256=layer['sha256'],bytes=layer['bytes']) for layer in layers],
+                              mounts=item.get('shared_mounts',[])))
+            elif item.get('shared_mounts'):raise ValueError('Shared mounts require pmem layers')
+            QemuConfig(*(QemuArtifact(**item[key]) for key in ('binary','kernel','template')),
+                       guest_cid=1024,memory_mb=item['memory_mb'],readonly_layers=typed).validate()
             if item.get('network')=='isolated' and self.network is None:
                 raise ValueError('Isolated environment requires a pinned network policy')
             for key in ('binary','kernel','template'):
@@ -96,6 +129,19 @@ class ExecutionCatalog:
     def unchanged(self):
         if hashlib.sha256(self.path.read_bytes()).hexdigest() != self.digest:
             raise UnsupportedCapability('Execution catalog changed; restart Edge explicitly')
+        for path,digest,_ in self.snapshots:
+            if hashlib.sha256(path.read_bytes()).hexdigest()!=digest:
+                raise UnsupportedCapability('Previous catalog changed; no effects permitted')
+
+    def accepts_digest(self,environment_id,digest):
+        if digest==self.digest:return True
+        # Explicit additive upgrades only. There is no transitive history trust
+        # and no permission to reinterpret an old instance under changed limits,
+        # image/artifacts, CID ownership or host/network policy.
+        return any(old_digest==digest and
+            all(previous.get(key)==self.value.get(key) for key in ('schema','cid_pool','host_isolation','network')) and
+            previous.get('environments',{}).get(environment_id)==self.environments[environment_id]
+            for _,old_digest,previous in self.snapshots)
 
 
 class QemuContainerBackend:
@@ -125,7 +171,9 @@ class QemuContainerBackend:
 
     def _config(self, cid):
         return QemuConfig(**{key:QemuArtifact(**self.item[key]) for key in ('binary','kernel','template')},
-            guest_cid=cid, memory_mb=self.item['memory_mb'], cpu_count=self.item['cpu_count'])
+            guest_cid=cid, memory_mb=self.item['memory_mb'], cpu_count=self.item['cpu_count'],
+            startup_timeout_s=self.item.get('startup_timeout_s',15),disk_cache=self.item.get('disk_cache','buffered'),
+            readonly_layers=tuple(QemuReadOnlyLayer(**layer) for layer in self.item.get('readonly_layers',[])))
 
     def _directory(self, sid):
         if not isinstance(sid, str) or not re.fullmatch('[0-9a-f]{32}', sid):
@@ -141,7 +189,7 @@ class QemuContainerBackend:
             QemuCIDPool._private_directory(directory)
             record = json.loads((directory/'execution.json').read_text())
             if (set(record) != {'schema','catalog_sha256','environment_id','lease','auth_sha256'} or
-                    record['schema'] != 2 or record['catalog_sha256'] != self.catalog.digest or
+                    record['schema'] != 2 or not self.catalog.accepts_digest(self.environment_id,record['catalog_sha256']) or
                     record['environment_id'] != self.environment_id):
                 raise ValueError('Execution descriptor identity mismatch')
             lease = CIDLease(**record['lease'])
@@ -175,7 +223,12 @@ class QemuContainerBackend:
         value = control.call('status')
         expected = dict(mode=self.item['mode'], image=self.item['image'], network='isolated' if self.network else 'none',
                         memory_mb=self.item['inner_memory_mb'], cpus=self.item['inner_cpus'], transport_auth=FEATURE)
+        if 'command_timeout_ms' in self.item:expected['command_timeout_ms']=self.item['command_timeout_ms']
         if self.network:expected['network_policy']=self.network['policy']
+        if self.item.get('readonly_layers'):
+            expected['readonly_layers']=[dict(sha256=layer['sha256'],bytes=layer['bytes'],dax=True)
+                                         for layer in self.item['readonly_layers']]
+            expected['shared_mounts']=self.item['shared_mounts']
         if any(value.get(key) != expected_value for key,expected_value in expected.items()):
             raise ValueError('Guest execution identity mismatch')
         return value
@@ -260,7 +313,8 @@ class QemuContainerBackend:
         if self.item['mode'] != 'container':
             raise UnsupportedCapability('FnCall has no persistent native session')
         handle = self.attach(sid)
-        return NativeChannel(guest_cid=handle.lease.cid, auth_key=handle.control.auth_key)
+        return NativeChannel(guest_cid=handle.lease.cid, auth_key=handle.control.auth_key,
+                             max_timeout_ms=self.item.get('command_timeout_ms',DEFAULT_COMMAND_TIMEOUT_MS))
 
     def query_action(self, sid, request_id):
         return self._handle(sid).query_request(request_id)
@@ -292,7 +346,7 @@ class QemuContainer:
         if request_id is None:
             raise ValueError('Request identity required for QEMU execution')
         if (not isinstance(command,str) or len(command.encode()) > 65536 or
-                type(timeout_ms) is not int or not 1 <= timeout_ms <= 30000 or
+                type(timeout_ms) is not int or not 1 <= timeout_ms <= self.backend.item.get('command_timeout_ms',DEFAULT_COMMAND_TIMEOUT_MS) or
                 type(output_limit) is not int or not 1 <= output_limit <= 262144):
             raise ValueError('Command outside supported execution limits')
         with self.vm.lock:
@@ -304,26 +358,40 @@ class QemuContainer:
             if self.vm.status()['state'] != 'RUNNING':
                 self.journal.unknown(request_id)
                 raise RuntimeError('Execution slot is not running')
-            try:
-                proof = self.control.call('execute',request_id=request_id, command=command,
-                                          timeout_ms=timeout_ms,output_limit=output_limit)
-                if proof.get('state') == 'DONE' and proof.get('response',{}).get('ok'):
-                    result = proof['response']['result']
-                    self.journal.finish(request_id,dict(ok=True,request_id=request_id,result=result))
-                    return result
-                raise RequestOutcomeUnknown('Guest command result unknown; query instead of replay',request_id)
-            except BaseException as exc:
-                if self.journal.lookup(request_id)['state'] == 'PENDING':
-                    self.journal.unknown(request_id,reason=f'{type(exc).__name__}: {exc}')
-                # A function cannot return to service with uncertain cleanup.
-                if self.backend.item['mode'] == 'fncall':
-                    self.stop()
-                if not isinstance(exc, Exception):
-                    raise
-                raise RequestOutcomeUnknown('Guest execution/cleanup uncertain',request_id) from exc
+        try:
+            proof = self.control.call('execute',request_id=request_id, command=command,
+                                      timeout_ms=timeout_ms,output_limit=output_limit)
+            if proof.get('state') == 'DONE' and proof.get('response',{}).get('ok'):
+                result = proof['response']['result']
+                self.journal.finish(request_id,dict(ok=True,request_id=request_id,result=result))
+                return result
+            raise RequestOutcomeUnknown('Guest command result unknown; query instead of replay',request_id)
+        except BaseException as exc:
+            if self.journal.lookup(request_id)['state'] == 'PENDING':
+                self.journal.unknown(request_id,reason=f'{type(exc).__name__}: {exc}')
+            # A function cannot return to service with uncertain cleanup.
+            if self.backend.item['mode'] == 'fncall':
+                self.stop()
+            if not isinstance(exc, Exception):
+                raise
+            raise RequestOutcomeUnknown('Guest execution/cleanup uncertain',request_id) from exc
 
     def query_request(self, request_id):
-        return self.journal.lookup(request_id)
+        saved=self.journal.lookup(request_id)
+        if saved['state']!='UNKNOWN' or saved.get('operation')!='execute':return saved
+        if saved.get('sandbox_id')!=self.id or not isinstance(saved.get('args'),dict):return saved
+        # Guest journals are durable within this exact VM identity. Never run an
+        # execute to recover a lost reply, and never infer success from liveness.
+        if self.vm.status()['state']!='RUNNING':return saved
+        try:proof=self.control.call('query',request_id=request_id)
+        except (OSError,EOFError,RuntimeError,ValueError) as exc:
+            return dict(saved,reconciliation_error=dict(type=type(exc).__name__,message=str(exc)[:1000]))
+        expected=dict(operation='execute',request_id=request_id,**saved['args'])
+        digest=hashlib.sha256(json.dumps(expected,sort_keys=True).encode()).hexdigest()
+        if (proof.get('state')=='DONE' and proof.get('request_id')==request_id and
+                proof.get('digest')==digest and proof.get('response',{}).get('ok') is True):
+            return self.journal.recover_done(request_id,saved['digest'],proof['response']['result'])
+        return saved
 
     def stop(self):
         with self.vm.lock:
