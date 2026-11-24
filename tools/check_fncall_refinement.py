@@ -20,8 +20,8 @@ from tests.unit.test_qemu_container import GuestTests
 
 CONTROLS = (
     ('early-ready','ReadyIsClean','test_cleanup_is_a_linearization_boundary_not_a_reusable_slot',
-     "if self.config['mode'] == 'fncall':\n                    self.save_state('CLEANING')",
-     "if False:\n                    self.save_state('CLEANING')",'dispatch'),
+     "if self.config['mode'] == 'fncall':\n            self.save_state('CLEANING')",
+     "if False:\n            self.save_state('CLEANING')",'execute'),
     ('unknown-replay','UnknownNeverReplayed','test_unknown_intent_is_not_executed_again',
      "if path.exists():\n                record = json.loads(path.read_text())",
      "if False:\n                record = json.loads(path.read_text())",'dispatch'),
