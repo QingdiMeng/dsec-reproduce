@@ -1675,6 +1675,23 @@
           "section": "2026-11-24 TASK-026 两个 Node 的制品交付与实例恢复"
         }
       ]
+    },
+    {
+      "id": "EV-KIND-HA-DESIGN-1124",
+      "title": "单宿主 kind HA 演示配置和故障验收协议",
+      "date": "2026-11-24",
+      "date_kind": "run",
+      "kind": "local",
+      "verdict": "passed",
+      "identity": "Local manifest renderer, kubectl 1.36.1 / Kustomize 5.8.1; example image references used for offline validation.",
+      "scope": "One kind control-plane and three logical workers; cross-checked API/etcd placement, local ingress mapping, role secrets, quorum configuration and PVC ownership. All 15 Kubernetes resources rendered offline.",
+      "limits": "Design and local configuration regression only. No Kubernetes API admission, image pulls, Node/KVM runtime or simulated or physical fault measurements.",
+      "records": [
+        {
+          "path": "deploy/cluster/demos/kind-ha/README.md",
+          "section": "故障测试协议"
+        }
+      ]
     }
   ],
   "work": [
@@ -2489,6 +2506,36 @@
       ],
       "evidence": [
         "EV-PORTABLE-MICROVM-1124"
+      ],
+      "reopens": []
+    },
+    {
+      "id": "TASK-027",
+      "title": "单宿主 kind 控制面故障域 demo 设计",
+      "kind": "maintenance",
+      "state": "done",
+      "owner": "maintainer",
+      "capabilities": [
+        "CAP-HA",
+        "CAP-API"
+      ],
+      "delta": "交付可渲染的单宿主三逻辑域 Kubernetes 配置和可复用的故障验收协议。",
+      "trigger": "需要在独立宿主齐备前保留同一逻辑域内 API 与 etcd 同时失联的演示入口。",
+      "reuse": "沿用现有集群角色配置、IAM、TLS、SDK、受理回执与回复前测试检查点。",
+      "prior_evidence": [
+        "EV-CLUSTER-1011",
+        "EV-FLEET",
+        "EV-RELEASE-ENTRY-1124"
+      ],
+      "acceptance": [
+        "离线核对三个独立 worker 的 API/etcd 配对、持久卷、入口路由及角色输入",
+        "写明受控失联、请求去重、法定多数、恢复和清理的观察证据与判定"
+      ],
+      "resources": "本地生成与静态校验；实机演练另行执行。",
+      "stop_condition": "配置和测试协议入库并通过静态校验。本项不关闭 TASK-004。",
+      "depends_on": [],
+      "evidence": [
+        "EV-KIND-HA-DESIGN-1124"
       ],
       "reopens": []
     }

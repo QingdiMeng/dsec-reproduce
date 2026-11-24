@@ -423,6 +423,20 @@
 
 变更边界：新增可移交的制品身份和按该身份创建的约束。既有部署 revision 继续承担 Node/Edge 复核，暂停实例的 resume 仍回到原所有者。
 
+### TASK-027：单宿主 kind 控制面故障域 demo 设计
+
+状态：完成；类型：`maintenance`；负责人：`maintainer`。
+
+- 关联能力：CAP-HA、CAP-API；依赖：无。
+- 新增价值：交付可渲染的单宿主三逻辑域 Kubernetes 配置和可复用的故障验收协议。
+- 复用：沿用现有集群角色配置、IAM、TLS、SDK、受理回执与回复前测试检查点。
+- 触发原因：需要在独立宿主齐备前保留同一逻辑域内 API 与 etcd 同时失联的演示入口。
+- 既有证据：EV-CLUSTER-1011、EV-FLEET、EV-RELEASE-ENTRY-1124
+- 资源：本地生成与静态校验；实机演练另行执行。
+- 验收：离线核对三个独立 worker 的 API/etcd 配对、持久卷、入口路由及角色输入；写明受控失联、请求去重、法定多数、恢复和清理的观察证据与判定
+- 停止条件：配置和测试协议入库并通过静态校验。本项不关闭 TASK-004。
+- 完成证据：EV-KIND-HA-DESIGN-1124
+
 ## 实现、测试与决策索引
 
 ### CAP-API
@@ -964,3 +978,12 @@ HTTPS SDK 版本放置与独立目录的 MicroVM 恢复；运行日期：2026-11
 - 覆盖：Export and import into distinct object pools. With publisher objects offline, exact-version create and retry selected B. Guest file and executable survived pause/resume. Both Node leases empty and IAM released.
 - 限制：Local file-ext4 physical run, co-located gateways/controller and one etcd member. OverlayBD handoff covered by local tests. No remote 3FS or live relocation.
 - 记录：[2026-11-24 TASK-026 两个 Node 的制品交付与实例恢复](../docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md)
+
+### EV-KIND-HA-DESIGN-1124
+
+单宿主 kind HA 演示配置和故障验收协议；运行日期：2026-11-24；层级：`local`；结论：`passed`。
+
+- 版本身份：Local manifest renderer, kubectl 1.36.1 / Kustomize 5.8.1; example image references used for offline validation.
+- 覆盖：One kind control-plane and three logical workers; cross-checked API/etcd placement, local ingress mapping, role secrets, quorum configuration and PVC ownership. All 15 Kubernetes resources rendered offline.
+- 限制：Design and local configuration regression only. No Kubernetes API admission, image pulls, Node/KVM runtime or simulated or physical fault measurements.
+- 记录：[故障测试协议](../deploy/cluster/demos/kind-ha/README.md)
