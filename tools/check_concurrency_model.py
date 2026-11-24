@@ -88,6 +88,8 @@ CASES = (
     ("cluster-unknown-replacement", "ClusterAdmission", "unknown_replacement", "UniqueWritableOwner"),
     ("cluster-health-release", "ClusterAdmission", "health_release", "ReleasedHasProof"),
     ("cluster-late-rejected-dispatch", "ClusterAdmission", "late_rejected_dispatch", "ReleasedHasProof"),
+    ("environment-binding", "EnvironmentBinding", "none", None),
+    ("environment-missing-edge-guard", "EnvironmentBinding", "missing_edge_guard", "AcceptedRevisionPinned"),
 )
 
 

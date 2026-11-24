@@ -21,6 +21,8 @@ from dsec.runtime.requests import RequestJournal
 from dsec.sdk.development import DevEdgeClient as DSecClient
 from dsec.sdk.client import DSecSandbox
 from dsec.sdk.sandbox_transport import RequestOutcomeUnknown, ServiceError
+from dsec.contracts.environments import EnvironmentView
+from dsec.contracts.native import NATIVE_FEATURE
 
 
 class Backend:
@@ -343,6 +345,51 @@ class ContainerEdgeTests(unittest.IsolatedAsyncioTestCase):
         await sandbox.stop(request_id='d' * 32)
         self.assertEqual((await sandbox.status())['state'], 'STOPPED')
         self.assertIsNone(self.runtime.journal)
+
+    async def test_microvm_environment_binding_rejects_before_intent_but_cached_proof_survives_withdrawal(self):
+        self.server.journal = RequestJournal(self.root/'microvm')
+        contract = EnvironmentView('default','microvm','microvm','a'*64,(NATIVE_FEATURE,))
+        catalog = SimpleNamespace(execution_contracts=Mock(return_value=(contract,)))
+        self.server.manager.microvm_environment_catalog = catalog
+        call = self.client._transport.call
+        with patch.object(self.server.manager,'create',wraps=self.server.manager.create) as create:
+            with self.assertRaises(ServiceError) as failure:
+                await asyncio.to_thread(call,'create',request_id='b'*32,
+                    environment_contract=replace(contract,revision='b'*64).as_dict())
+            self.assertEqual(failure.exception.kind,'AdmissionDenied')
+            self.assertEqual(self.server.journal.lookup('b'*32)['state'],'NOT_FOUND')
+            create.assert_not_called()
+            first = await asyncio.to_thread(call,'create',request_id='a'*32,
+                                           environment_contract=contract.as_dict())
+            self.assertNotIn('environment_contract',create.call_args.kwargs)
+            catalog.execution_contracts.return_value = ()
+            second = await asyncio.to_thread(call,'create',request_id='a'*32,
+                                            environment_contract=contract.as_dict())
+            self.assertEqual(second,first)
+            self.assertEqual(create.call_count,1)
+        proof = self.server.journal.lookup('a'*32)
+        self.assertEqual(proof['digest'],request_digest('create',None,
+            {'environment_contract':contract.as_dict()}))
+
+    async def test_container_environment_binding_rejects_before_effect_and_is_journaled_for_recovery(self):
+        contract = EnvironmentView(self.spec.environment_id,'container','container','a'*64,(NATIVE_FEATURE,))
+        call = self.client._transport.call
+        with patch.object(self.runtime,'execution_contracts',return_value=(contract,)) as contracts:
+            with self.assertRaises(ServiceError) as failure:
+                await asyncio.to_thread(call,'container_create',request_id='b'*32,spec=asdict(self.spec),
+                    environment_contract=replace(contract,revision='b'*64).as_dict())
+            self.assertEqual(failure.exception.kind,'AdmissionDenied')
+            self.assertEqual(self.runtime.lookup_request('b'*32)['state'],'NOT_FOUND')
+            self.assertEqual(Backend.made,[])
+            first = await asyncio.to_thread(call,'container_create',request_id='a'*32,spec=asdict(self.spec),
+                                           environment_contract=contract.as_dict())
+            contracts.return_value = ()
+            second = await asyncio.to_thread(call,'container_create',request_id='a'*32,spec=asdict(self.spec),
+                                            environment_contract=contract.as_dict())
+        self.assertEqual(first,second)
+        self.assertEqual(Backend.made[0].creates,1)
+        proof = self.runtime.lookup_request('a'*32)
+        self.assertEqual(proof['args']['environment_contract'],contract.as_dict())
 
     async def test_path_arguments_and_invalid_limits_cannot_reconfigure_edge(self):
         for extra in ({'root': '/tmp/another-instance'}, {'docker_socket': '/var/run/docker.sock'}):

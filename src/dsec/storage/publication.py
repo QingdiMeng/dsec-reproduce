@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 
 from dsec.storage.catalog import DIGEST, IDENTIFIER, MicroVMEnvironmentCatalog
+from dsec.contracts.environments import artifact_revision
 
 
 def _digest_file(path: Path) -> tuple[str, int]:
@@ -214,6 +215,11 @@ def publish_microvm(source_catalog: Path, environment_id: str, destination_catal
         image = {"lowers": [{"file": lower["file"]} for lower in root["lowers"]], "upper": {}}
         path, digest = _publish_json(image, store)
         root.update(image=str(path), image_sha256=digest)
+    if source.get('execution_contract') is not None:
+        # resolve() validated the source claim before any artifact rewrite.
+        # Rebind only after verified byte-preserving publication, never infer
+        # capabilities from the presence of an agent or a backend name.
+        source['execution_contract']['artifact_revision'] = artifact_revision(source)
     _atomic_catalog(destination_catalog.resolve(), environment_id, source)
     return {"environment_id": environment_id,
             "environment_sha256": MicroVMEnvironmentCatalog(destination_catalog).environment_digest(environment_id),

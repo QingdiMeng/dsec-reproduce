@@ -16,6 +16,7 @@ import re
 import subprocess
 import sys
 import threading
+from dsec.contracts.environments import published_environment
 
 
 IDENTIFIER = re.compile(r"[a-z0-9][a-z0-9.-]{0,127}\Z")
@@ -189,6 +190,15 @@ class MicroVMEnvironmentCatalog(EnvironmentCatalog):
                              separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()
 
+    def execution_contracts(self):
+        # Startup already resolves the configured artifacts. Reusing the
+        # daemon's pinned identities avoids re-reading every lazy layer on each
+        # health probe; artifact verification remains in prepare/create.
+        if file_sha256(self.path) != self.digest:
+            raise ValueError('MicroVM environment catalog changed; restart Edge explicitly')
+        return tuple(published_environment(name, 'microvm', 'microvm', item)
+                     for name,item in self.entries.items())
+
     def resolve(self, environment_id: str, storage: str = "local") -> dict:
         if storage not in ("local", "threefs_lazy"):
             raise ValueError("Unsupported microVM layer storage")
@@ -310,6 +320,7 @@ class MicroVMEnvironmentCatalog(EnvironmentCatalog):
                 self._verify_file(path, lower["sha256"], "OverlayBD lower changed")
         elif root_backend != "file-ext4" or item.get("overlaybd_root") is not None:
             raise ValueError("Unsupported microVM root block backend")
+        published_environment(environment_id, 'microvm', 'microvm', item)
         return {"environment_id": environment_id, "boot_template": boot,
                 "kernel": kernel, "kernel_sha256": item["kernel_sha256"],
                 "layers": resolved, "cpus": cpus, "memory_mb": memory_mb,

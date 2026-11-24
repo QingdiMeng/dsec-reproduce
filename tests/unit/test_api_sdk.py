@@ -12,15 +12,17 @@ from unittest.mock import Mock, patch
 
 from dsec.contracts.cluster import AuthorizationDenied, PROTOCOL
 from dsec.contracts.errors import RequestOutcomeUnknown
-from dsec.contracts.native import NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_FEATURE
+from dsec.contracts.native import (NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_FEATURE,
+                                   REQUIREMENTS_FEATURE, execution_requirements)
 from dsec.contracts.resources import NodeDemand
-from dsec.contracts.sandbox import UnsupportedCapability
+from dsec.contracts.sandbox import UnsupportedCapability, DSecContainerRunArgs
 from dsec.host.cluster_http import ClusterHTTPServer, Handler
 from dsec.sdk import DSecClient, ClusterClient
 from dsec.sdk.client import DSecClient as CanonicalClient
 from dsec.sdk.development import DevEdgeClient
 from dsec.sdk.cluster import ClusterTransport
 from dsec.sdk.sandbox_transport import ServiceError
+from dsec.contracts.environments import ENVIRONMENT_REQUIREMENTS_FEATURE
 
 
 class APIClientTests(unittest.IsolatedAsyncioTestCase):
@@ -62,6 +64,43 @@ class APIClientTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, 'resource_demand'): await client.run_microvm()
         with self.assertRaises(UnsupportedCapability): await client.run_tb2(None)
         self.assertEqual(client._transport.rpc.send.call_count, 1)
+
+    async def test_execution_requirements_reject_old_api_before_create(self):
+        client = self.client(); client._transport.rpc.send = Mock(return_value=self.health)
+        await client.open()
+        with self.assertRaises(UnsupportedCapability):
+            await client.run_microvm(resource_demand=NodeDemand(1,512,1024,0),
+                                    required_capabilities=[STREAM_FEATURE])
+        self.assertEqual(client._transport.rpc.send.call_count, 1)
+
+    async def test_requirements_use_existing_create_contract_for_both_backends(self):
+        health = dict(self.health, protocol_features=[*self.health['protocol_features'],
+            REQUIREMENTS_FEATURE, ENVIRONMENT_REQUIREMENTS_FEATURE, 'container-rpc-v1'])
+        for backend in ('microvm', 'container'):
+            with self.subTest(backend=backend):
+                client = self.client()
+                client._transport.rpc.send = Mock(side_effect=[health, {'id':'owned'}])
+                await client.open()
+                method = client.run_microvm if backend == 'microvm' else client.run_container
+                args = {} if backend == 'microvm' else {'args':DSecContainerRunArgs()}
+                await method(**args, resource_demand=NodeDemand(1,512,1024,0),
+                    required_capabilities=[STREAM_FEATURE, STREAM_FEATURE], request_id='1'*32)
+                payload = client._transport.rpc.send.call_args.args[1]
+                self.assertEqual(payload['args']['required_capabilities'],
+                                 list(execution_requirements([STREAM_FEATURE])))
+                self.assertEqual(payload['request_id'], '1'*32)
+
+    async def test_empty_requirements_preserve_wire_and_invalid_requirements_never_send(self):
+        client = self.client()
+        client._transport.rpc.send = Mock(side_effect=[self.health, {'id':'owned'}])
+        await client.open()
+        for invalid in ('native-stream-v1', None, ['gpu'], [True], [STREAM_FEATURE]*5):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                await client.run_microvm(resource_demand=NodeDemand(1,512,1024,0),
+                                        required_capabilities=invalid)
+        self.assertEqual(client._transport.rpc.send.call_count, 1)
+        await client.run_microvm(resource_demand=NodeDemand(1,512,1024,0))
+        self.assertNotIn('required_capabilities', client._transport.rpc.send.call_args.args[1]['args'])
 
     async def test_mutation_loss_retains_id_without_replay_or_uds_downgrade(self):
         client = self.client()

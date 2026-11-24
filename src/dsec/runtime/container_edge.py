@@ -23,6 +23,7 @@ from dsec.runtime.backends.container import (CatalogErofsBackend, CatalogLayered
 from dsec.runtime.container_journal import ContainerLifecycleJournal
 from dsec.runtime.lifecycle import ServiceBusy
 from dsec.storage.catalog import EnvironmentCatalog
+from dsec.contracts.environments import check_environment_binding
 
 
 CONTAINER_OPERATIONS = frozenset((
@@ -74,6 +75,11 @@ class ContainerRuntime:
                          (catalog.host_isolation['memory_overhead_mb'] if catalog.host_isolation else 0),
                          disk_mb=math.ceil(Path(item['template']['path']).stat().st_size/1024**2),network_mbps=0))
                 for name,item in catalog.environments.items()}
+
+    def execution_contracts(self):
+        if not self.configuration.get('DSEC_QEMU_EXECUTION_CATALOG'):
+            return ()  # Legacy/development backends cannot assert guest capability.
+        return self._execution_catalog().execution_contracts()
 
     def _journal(self):
         with self.lock:
@@ -214,6 +220,7 @@ class ContainerRuntime:
                 raise ValueError("Invalid lifecycle lookup")
             return self.lookup_request(args["lookup_id"])
         allowed = {"spec", "kind"} | {
+            "container_create": {"environment_contract"},
             "container_execute": {"command", "timeout_ms", "output_limit"},
             "container_query_action": {"lookup_id"}}.get(operation, set())
         if set(args) - allowed:
@@ -223,6 +230,17 @@ class ContainerRuntime:
         if operation == "container_create":
             if sandbox_id is not None:
                 raise ValueError("Create cannot target an existing sandbox")
+            create_args = spec.lifecycle_args()
+            if 'environment_contract' in args:
+                if kind != 'container':
+                    raise UnsupportedCapability('Environment bindings require a catalog-backed Container')
+                create_args['environment_contract'] = args['environment_contract']
+                if journal.lookup(request_id)['state'] == 'NOT_FOUND':
+                    try:
+                        check_environment_binding(args['environment_contract'], self.execution_contracts(),
+                                                  'container', spec.environment_id)
+                    except (ValueError, UnsupportedCapability) as exc:
+                        raise ServiceError('AdmissionDenied', str(exc)) from exc
             backend = self._backend(kind, spec)
             def create():
                 lease_id = None
@@ -242,11 +260,11 @@ class ContainerRuntime:
                     self.node_admission.created('container', made.id)
                 return {"id": made.id}
             context = (self.node_admission.request('container', request_id,
-                       spec.lifecycle_args(), resource_demand) if self.node_admission is not None
+                       create_args, resource_demand) if self.node_admission is not None
                        else nullcontext())
             with self._operation(request_id), context:
                 try:
-                    return journal.execute(request_id, "create", None, spec.lifecycle_args(), create)
+                    return journal.execute(request_id, "create", None, create_args, create)
                 except RequestOutcomeUnknown:
                     proof = self.lookup_request(request_id)
                     if proof['state'] == 'DONE' and not proof['response']['ok']:
@@ -259,7 +277,8 @@ class ContainerRuntime:
             def stop():
                 backend = self._backend(kind, spec)
                 if backend.prove_stopped(sandbox_id):
-                    result = {"id": sandbox_id, "backend": kind, "state": "STOPPED"}
+                    result = {"id": sandbox_id, "backend": kind, "state": "STOPPED",
+                              "resource_cleanup_complete": True}
                 else:
                     result = self._entry(kind, spec, sandbox_id).sandbox.stop()
                 with self.lock:
@@ -279,7 +298,8 @@ class ContainerRuntime:
         if operation == 'container_query_action' and hasattr(backend, 'query_action'):
             return backend.query_action(sandbox_id,args['lookup_id'])
         if operation == "container_status" and backend.prove_stopped(sandbox_id):
-            return {"id": sandbox_id, "backend": kind, "state": "STOPPED"}
+            return {"id": sandbox_id, "backend": kind, "state": "STOPPED",
+                    "resource_cleanup_complete": True}
         sandbox = self._entry(kind, spec, sandbox_id).sandbox
         if operation == "container_status":
             return {**sandbox.status(), "container_name": sandbox.name}
@@ -297,7 +317,7 @@ class ContainerRuntime:
             return proof
         args, operation = proof["args"], proof.get("operation")
         if (operation == "create" and proof.get("sandbox_id") is None and
-                set(args) - {'execution_mode'} == {"environment_id", "storage", "memory_mb", "cpus", "qos"}):
+                set(args) - {'execution_mode', 'environment_contract'} == {"environment_id", "storage", "memory_mb", "cpus", "qos"}):
             spec = DSecContainerRunArgs(environment_id=args["environment_id"],
                 storage=args["storage"], memory_limit_mb=args["memory_mb"],
                 cpu_cores_limit=args["cpus"], cpu_qos=args["qos"],
@@ -336,7 +356,8 @@ class ContainerRuntime:
                 if operation == "stop" and backend.prove_stopped(sandbox_id):
                     if self.node_admission is not None:
                         self.node_admission.stopped('container', sandbox_id)
-                    return {"id": sandbox_id, "backend": "container", "state": "STOPPED"}
+                    return {"id": sandbox_id, "backend": "container", "state": "STOPPED",
+                            "resource_cleanup_complete": True}
                 return None
             return journal.recover(request_id, verify)
         except Exception as exc:
@@ -353,7 +374,7 @@ class ContainerRuntime:
             if record.get('operation') != 'create':
                 continue
             args = record.get('args', {})
-            if set(args) - {'execution_mode'} == {'environment_id','storage','memory_mb','cpus','qos'}:
+            if set(args) - {'execution_mode', 'environment_contract'} == {'environment_id','storage','memory_mb','cpus','qos'}:
                 kind = 'container'
                 spec = DSecContainerRunArgs(environment_id=args['environment_id'],
                     storage=args['storage'], memory_limit_mb=args['memory_mb'],

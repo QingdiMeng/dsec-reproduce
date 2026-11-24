@@ -9,8 +9,11 @@ from dsec.contracts.cluster import (AuthorizationDenied, PROTOCOL, Quota, Sandbo
 from dsec.control.cluster_inventory import OPERATIONS, browse
 from dsec.contracts.requests import request_digest
 from dsec.contracts.native import NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_FEATURE, HTTP_FEATURE, required_extension
+from dsec.contracts.native import REQUIREMENTS_FEATURE, execution_requirements
 from dsec.contracts.sandbox import UnsupportedCapability
 from dsec.contracts.rollout import ROLLOUT_FEATURE
+from dsec.contracts.environments import ENVIRONMENT_REQUIREMENTS_FEATURE
+from dsec.contracts.cluster import NoPlacement
 
 
 def permission(operation, args):
@@ -88,7 +91,7 @@ class ClusterAPI:
         if operation == 'health':
             from dsec._release import installed_release
             return dict(protocol=PROTOCOL, protocol_features=[PROTOCOL, 'container-rpc-v1', 'fncall-rpc-v1',
-                'busy-nonadmission-v1', 'node-admission-v1', 'node-upgrade-v1', ROLLOUT_FEATURE, NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_FEATURE, HTTP_FEATURE],release=installed_release())
+                'busy-nonadmission-v1', 'node-admission-v1', 'node-upgrade-v1', ROLLOUT_FEATURE, NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_FEATURE, HTTP_FEATURE, REQUIREMENTS_FEATURE, ENVIRONMENT_REQUIREMENTS_FEATURE],release=installed_release())
         if operation == 'node.list':
             if args:
                 raise ValueError('Node inventory takes no arguments')
@@ -111,6 +114,16 @@ class ClusterAPI:
             if args.get('baseline_id') is not None or args.get('kind') == 'tb2':
                 raise ValueError('Cluster baseline routing and legacy TB2 backend are not supported')
             backend = 'microvm' if operation == 'create' else 'container'
+            if 'environment_contract' in args:
+                raise ValueError('Environment contracts are selected by the control plane, not callers')
+            required = execution_requirements(args.get('required_capabilities', ()))
+            # Retain the old digest when nothing is requested. Equivalent order,
+            # duplicates and implicit native dependencies name the same intent.
+            args = {key:value for key,value in args.items() if key != 'required_capabilities'}
+            if required:
+                args['required_capabilities'] = list(required)
+            if required and backend == 'container' and args.get('spec', {}).get('execution_mode') == 'fncall':
+                raise UnsupportedCapability('Function invocations do not expose native sessions/files')
             raw_demand = envelope.get('resource_demand')
             if not isinstance(raw_demand, dict) or set(raw_demand) - {
                     'cpu', 'memory_mb', 'disk_mb', 'network_mbps', 'disk_io_mbps'}:
@@ -124,9 +137,23 @@ class ClusterAPI:
             if receipt is None:
                 capabilities = (('fncall-execution-v1',) if backend == 'container' and
                     args.get('spec',{}).get('execution_mode') == 'fncall' else ())
-                candidate = self.placement.choose(backend, environment, demand,capabilities=capabilities)
+                capabilities = tuple(sorted(set(capabilities) | set(required) |
+                    ({REQUIREMENTS_FEATURE, ENVIRONMENT_REQUIREMENTS_FEATURE} if required else set())))
+                candidate = self.placement.choose(backend, environment, demand,capabilities=capabilities,
+                                                 execution_capabilities=required)
+                if required:
+                    selected = self.placement.watcher.snapshot().get(candidate)
+                    contract = selected.environment_contract(backend, environment) if selected else None
+                    if contract is None or not set(required) <= set(contract.capabilities):
+                        raise NoPlacement('Environment observation expired before admission')
+                    args['environment_contract'] = contract.as_dict()
             else:
                 candidate = receipt['node']
+                if required and 'environment_contract' in receipt['args']:
+                    # The original request digest is computed above, before
+                    # resolving publication metadata. Reconciliation preserves
+                    # the first observed revision rather than choosing today's.
+                    args['environment_contract'] = receipt['args']['environment_contract']
             # IAM rechecks permission at the quota transaction's linearization
             # boundary; an earlier API check alone cannot race a revocation.
             receipt = self.iam.admit(credential, project, operation_id, digest,

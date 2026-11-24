@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import math
 import re
+from dsec.contracts.environments import EnvironmentView
 
 
 PROTOCOL = 'dsec-cluster-v1'
@@ -123,6 +124,7 @@ class NodeView:
     load: float
     available: Quota
     active: int
+    environment_contracts: tuple[EnvironmentView, ...] = ()
 
     def __post_init__(self):
         identifier(self.node_id)
@@ -136,3 +138,14 @@ class NodeView:
         for values in (self.backends, self.environments, self.capabilities):
             if not isinstance(values, tuple) or any(not isinstance(v, str) or not v for v in values):
                 raise ValueError('Invalid node capability list')
+        if (not isinstance(self.environment_contracts, tuple) or any(
+                not isinstance(item, EnvironmentView) or item.backend not in self.backends or
+                item.environment_id not in self.environments for item in self.environment_contracts)):
+            raise ValueError('Environment contract must belong to an advertised backend/environment')
+        keys = [(item.backend, item.environment_id) for item in self.environment_contracts]
+        if len(keys) != len(set(keys)):
+            raise ValueError('Ambiguous environment contracts')
+
+    def environment_contract(self, backend, environment):
+        return next((item for item in self.environment_contracts if
+                     (item.backend, item.environment_id) == (backend, environment)), None)

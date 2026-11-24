@@ -24,6 +24,9 @@ from dsec.control import rollout_gateway
 from dsec.control import node_lifecycle
 from tests.unit import test_node_lifecycle as fleet_regression
 from tests.unit import test_node_upgrade as upgrade_regression
+from tests.unit import test_container_edge as edge_regression
+from dsec.control import server as edge_server
+from dsec.runtime import container_edge as edge_runtime
 
 CONTROLS = (
     ('quota_guard', iam, 'IAM', 'admit',
@@ -124,6 +127,26 @@ def main():
             if not passed:
                 raise AssertionError('Rollout code mutation did not produce its required failure: ' + fault)
         report['rollout_tests'] = canonical_rollout.testsRun
+        # EnvironmentBinding's NodeCheck is not the final execution boundary:
+        # a replacement Edge must also enforce the bound revision. These RPC
+        # regressions exercise real journals, with execution backends instrumented.
+        environment_controls = (
+            ('environment_microvm_guard', edge_server,
+             'test_microvm_environment_binding_rejects_before_intent_but_cached_proof_survives_withdrawal'),
+            ('environment_container_guard', edge_runtime,
+             'test_container_environment_binding_rejects_before_effect_and_is_journaled_for_recovery'),
+        )
+        for fault,module,test in environment_controls:
+            canonical = run(root/(fault+'-canonical'),test,test_class=edge_regression.ContainerEdgeTests)
+            if not canonical.wasSuccessful() or canonical.skipped:
+                raise AssertionError('Environment binding regression must pass: '+fault)
+            with patch.object(module,'check_environment_binding',lambda *args,**kwargs: None):
+                result = run(root/fault,test,test_class=edge_regression.ContainerEdgeTests)
+            passed = len(result.failures)==1 and not result.errors and not result.skipped
+            report['controls'].append(dict(fault=fault,invariant='AcceptedRevisionPinned',
+                                          regression=test,passed=passed))
+            if not passed:
+                raise AssertionError('Environment guard removal did not fail its regression: '+fault)
         canonical_fleet = run(root/'fleet-canonical',test_class=fleet_regression.NodeLifecycleTests)
         if not canonical_fleet.wasSuccessful() or canonical_fleet.skipped:
             raise AssertionError('Canonical fleet regressions must pass without skips')
@@ -189,6 +212,13 @@ def main():
             'tests/unit/test_cluster_control.py','verification/ClusterAdmission.tla',
             'verification/ClusterAdmission.cfg', 'tools/check_cluster_refinement.py',
             'src/dsec/control/rollout_api.py','src/dsec/control/rollout_gateway.py','src/dsec/host/rollout_gateway.py',
+            'src/dsec/contracts/environments.py','src/dsec/control/server.py',
+            'src/dsec/contracts/native.py','src/dsec/control/placement.py',
+            'src/dsec/storage/catalog.py','src/dsec/storage/publication.py',
+            'src/dsec/sdk/client.py','src/dsec/runtime/backends/qemu_container.py',
+            'src/dsec/runtime/container_edge.py','tests/unit/test_container_edge.py',
+            'tests/unit/test_environment_requirements.py',
+            'verification/EnvironmentBinding.tla','verification/EnvironmentBinding.cfg',
             'src/dsec/contracts/rollout.py','src/dsec/sdk/rollout_api.py',
             'tests/unit/test_rollout_api.py','verification/RolloutDispatch.tla','verification/RolloutDispatch.cfg']
         report['source_sha256'] = {name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in sources}

@@ -7,6 +7,8 @@ from dsec.contracts.sandbox import (UnsupportedCapability, DSecMicroVMRunArgs,
 from dsec.sdk.sandbox_transport import SandboxClient, ServiceError
 from dsec.contracts.resources import NodeDemand
 from dsec.sdk.native import NativeSandboxMixin
+from dsec.contracts.native import REQUIREMENTS_FEATURE, execution_requirements
+from dsec.contracts.environments import ENVIRONMENT_REQUIREMENTS_FEATURE
 
 
 class DSecSandbox(NativeSandboxMixin):
@@ -101,6 +103,12 @@ class _SandboxClient:
             raise UnsupportedCapability('Upgrade sandbox service for node-admission-v1')
         return asdict(demand if isinstance(demand, NodeDemand) else NodeDemand(**demand))
 
+    def _requirements(self, capabilities):
+        required = execution_requirements(capabilities)
+        if required and not {REQUIREMENTS_FEATURE, ENVIRONMENT_REQUIREMENTS_FEATURE} <= self._features:
+            raise UnsupportedCapability('Upgrade API Server for sandbox execution requirements')
+        return {'required_capabilities': list(required)} if required else {}
+
     async def node_status(self):
         self._require_open()
         if 'node-admission-v1' not in self._features:
@@ -108,7 +116,8 @@ class _SandboxClient:
         return await asyncio.to_thread(self._transport.call, 'node_status')
 
     async def run_microvm(self, args: DSecMicroVMRunArgs | None = None, *, timeout: float | None = None,
-                          request_id: str | None = None, resource_demand=None):
+                          request_id: str | None = None, resource_demand=None,
+                          required_capabilities=()):
         self._require_open()
         if args is None:
             args = DSecMicroVMRunArgs()
@@ -118,7 +127,8 @@ class _SandboxClient:
         if timeout is not None:
             raise UnsupportedCapability("per-create timeout is not supported by the local service")
         result = await asyncio.to_thread(self._transport.call, "create",
-                                         request_id=request_id, resource_demand=self._node_hint(resource_demand), **service_args)
+                                         request_id=request_id, resource_demand=self._node_hint(resource_demand),
+                                         **self._requirements(required_capabilities), **service_args)
         return DSecSandbox(self._transport, result["id"],
                            retry_busy='busy-nonadmission-v1' in self._features, features=self._features)
 
@@ -127,7 +137,8 @@ class _SandboxClient:
         return await asyncio.to_thread(self._transport.query_request, request_id)
 
     async def run_container(self, args: DSecContainerRunArgs | None = None,
-                            *, request_id: str | None = None, resource_demand=None):
+                            *, request_id: str | None = None, resource_demand=None,
+                            required_capabilities=()):
         self._require_container_service()
         args = DSecContainerRunArgs() if args is None else args
         if not isinstance(args, DSecContainerRunArgs):
@@ -136,7 +147,8 @@ class _SandboxClient:
             raise ValueError('Use run_fncall for independent function invocations')
         args.validate()
         result = await asyncio.to_thread(self._transport.call, "container_create",
-            request_id=request_id, resource_demand=self._node_hint(resource_demand), spec=args.wire_spec())
+            request_id=request_id, resource_demand=self._node_hint(resource_demand), spec=args.wire_spec(),
+            **self._requirements(required_capabilities))
         return DSecContainerSandbox(self._transport, result["id"], args, features=self._features)
 
     async def run_fncall(self, args: DSecFnCallRunArgs, *, request_id=None, resource_demand=None):

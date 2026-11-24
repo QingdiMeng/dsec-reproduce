@@ -26,6 +26,7 @@ from dsec.runtime.isolation.vsock import CIDLease, CIDLeaseConflict, QemuCIDPool
 from dsec.runtime.isolation.guest_auth import FEATURE, authenticate_client, credential
 from dsec.runtime.requests import RequestJournal
 from dsec.runtime.sessions.native import NativeChannel
+from dsec.contracts.environments import published_environment
 
 
 class GuestControl:
@@ -59,7 +60,7 @@ class ExecutionCatalog:
         self.pool = value['cid_pool']
         self.environments = value['environments']
         history=value.get('catalog_history',[])
-        if not isinstance(history,list) or len(history)>16:raise ValueError('Bounded explicit catalog history required')
+        if not isinstance(history,list) or len(history)>32:raise ValueError('Bounded explicit catalog history required')
         self.snapshots=[]
         for pin in history:
             if (not isinstance(pin,dict) or set(pin)!={'path','sha256'} or
@@ -87,7 +88,7 @@ class ExecutionCatalog:
         for name, item in self.environments.items():
             fields={'mode','binary','kernel','template','image','memory_mb','cpu_count','inner_memory_mb','inner_cpus'}
             if (not re.fullmatch('[a-z0-9][a-z0-9.-]{0,127}', name) or
-                    not fields<=set(item)<=fields|{'network','startup_timeout_s','disk_cache','readonly_layers','shared_mounts','command_timeout_ms'} or
+                    not fields<=set(item)<=fields|{'network','startup_timeout_s','disk_cache','readonly_layers','shared_mounts','command_timeout_ms','execution_contract'} or
                     item.get('disk_cache','buffered') not in ('buffered','direct') or
                     type(item.get('startup_timeout_s',15)) not in (int,float) or
                     not math.isfinite(item.get('startup_timeout_s',15)) or
@@ -125,6 +126,12 @@ class ExecutionCatalog:
                     raise ValueError('Absolute pinned execution artifact required')
                 if not re.fullmatch('[a-f0-9]{64}', artifact['sha256']):
                     raise ValueError('SHA-256 required')
+            published_environment(name, 'container', item['mode'], item)
+
+    def execution_contracts(self):
+        self.unchanged()
+        return tuple(published_environment(name, 'container', item['mode'], item)
+                     for name,item in self.environments.items())
 
     def unchanged(self):
         if hashlib.sha256(self.path.read_bytes()).hexdigest() != self.digest:

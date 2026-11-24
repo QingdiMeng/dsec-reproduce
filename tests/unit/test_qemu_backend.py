@@ -275,6 +275,26 @@ class QemuTests(unittest.TestCase):
         process.terminate.assert_called_once()
         adopted.qmp.execute.assert_not_called()
 
+    def test_adoption_retires_a_recorded_pid_already_absent_at_pidfd_open(self):
+        self.instrument(); self.vm.boot(); self.vm.detach()
+        adopted = QemuVM(self.config, self.path); self.addCleanup(adopted.detach)
+        adopted._attach = Mock(side_effect=ProcessLookupError('pidfd_open: ESRCH'))
+        adopted._spawn = Mock(side_effect=AssertionError('Must not recreate a missing VMM'))
+        adopted.qmp.execute = Mock(side_effect=AssertionError('Must not contact a missing VMM'))
+        self.assertEqual(adopted.adopt()['state'], 'FAILED')
+        self.assertIsNone(adopted.record['process'])
+        adopted._spawn.assert_not_called(); adopted.qmp.execute.assert_not_called()
+        self.assertEqual(adopted.stop()['state'], 'STOPPED')
+
+    def test_adoption_still_fences_reused_or_unverifiable_pids(self):
+        self.instrument(); self.vm.boot(); self.vm.detach()
+        adopted = QemuVM(self.config, self.path); self.addCleanup(adopted.detach)
+        adopted._attach = Mock(side_effect=RuntimeError('VMM process identity mismatch'))
+        adopted._terminate = Mock(side_effect=AssertionError('Must not retire an unverified process'))
+        with self.assertRaisesRegex(RuntimeError, 'identity mismatch'):
+            adopted.adopt()
+        adopted._terminate.assert_not_called()
+
     def test_adoption_rejects_changed_argv_before_process_attachment(self):
         self.instrument(); self.vm.boot(); self.vm.detach()
         record = json.loads(self.vm.record_path.read_text())

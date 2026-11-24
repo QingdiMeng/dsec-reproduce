@@ -3,7 +3,7 @@
 No KVM/Docker/storage driver here. The node's Edge retains all execution truth.
 """
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import hashlib
 import threading
 
@@ -13,12 +13,15 @@ from dsec.contracts.errors import RequestOutcomeUnknown
 from dsec.contracts.requests import RequestConflict, RequestPending, request_digest
 from dsec.contracts.sandbox import DSecContainerRunArgs
 from dsec.contracts.native import SESSION_FILE_FEATURE, HTTP_FEATURE, required_extension
+from dsec.contracts.native import EXECUTION_FEATURES, REQUIREMENTS_FEATURE, execution_requirements
 from dsec.contracts.sandbox import UnsupportedCapability
 from dsec.contracts.rpc import ServiceError
 from dsec.contracts.rollout import ROLLOUT_FEATURE, is_rollout
 from dsec.control.rollout_gateway import RolloutGateway
 from dsec.contracts.release import coherent_release
 from dsec._release import installed_release
+from dsec.contracts.environments import EnvironmentView, ENVIRONMENT_REQUIREMENTS_FEATURE
+from dsec.contracts.native import NATIVE_FEATURE
 
 
 def edge_request_id(project, operation_id):
@@ -115,12 +118,21 @@ class NodeGateway:
     def _creation_proof(self, receipt):
         proof = self._lookup(receipt['backend'], receipt['project'], receipt['request_id'])
         if proof['state'] != 'NOT_FOUND':
-            args = receipt['args'] if receipt['backend'] == 'microvm' else (
+            args = self._edge_create_args(receipt) if receipt['backend'] == 'microvm' else (
                 DSecContainerRunArgs(**receipt['args']['spec']).lifecycle_args())
+            if receipt['backend'] == 'container' and 'environment_contract' in receipt['args']:
+                args['environment_contract'] = receipt['args']['environment_contract']
             if (proof.get('operation') != 'create' or proof.get('sandbox_id') is not None
                     or proof.get('digest') != request_digest('create', None, args)):
                 raise RequestConflict('Edge request ID belongs to a different operation/arguments')
         return proof
+
+    @staticmethod
+    def _edge_create_args(receipt):
+        # Requirements stay in IAM. The resolved environment binding also
+        # reaches Edge, so a service replacement cannot reinterpret the intent.
+        return {key:value for key,value in receipt['args'].items()
+                if key != 'required_capabilities'}
 
     def _release_failed_create(self, receipt, proof):
         response = proof.get('response') or {}
@@ -183,11 +195,30 @@ class NodeGateway:
                 # A queued/delayed request may not yet be visible in the Edge
                 # journal. Once a send was possible, never send it a second time.
                 raise RequestOutcomeUnknown('Dispatch may have reached Edge; NOT_FOUND cannot authorize replay', receipt['request_id'])
+            required = execution_requirements(args.get('required_capabilities', ()))
+            if required:
+                live = self.health()
+                actual = live.environment_contract(backend, environment)
+                expected = (EnvironmentView.from_dict(args['environment_contract'])
+                            if 'environment_contract' in args else None)
+                missing = sorted(set(required) - set(live.capabilities) |
+                                 (set(required) - set(actual.capabilities) if actual else set(required)))
+                if missing or actual != expected or expected is None:
+                    # The proof above establishes no Edge intent and dispatch
+                    # has not begun. A stale watcher cannot authorize downgrade.
+                    self.iam.release(receipt['project'], receipt['request_id'], self.node_id,
+                                     nonadmission=True)
+                    raise ServiceError('AdmissionDenied', 'Node no longer meets execution requirements',
+                                       {'missing_capabilities':missing,
+                                        'environment_contract_changed':actual != expected or expected is None,
+                                        'environment_revision_changed':actual is None or expected is None or
+                                            actual.revision != expected.revision})
             hint = {name:value for name,value in receipt['demand'].items() if name != 'concurrency'}
             receipt = self.iam.begin_dispatch(receipt['project'], receipt['request_id'], self.node_id)
             try:
                 result = self.edge.call('create' if backend == 'microvm' else 'container_create',
-                    request_id=edge_request_id(receipt['project'], receipt['request_id']), resource_demand=hint, **args)
+                    request_id=edge_request_id(receipt['project'], receipt['request_id']), resource_demand=hint,
+                    **self._edge_create_args(receipt))
             except ServiceError as exc:
                 if exc.kind == 'ExecutionCreateFailed':
                     self._release_failed_create(receipt,self._creation_proof(receipt))
@@ -293,8 +324,13 @@ class NodeGateway:
             max(0, min(budget['disk_mb']-reserved['disk_mb'], sample['disk_available_mb']-budget['min_disk_free_mb'])),
             max(0, budget['network_mbps']-reserved['network_mbps']))
         load = max(sample['cpu_utilization'], sample['disk_busy'], active/self.max_sandboxes)
-        extensions = {SESSION_FILE_FEATURE, HTTP_FEATURE, ROLLOUT_FEATURE}
+        extensions = EXECUTION_FEATURES | {ROLLOUT_FEATURE}
         capabilities = (set(self.capabilities)-extensions) | (extensions & set(health.get('protocol_features', ())))
+        capabilities.add(REQUIREMENTS_FEATURE)
+        if ENVIRONMENT_REQUIREMENTS_FEATURE in health.get('protocol_features', ()):
+            capabilities.add(ENVIRONMENT_REQUIREMENTS_FEATURE)
+        else:
+            capabilities.discard(ENVIRONMENT_REQUIREMENTS_FEATURE)
         capabilities.discard(ROLLOUT_FEATURE)
         capabilities.discard('fncall-execution-v1')
         if any(value.get('mode') == 'fncall' for name,value in health.get('qemu_environments',{}).items()
@@ -305,8 +341,15 @@ class NodeGateway:
                 capabilities.add(ROLLOUT_FEATURE)
         except Exception:
             pass  # Worker failure withdraws its capability; Edge stays probeable.
+        contracts = []
+        if ENVIRONMENT_REQUIREMENTS_FEATURE in capabilities:
+            for row in health.get('environment_contracts', ()):
+                item = EnvironmentView.from_dict(row)
+                if item.backend in self.backends and item.environment_id in self.environments:
+                    supported = tuple(feature for feature in item.capabilities if feature in capabilities)
+                    contracts.append(replace(item, capabilities=supported if NATIVE_FEATURE in supported else ()))
         return NodeView(self.node_id, self.boot_id, self.backends, self.environments,
-                        tuple(sorted(capabilities)), load, available, active)
+                        tuple(sorted(capabilities)), load, available, active, tuple(contracts))
 
     def lifecycle_proof(self, version):
         from dsec.control.node_lifecycle import NodeLifecycle

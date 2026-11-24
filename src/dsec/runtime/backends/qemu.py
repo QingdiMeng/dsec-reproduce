@@ -437,12 +437,19 @@ class QemuVM:
             if self.network is not None and record.get('network_isolation'):
                 self.network.restore(record['network_isolation'])
             if record.get('process'):
-                self.process = self._attach(record['process'])
+                try:
+                    self.process = self._attach(record['process'])
+                except ProcessLookupError:
+                    # pidfd_open returned ESRCH: this exact recorded PID no
+                    # longer exists. Retire its durable intent below; never
+                    # re-launch it or signal a later process using that PID.
+                    # Identity mismatch/permission errors still fence recovery.
+                    self.process = None
             elif record.get('launch_process'):
                 self.process = self._attach_launcher(record['launch_process'])
             if record['state'] in ('STOPPED', 'FAILED') and not record.get('process'):
                 self.state, self.reason = record['state'], record.get('reason')
-            elif record['state'] in ('RUNNING', 'PAUSED') and self.process is not None:
+            elif record['state'] in ('RUNNING', 'PAUSED') and self.process is not None and self.process.poll() is None:
                 if self.host is not None:self.host.attest(self.process.pid)
                 if self.network is not None:self.network.attest()
                 self._prove_kvm()

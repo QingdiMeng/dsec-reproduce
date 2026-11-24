@@ -86,6 +86,24 @@ class CatalogHistoryTests(unittest.TestCase):
         with self.assertRaisesRegex(UnsupportedCapability,'Previous catalog changed'):catalog.unchanged()
         with self.assertRaisesRegex(ValueError,'identity changed'):self.load()
 
+    def test_history_capacity_keeps_digest_validation_and_remains_bounded(self):
+        import hashlib
+        pins=[]
+        for index in range(32):
+            previous=self.root/f'previous-{index}.json'
+            previous.write_text(json.dumps(dict(self.old,revision=index)))
+            pins.append(dict(path=str(previous),sha256=hashlib.sha256(previous.read_bytes()).hexdigest()))
+        path=self.root/'capacity.json'
+        path.write_text(json.dumps(dict(self.old,catalog_history=pins)))
+        catalog=ExecutionCatalog(path)
+        self.assertTrue(all(catalog.accepts_digest('python',pin['sha256']) for pin in pins))
+        path.write_text(json.dumps(dict(self.old,catalog_history=pins+[self.pin])))
+        with self.assertRaisesRegex(ValueError,'Bounded explicit catalog history'):
+            ExecutionCatalog(path)
+        pins[-1]=dict(pins[-1],sha256='f'*64)
+        path.write_text(json.dumps(dict(self.old,catalog_history=pins)))
+        with self.assertRaisesRegex(ValueError,'identity changed'):ExecutionCatalog(path)
+
 
 class GuestTests(unittest.TestCase):
     def setUp(self):

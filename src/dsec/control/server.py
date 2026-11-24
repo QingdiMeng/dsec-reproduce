@@ -16,6 +16,7 @@ from dsec.contracts.errors import CommandOutcomeUnknown
 from dsec.contracts.rpc import ServiceError
 from dsec.runtime.sessions.service import dispatch_native
 from dsec.runtime.sessions.jobs import NativeJobs
+from dsec.contracts.environments import ENVIRONMENT_REQUIREMENTS_FEATURE, check_environment_binding
 
 class BoundedServer(socketserver.ThreadingMixIn,socketserver.UnixStreamServer):
     daemon_threads=False
@@ -81,6 +82,17 @@ class Handler(socketserver.StreamRequestHandler):
                     raise ValueError('Node demand only applies to creation')
             if op=="create" and node is None:
                 check_create(self.server.admission_worker_socket,request_id,args)
+            if op == 'create' and 'environment_contract' in args:
+                # Existing intents reconcile against their original journal,
+                # even if a new catalog has withdrawn their environment.
+                if self.server.journal.lookup(request_id)['state'] == 'NOT_FOUND':
+                    catalog = getattr(self.server.manager, 'microvm_environment_catalog', None)
+                    try:
+                        check_environment_binding(args['environment_contract'],
+                            catalog.execution_contracts() if catalog else (), 'microvm',
+                            args.get('environment_id','default'))
+                    except ValueError as exc:
+                        raise ServiceError('AdmissionDenied', str(exc)) from exc
             if op=="prewarm" and (self.server.admission_worker_socket or node is not None):
                 raise AdmissionDenied("Prewarm requires a scheduler-managed pool reservation")
             if op in CONTAINER_OPERATIONS:
@@ -174,10 +186,14 @@ class Handler(socketserver.StreamRequestHandler):
                 counts={"active_requests":self.server.active_requests,"max_requests":self.server.max_requests,
                         "rejected_requests":self.server.rejected_requests}
             runtime = getattr(self.server, 'container_runtime', None)
+            catalog = getattr(manager, 'microvm_environment_catalog', None)
+            contracts = ((catalog.execution_contracts() if catalog else ()) +
+                         (runtime.execution_contracts() if runtime else ()))
             return {"pid":os.getpid(),"release":installed_release(),"recovery_events":manager.recovery_events,
                     "qemu_environments":runtime.execution_environments() if runtime else {},
+                    "environment_contracts":[item.as_dict() for item in contracts],
                     "monitor_errors":manager.errors,"warm_pool":manager.warm_pool_status(),
-                    "protocol_features":["container-rpc-v1", "fncall-rpc-v1", "busy-nonadmission-v1", NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_FEATURE, HTTP_FEATURE] + (
+                    "protocol_features":["container-rpc-v1", "fncall-rpc-v1", "busy-nonadmission-v1", NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_FEATURE, HTTP_FEATURE, ENVIRONMENT_REQUIREMENTS_FEATURE] + (
                         ["node-admission-v1"] if getattr(self.server, 'node_admission', None) else []),
                     "admission_worker_socket":self.server.admission_worker_socket,**counts}
         if op=="node_status":
@@ -194,7 +210,8 @@ class Handler(socketserver.StreamRequestHandler):
         if op=="native_cancel":
             return self.server.stream_jobs().cancel(sandbox_id,args,request_id)
         if op=="create":
-            sandbox=manager.create(**args)
+            creation = {key:value for key,value in args.items() if key != 'environment_contract'}
+            sandbox=manager.create(**creation)
             node=getattr(self.server, 'node_admission', None)
             if node is not None:
                 node.created('microvm', sandbox.id)

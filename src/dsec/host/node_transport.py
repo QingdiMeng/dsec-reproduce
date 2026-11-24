@@ -7,6 +7,7 @@ import uuid
 
 from dsec.contracts.cluster import NodeView, Quota, SandboxRoute, request_id
 from dsec.contracts.rollout import ROLLOUT_READS
+from dsec.contracts.environments import EnvironmentView
 
 
 class NodeRPC:
@@ -66,7 +67,16 @@ class RemoteNode:
         value = self.rpc.send(self.token, dict(operation='node_probe', request_id=uuid.uuid4().hex), readonly=True, timeout=5)
         return NodeView(value['node_id'], value['boot_id'], tuple(value['backends']),
             tuple(value['environments']), tuple(value['capabilities']), value['load'],
-            Quota(**value['available']), value['active'])
+            Quota(**value['available']), value['active'], tuple(EnvironmentView.from_dict(item)
+                for item in value.get('environment_contracts', ())))
+
+    def health(self):
+        """The controller's capability guard uses the same live Node view.
+
+        Keep the injected NodeGateway interface when transport is remote; the
+        wire operation remains the existing read-only node_probe.
+        """
+        return self.probe()
 
     def lifecycle_proof(self, version):
         return self.rpc.send(self.token, dict(operation='node_lifecycle_proof',

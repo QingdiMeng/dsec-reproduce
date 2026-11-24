@@ -19,7 +19,8 @@ class PlacementEngine:
         self.lock, self.recent = threading.Lock(), []
         self.membership = membership
 
-    def choose(self, backend, environment, demand: Quota, *, capabilities=(), exclude=()):
+    def choose(self, backend, environment, demand: Quota, *, capabilities=(), exclude=(),
+               execution_capabilities=()):
         views = self.watcher.snapshot()
         eligible = self.membership.active_nodes() if self.membership is not None else set(views)
         with self.lock:
@@ -30,6 +31,9 @@ class PlacementEngine:
                 if node in eligible and node not in exclude and backend in view.backends
                 and environment in view.environments
                 and set(capabilities) <= set(view.capabilities)
+                and (not execution_capabilities or
+                     (view.environment_contract(backend, environment) is not None and
+                      set(execution_capabilities) <= set(view.environment_contract(backend, environment).capabilities)))
                 and demand.fits(view.available)]
             if not candidates:
                 raise NoPlacement('No fresh healthy node meets backend/environment/resources/capabilities')

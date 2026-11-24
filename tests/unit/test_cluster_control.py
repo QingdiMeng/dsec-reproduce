@@ -1,7 +1,7 @@
 """Controlled cluster interleavings; MemoryStore/Edge fixtures are not HA evidence."""
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 import threading
 import unittest
@@ -12,7 +12,8 @@ from dsec.contracts.cluster import (AuthorizationDenied, CoordinationUnavailable
 from dsec.contracts.errors import RequestOutcomeUnknown
 from dsec.contracts.requests import RequestConflict, request_digest
 from dsec.contracts.sandbox import DSecContainerRunArgs, UnsupportedCapability
-from dsec.contracts.native import SESSION_FILE_FEATURE, HTTP_FEATURE
+from dsec.contracts.native import (SESSION_FILE_FEATURE, HTTP_FEATURE, NATIVE_FEATURE,
+                                   STREAM_FEATURE, REQUIREMENTS_FEATURE)
 from dsec.control.cluster_api import ClusterAPI
 from dsec.control.coordination import EtcdStore, Record
 from dsec.control.iam import IAM
@@ -22,6 +23,7 @@ from dsec.host.cluster_http import ClusterHTTPServer
 from dsec.control.node_gateway import NodeGateway, edge_request_id
 from dsec.sdk.cluster import ClusterTransport, JSONRPC
 from dsec.sdk.sandbox_transport import ServiceError
+from dsec.contracts.environments import EnvironmentView, ENVIRONMENT_REQUIREMENTS_FEATURE
 
 
 class MemoryStore:
@@ -296,19 +298,233 @@ class ClusterTests(unittest.TestCase):
                           {'action':'read', 'session_id':'4'*32, 'path':'/tmp/file'})
             calls.assert_called_once_with('health')
 
+    def test_remote_node_native_capability_guard_matches_inprocess_interface(self):
+        from dsec.host.node_transport import NodeRPC, RemoteNode
+        api, node, _ = self.controller()
+        sid = api.call(self.token, self.envelope())['id']
+        ingress = NodeRPC(node)
+        calls = []
+        class RPC:
+            def send(self, credential, envelope, **options):
+                calls.append((envelope, options))
+                return ingress.dispatch(credential, envelope)
+        api.nodes['n1'] = RemoteNode(RPC(), token='internal', route_key=self.key)
+        for args, feature in (({'action':'http', 'session_id':'4'*32, 'url':'http://127.0.0.1:8080'}, HTTP_FEATURE),
+                              ({'action':'read', 'session_id':'4'*32, 'path':'/tmp/file'}, SESSION_FILE_FEATURE)):
+            with self.subTest(action=args['action']):
+                for supported in (False, True):
+                    calls.clear()
+                    view = self.view(capabilities=(feature,) if supported else ())
+                    with patch.object(node, 'health', return_value=view), patch.object(node, 'call', return_value={'forwarded':True}) as dispatch:
+                        envelope = self.envelope('native', sandbox_id=sid, request_id='2'*32, args=args)
+                        if supported:
+                            self.assertEqual(api.call(self.token, envelope), {'forwarded':True})
+                            dispatch.assert_called_once()
+                        else:
+                            with self.assertRaises(UnsupportedCapability):
+                                api.call(self.token, envelope)
+                            dispatch.assert_not_called()
+                    self.assertEqual(calls[0][0]['operation'], 'node_probe')
+                    self.assertEqual(calls[0][1], {'readonly':True, 'timeout':5})
+                    self.assertEqual([entry[0]['operation'] for entry in calls],
+                                     ['node_probe', 'node_call'] if supported else ['node_probe'])
+        calls.clear()
+        with patch.object(node, 'health', side_effect=RequestOutcomeUnknown('probe reply lost')), patch.object(node, 'call') as dispatch:
+            with self.assertRaises(RequestOutcomeUnknown):
+                api.call(self.token, self.envelope('native', sandbox_id=sid, request_id='3'*32,
+                    args={'action':'http', 'session_id':'4'*32, 'url':'http://127.0.0.1:8080'}))
+            dispatch.assert_not_called()
+        self.assertEqual(len(calls), 1)
+
     def test_configured_extensions_cannot_overstate_edge_health(self):
         _, node, _ = self.controller()
-        node.capabilities = ('configured', SESSION_FILE_FEATURE, HTTP_FEATURE)
+        node.capabilities = ('configured', SESSION_FILE_FEATURE, HTTP_FEATURE, NATIVE_FEATURE, STREAM_FEATURE)
         state = dict(budget=dict(cpu=3,memory_mb=1536,disk_mb=3072,network_mbps=3,
                                 min_memory_free_mb=0,min_disk_free_mb=0),
                      reserved=dict(cpu=0,memory_mb=0,disk_mb=0,network_mbps=0),
                      sample=dict(memory_available_mb=1536,disk_available_mb=3072,
                                  cpu_utilization=0,disk_busy=0), leases={})
-        for features, expected in (([], {'configured'}),
-                                   ([SESSION_FILE_FEATURE], {'configured', SESSION_FILE_FEATURE})):
+        for features, expected in (([], {'configured', REQUIREMENTS_FEATURE}),
+                                   ([SESSION_FILE_FEATURE], {'configured', SESSION_FILE_FEATURE, REQUIREMENTS_FEATURE}),
+                                   ([NATIVE_FEATURE, STREAM_FEATURE],
+                                    {'configured', REQUIREMENTS_FEATURE, NATIVE_FEATURE, STREAM_FEATURE})):
             with self.subTest(features=features), patch.object(node.inspection, 'call',
                     side_effect=[{'protocol_features':['node-admission-v1', *features]}, state]):
                 self.assertEqual(set(node.health().capabilities), expected)
+
+    def requirements_controller(self):
+        api, node, edge = self.controller()
+        contract = EnvironmentView('default','microvm','microvm','a'*64,
+                                  tuple(sorted((NATIVE_FEATURE,STREAM_FEATURE))))
+        view = replace(self.view(capabilities=(REQUIREMENTS_FEATURE, ENVIRONMENT_REQUIREMENTS_FEATURE,
+                                              NATIVE_FEATURE, STREAM_FEATURE)),
+                       environment_contracts=(contract,))
+        api.placement.watcher.probes['n1'] = lambda:view
+        api.placement.watcher.poll()
+        return api, node, edge, view
+
+    def test_node_environment_claims_are_intersected_with_actual_edge_protocols(self):
+        _, node, _, view = self.requirements_controller()
+        contract = view.environment_contracts[0]
+        state = dict(budget=dict(cpu=3,memory_mb=1536,disk_mb=3072,network_mbps=3,
+                                min_memory_free_mb=0,min_disk_free_mb=0),
+                     reserved=dict(cpu=0,memory_mb=0,disk_mb=0,network_mbps=0),
+                     sample=dict(memory_available_mb=1536,disk_available_mb=3072,
+                                 cpu_utilization=0,disk_busy=0),leases={})
+        for features, expected in (((NATIVE_FEATURE,STREAM_FEATURE),contract.capabilities),
+                                    ((NATIVE_FEATURE,),(NATIVE_FEATURE,)), ((),())):
+            health = dict(protocol_features=['node-admission-v1',ENVIRONMENT_REQUIREMENTS_FEATURE,*features],
+                          environment_contracts=[contract.as_dict()])
+            with self.subTest(features=features), patch.object(node.inspection,'call',side_effect=[health,state]):
+                actual = node.health().environment_contract('microvm','default')
+            self.assertEqual(actual.capabilities,expected)
+            self.assertEqual(actual.revision,contract.revision)
+
+    def test_application_requirements_filter_nodes_before_quota_or_execution(self):
+        api, node, edge = self.controller()
+        with self.assertRaises(NoPlacement):
+            api.call(self.token, self.envelope(args={'required_capabilities':[STREAM_FEATURE]}))
+        self.assertIsNone(self.iam.lookup('case', '1'*32))
+        self.assertEqual(edge.created, 0)
+        # An old gateway cannot claim this new placement contract just by
+        # advertising the underlying Edge extension.
+        api.placement.watcher.probes['n1'] = lambda:self.view(capabilities=(NATIVE_FEATURE, STREAM_FEATURE))
+        api.placement.watcher.poll()
+        with patch.object(node,'create',return_value={'id':'must-not-dispatch'}) as dispatch:
+            with self.assertRaises(NoPlacement):
+                api.call(self.token, self.envelope(args={'required_capabilities':[STREAM_FEATURE]}))
+            dispatch.assert_not_called()
+        self.assertEqual(edge.created, 0)
+
+    def test_execution_requirements_bind_edge_environment_without_changing_recovery_owner(self):
+        api, node, edge, view = self.requirements_controller()
+        args = {'required_capabilities':[STREAM_FEATURE]}
+        with patch.object(node, 'health', return_value=view):
+            result = api.call(self.token, self.envelope(args=args))
+        receipt = self.iam.lookup('case','1'*32)
+        self.assertEqual(set(receipt['args']['required_capabilities']), {NATIVE_FEATURE, STREAM_FEATURE})
+        proof = next(iter(edge.proofs.values()))
+        self.assertEqual(proof['digest'], request_digest('create', None,
+            {'environment_contract':receipt['args']['environment_contract']}))
+        # Equivalent requirement sets preserve intent; a lost controller's
+        # replacement queries the same owner even if the Node loses capability.
+        changed_order = {'required_capabilities':[STREAM_FEATURE, NATIVE_FEATURE, STREAM_FEATURE]}
+        with patch.object(node, 'health', side_effect=AssertionError('Existing creation is proof-based')):
+            self.assertEqual(api.call(self.token,self.envelope(args=changed_order)), result)
+            recovered = api.call(self.token,self.envelope('query_request',request_id='2'*32,
+                                                         args={'lookup_id':'1'*32}))
+        self.assertEqual(recovered['state'],'DONE')
+        self.assertEqual(edge.created,1)
+        with self.assertRaises(RequestConflict):
+            api.call(self.token,self.envelope(args={'required_capabilities':[NATIVE_FEATURE]}))
+
+    def test_container_requirements_use_the_same_admission_without_entering_backend_spec(self):
+        api, node, edge, view = self.requirements_controller()
+        node.backends = ('container',)
+        view = replace(view, backends=('container',), environment_contracts=(
+            replace(view.environment_contracts[0],backend='container',execution_mode='container'),))
+        api.placement.watcher.probes['n1'] = lambda:view
+        api.placement.watcher.poll()
+        spec = DSecContainerRunArgs(environment_id='default')
+        original = edge.call
+        def call(operation, sandbox_id=None, *, request_id=None, resource_demand=None, **args):
+            if operation != 'container_create':
+                return original(operation,sandbox_id,request_id=request_id,
+                                resource_demand=resource_demand,**args)
+            self.assertEqual(args, {'spec':spec.wire_spec(),
+                                   'environment_contract':view.environment_contracts[0].as_dict()})
+            edge.created += 1
+            result = {'id':'c'*32, 'state':'RUNNING'}
+            edge.proofs[request_id] = dict(state='DONE',sandbox_id=None,operation='create',
+                digest=request_digest('create',None,dict(spec.lifecycle_args(),
+                    environment_contract=view.environment_contracts[0].as_dict())),
+                response=dict(ok=True,result=result))
+            return result
+        edge.call = call
+        envelope = self.envelope('container_create',args=dict(spec=spec.wire_spec(),
+                                                             required_capabilities=[STREAM_FEATURE]))
+        envelope['resource_demand'] = {k:v for k,v in asdict(self.demand).items() if k != 'concurrency'}
+        with patch.object(node,'health',return_value=view):
+            result = api.call(self.token,envelope)
+        self.assertEqual(api.call(self.token,envelope),result)
+        self.assertEqual(edge.created,1)
+        self.assertEqual(SandboxRoute.decode(result['id'],self.key).backend,'container')
+
+    def test_capability_loss_between_placement_and_dispatch_releases_only_unsent_intent(self):
+        api, node, edge, _ = self.requirements_controller()
+        with patch.object(node, 'health', return_value=self.view()):
+            with self.assertRaises(ServiceError) as failure:
+                api.call(self.token,self.envelope(args={'required_capabilities':[STREAM_FEATURE]}))
+        self.assertEqual(failure.exception.kind,'AdmissionDenied')
+        self.assertEqual(set(failure.exception.details['missing_capabilities']), {NATIVE_FEATURE, STREAM_FEATURE})
+        self.assertEqual(edge.created,0)
+        self.assertEqual(self.iam.lookup('case','1'*32)['state'],'RELEASED')
+        self.assertEqual(self.store.read('projects/case').value['usage']['concurrency'],0)
+        with self.assertRaises(RequestConflict):
+            api.call(self.token,self.envelope(args={'required_capabilities':[STREAM_FEATURE]}))
+
+    def test_unknown_required_creation_is_not_replayed_or_released_after_capability_loss(self):
+        api, node, edge, view = self.requirements_controller()
+        edge.drop_after_create = True
+        args = {'required_capabilities':[STREAM_FEATURE]}
+        with patch.object(node,'health',return_value=view), self.assertRaises(RequestOutcomeUnknown):
+            api.call(self.token,self.envelope(args=args))
+        self.assertEqual(self.iam.lookup('case','1'*32)['state'],'DISPATCHED')
+        # Hide the Edge proof to model an unresolved dispatched operation.
+        edge.proofs.clear()
+        with patch.object(node,'health',return_value=self.view()), self.assertRaises(RequestOutcomeUnknown):
+            api.call(self.token,self.envelope(args=args))
+        self.assertEqual(edge.created,1)
+        self.assertEqual(self.iam.lookup('case','1'*32)['state'],'DISPATCHED')
+        self.assertEqual(self.store.read('projects/case').value['usage']['concurrency'],1)
+
+    def test_invalid_requirements_fail_before_admission_and_empty_preserves_legacy_digest(self):
+        api, _, edge = self.controller()
+        for invalid in (None, 'native-stream-v1', ['model-kv-cache'], [False], [STREAM_FEATURE]*5):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                api.call(self.token,self.envelope(args={'required_capabilities':invalid}))
+        self.assertIsNone(self.iam.lookup('case','1'*32))
+        first = api.call(self.token,self.envelope())
+        self.assertEqual(api.call(self.token,self.envelope(args={'required_capabilities':[]})),first)
+        self.assertEqual(edge.created,1)
+
+    def test_native_requirements_cannot_change_function_invocation_semantics(self):
+        api, _, edge = self.controller()
+        args = dict(spec={'execution_mode':'fncall','environment_id':'default'},
+                    required_capabilities=[NATIVE_FEATURE])
+        with self.assertRaises(UnsupportedCapability):
+            api.call(self.token,self.envelope('container_create',args=args))
+        self.assertIsNone(self.iam.lookup('case','1'*32))
+        self.assertEqual(edge.created,0)
+
+    def test_node_capability_does_not_substitute_for_the_selected_environment(self):
+        api, _, edge, view = self.requirements_controller()
+        other = replace(view.environment_contracts[0],environment_id='different')
+        view = replace(view,environments=('default','different'),environment_contracts=(other,))
+        api.placement.watcher.probes['n1'] = lambda:view
+        api.placement.watcher.poll()
+        with self.assertRaises(NoPlacement):
+            api.call(self.token,self.envelope(args={'required_capabilities':[STREAM_FEATURE]}))
+        self.assertIsNone(self.iam.lookup('case','1'*32))
+        self.assertEqual(edge.created,0)
+
+    def test_environment_revision_change_after_placement_cannot_dispatch_new_artifacts(self):
+        api, node, edge, view = self.requirements_controller()
+        changed = replace(view,environment_contracts=(replace(view.environment_contracts[0],revision='b'*64),))
+        with patch.object(node,'health',return_value=changed), self.assertRaises(ServiceError) as error:
+            api.call(self.token,self.envelope(args={'required_capabilities':[STREAM_FEATURE]}))
+        self.assertTrue(error.exception.details['environment_revision_changed'])
+        self.assertEqual(error.exception.details['missing_capabilities'],[])
+        self.assertEqual(edge.created,0)
+        self.assertEqual(self.iam.lookup('case','1'*32)['args']['environment_contract']['revision'],'a'*64)
+        self.assertEqual(self.iam.lookup('case','1'*32)['state'],'RELEASED')
+
+    def test_callers_cannot_publish_environment_contracts_in_creation(self):
+        api, _, edge = self.controller()
+        with self.assertRaisesRegex(ValueError,'control plane'):
+            api.call(self.token,self.envelope(args={'environment_contract':{'revision':'a'*64}}))
+        self.assertEqual(edge.created,0)
+        self.assertIsNone(self.iam.lookup('case','1'*32))
 
     def test_duplicate_controller_creates_reuse_one_edge_request_and_quota(self):
         api, node, edge = self.controller()

@@ -10,6 +10,8 @@ from unittest.mock import patch
 
 from artifact_publisher import publish_microvm
 from environment_catalog import MicroVMEnvironmentCatalog
+from dsec.contracts.environments import artifact_revision
+from dsec.contracts.native import STREAM_FEATURE, execution_requirements
 
 
 def sha(data):
@@ -38,6 +40,31 @@ class ArtifactPublisherTest(unittest.TestCase):
         source = root / "source.json"
         source.write_text(json.dumps({"format": 1, "environments": {"tools": entry}}))
         return source, files
+
+    def test_publication_rebinds_only_a_valid_existing_execution_claim(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            source, _ = self.fixture(root)
+            value = json.loads(source.read_text())
+            entry = value['environments']['tools']
+            entry['execution_contract'] = dict(schema=1,artifact_revision=artifact_revision(entry),
+                                              capabilities=[STREAM_FEATURE])
+            source.write_text(json.dumps(value))
+            old = entry['execution_contract']['artifact_revision']
+            destination = root/'published.json'
+            publish_microvm(source,'tools',destination,root/'store')
+            published = MicroVMEnvironmentCatalog(destination)
+            item = published.entries['tools']
+            self.assertNotEqual(item['execution_contract']['artifact_revision'],old)
+            self.assertEqual(item['execution_contract']['artifact_revision'],artifact_revision(item))
+            self.assertEqual(published.execution_contracts()[0].capabilities,
+                             execution_requirements([STREAM_FEATURE]))
+            entry['execution_contract']['artifact_revision'] = 'b'*64
+            source.write_text(json.dumps(value))
+            with self.assertRaisesRegex(ValueError,'pinned environment'):
+                publish_microvm(source,'tools',root/'bad.json',root/'bad-store')
+            self.assertFalse((root/'bad.json').exists())
+            self.assertFalse((root/'bad-store').exists())
 
     def test_publish_overlaybd_and_deduplicate_without_changing_existing_environment(self):
         with tempfile.TemporaryDirectory() as work:
