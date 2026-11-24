@@ -59,7 +59,7 @@
       "title": "环境能力与版本绑定",
       "state": "accepted",
       "owner": "maintainer",
-      "scope": "按具体环境声明筛选，IAM 固定 revision，Node/Edge 在新建意图前复核。",
+      "scope": "按具体环境声明筛选，IAM 固定 revision，Node/Edge 在新建意图前复核。 MicroVM 可按可移交的制品版本请求放置。",
       "limits": "受信发布者声明，不是自动 guest attestation；扩展组合另列。",
       "sources": [
         {
@@ -100,7 +100,8 @@
       ],
       "evidence": [
         "EV-ENV-1030",
-        "EV-SESSION-HTTP-1124"
+        "EV-SESSION-HTTP-1124",
+        "EV-PORTABLE-MICROVM-1124"
       ],
       "roadmap": [
         "RM-005",
@@ -535,7 +536,8 @@
         }
       ],
       "evidence": [
-        "EV-R3-1008"
+        "EV-R3-1008",
+        "EV-PORTABLE-MICROVM-1124"
       ],
       "roadmap": [
         "RM-101",
@@ -591,7 +593,7 @@
       "title": "通用环境发布与完整性",
       "state": "partial",
       "owner": "maintainer",
-      "scope": "固定制品、发布目录、部分 fs-verity 对象及声明路径重绑定。",
+      "scope": "固定制品、发布目录、部分 fs-verity 对象及声明路径重绑定。 支持本地 MicroVM 对象库之间通过清单交付。",
       "limits": "本地已有共享层在同次发布中源和目标各全读一次。新 Edge 进程首次加载全读一次。通用 compaction 与跨进程免扫描仍未闭环。",
       "sources": [
         {
@@ -602,6 +604,9 @@
         },
         {
           "path": "src/dsec_image/prepare.py"
+        },
+        {
+          "path": "src/dsec/storage/handoff.py"
         }
       ],
       "tests": [
@@ -620,7 +625,8 @@
         "EV-ENV-1030",
         "EV-PUBLICATION-READ-1124",
         "EV-PUBLICATION-REUSE-1124",
-        "EV-PACK-DIFF-OVERLAYBD-1124"
+        "EV-PACK-DIFF-OVERLAYBD-1124",
+        "EV-PORTABLE-MICROVM-1124"
       ],
       "roadmap": [
         "RM-101",
@@ -1652,6 +1658,23 @@
           "section": "2026-11-24 TASK-025 OverlayBD 父层复用与子 VM 恢复"
         }
       ]
+    },
+    {
+      "id": "EV-PORTABLE-MICROVM-1124",
+      "title": "HTTPS SDK 版本放置与独立目录的 MicroVM 恢复",
+      "date": "2026-11-24",
+      "date_kind": "run",
+      "kind": "linux",
+      "verdict": "passed",
+      "identity": "Core wheel 990d6638, Firecracker 1.17, two Edge processes and two Node gateways on one Linux host.",
+      "scope": "Export and import into distinct object pools. With publisher objects offline, exact-version create and retry selected B. Guest file and executable survived pause/resume. Both Node leases empty and IAM released.",
+      "limits": "Local file-ext4 physical run, co-located gateways/controller and one etcd member. OverlayBD handoff covered by local tests. No remote 3FS or live relocation.",
+      "records": [
+        {
+          "path": "docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md",
+          "section": "2026-11-24 TASK-026 两个 Node 的制品交付与实例恢复"
+        }
+      ]
     }
   ],
   "work": [
@@ -2436,7 +2459,7 @@
       "id": "TASK-026",
       "title": "发布一次 MicroVM 环境，在另一 Node 按同一制品版本创建实例",
       "kind": "feature",
-      "state": "ready",
+      "state": "done",
       "owner": "maintainer",
       "capabilities": [
         "CAP-PUBLICATION",
@@ -2464,7 +2487,9 @@
         "TASK-005",
         "TASK-025"
       ],
-      "evidence": [],
+      "evidence": [
+        "EV-PORTABLE-MICROVM-1124"
+      ],
       "reopens": []
     }
   ]

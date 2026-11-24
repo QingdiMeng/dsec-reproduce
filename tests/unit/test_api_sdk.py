@@ -113,6 +113,23 @@ class APIClientTests(unittest.IsolatedAsyncioTestCase):
                                  list(execution_requirements([STREAM_FEATURE])))
                 self.assertEqual(payload['request_id'], '1'*32)
 
+    async def test_portable_version_requires_new_api_and_uses_the_existing_create(self):
+        from dsec.contracts.environments import ARTIFACT_VERSION_FEATURE
+        client = self.client()
+        version = 'a'*64
+        demand = NodeDemand(1,512,1024,0)
+        client._transport.rpc.send = Mock(return_value=self.health)
+        await client.open()
+        with self.assertRaises(UnsupportedCapability):
+            await client.run_microvm(resource_demand=demand, artifact_version=version)
+        self.assertEqual(client._transport.rpc.send.call_count, 1)
+        health = dict(self.health, protocol_features=[*self.health['protocol_features'], ARTIFACT_VERSION_FEATURE])
+        client._transport.rpc.send = Mock(side_effect=[health, {'id':'owned'}])
+        await client.open()
+        await client.run_microvm(resource_demand=demand, artifact_version=version)
+        sent = client._transport.rpc.send.call_args.args[1]
+        self.assertEqual(sent['args']['artifact_version'], version)
+
     async def test_empty_requirements_preserve_wire_and_invalid_requirements_never_send(self):
         client = self.client()
         client._transport.rpc.send = Mock(side_effect=[self.health, {'id':'owned'}])

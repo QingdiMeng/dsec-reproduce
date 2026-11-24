@@ -34,6 +34,8 @@ GEN-006 在环境派生时也适用。构建实例持有自己的私有写入，
 发布者需要重新核验其执行能力。TASK-024 的直接 ext4 文件增量实现和适用范围见
 [制品发布指南](../guides/ARTIFACT_PUBLICATION.md#从隔离构建沙盒发布文件增量)。
 
+TASK-026 对 MicroVM 区分两个版本。发布者和调用方使用可移交清单的 SHA-256 标识制品；Node 和 Edge 使用包含本地路径的部署 revision 核对具体执行对象。控制面同时固定所选 Node 和部署绑定。重复请求、暂停与恢复沿原所有者路由。制品交付步骤见[发布指南](../guides/ARTIFACT_PUBLICATION.md#跨-node-交付同一-microvm-环境)。
+
 ### 能力声明与环境绑定
 
 公开 `DSecClient.run_microvm/run_container` 增加可选的

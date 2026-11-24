@@ -13,6 +13,13 @@ from dsec.contracts.native import execution_requirements
 
 
 ENVIRONMENT_REQUIREMENTS_FEATURE = 'environment-requirements-v1'
+ARTIFACT_VERSION_FEATURE = 'microvm-artifact-version-v1'
+
+
+def validate_artifact_version(value):
+    if not isinstance(value, str) or not re.fullmatch('[0-9a-f]{64}', value):
+        raise ValueError('Invalid artifact version; expected a SHA-256 digest')
+    return value
 
 
 def artifact_revision(descriptor):

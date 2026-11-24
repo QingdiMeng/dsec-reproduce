@@ -143,6 +143,47 @@ class ArtifactPublisherTest(unittest.TestCase):
             self.assertEqual([pin["file"] for pin in lowers],
                              [str(objects / (sha(data) + ".commit")) for data in (b"lower", b"delta")])
 
+    def test_portable_handoff_rebinds_overlaybd_and_rejects_corrupt_pins(self):
+        from dsec.storage.handoff import artifact_versions, export_manifest, import_manifest
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, _ = self.fixture(root)
+            value = json.loads(source.read_text())
+            entry = value["environments"]["tools"]
+            overlay = entry["overlaybd_root"]
+            diff = root / "child.commit"
+            diff.write_bytes(b"child")
+            overlay["lowers"].append(dict(file=str(diff), bytes=5, sha256=sha(b"child")))
+            image = Path(overlay["image"])
+            image.write_text(json.dumps({"lowers":[{"file":pin["file"]} for pin in overlay["lowers"]], "upper":{}}))
+            overlay["image_sha256"] = sha(image.read_bytes())
+            entry["execution_contract"] = dict(schema=1, artifact_revision=artifact_revision(entry),
+                                               capabilities=[STREAM_FEATURE])
+            source.write_text(json.dumps(value))
+            a, b = root/'a.json', root/'b.json'
+            publish_microvm(source, 'tools', a, root/'a')
+            manifest = root/'manifest'
+            version = export_manifest(a, 'tools', manifest)
+            self.assertNotIn(str(root), manifest.read_text())
+            objects = root/'transfer'
+            (root/'a'/'objects').rename(objects)
+            import_manifest(manifest, version, objects, 'tools', b, root/'b')
+            first, second = MicroVMEnvironmentCatalog(a), MicroVMEnvironmentCatalog(b)
+            self.assertEqual(artifact_versions(second), {'tools':version})
+            self.assertNotEqual(first.environment_digest('tools'), second.environment_digest('tools'))
+            self.assertEqual(second.resolve('tools')['root_block_backend'], 'overlaybd-ublk')
+            self.assertEqual(second.execution_contracts()[0].capabilities, execution_requirements([STREAM_FEATURE]))
+            self.assertEqual([pin['sha256'] for pin in second.entries['tools']['overlaybd_root']['lowers']],
+                             [pin['sha256'] for pin in overlay['lowers']])
+            lower = next(objects.glob('*.commit'))
+            lower.chmod(0o600)
+            lower.write_bytes(b'other')
+            with self.assertRaises(ValueError):
+                import_manifest(manifest, version, objects, 'bad', b, root/'b')
+            self.assertNotIn('bad', MicroVMEnvironmentCatalog(b).entries)
+            with self.assertRaisesRegex(ValueError, 'digest'):
+                import_manifest(manifest, '0'*64, objects, 'bad', b, root/'b')
+
     def test_each_publication_reads_shared_source_and_existing_object_once(self):
         with tempfile.TemporaryDirectory() as work:
             root = Path(work).resolve()

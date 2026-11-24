@@ -519,6 +519,33 @@ class ClusterTests(unittest.TestCase):
         self.assertEqual(self.iam.lookup('case','1'*32)['args']['environment_contract']['revision'],'a'*64)
         self.assertEqual(self.iam.lookup('case','1'*32)['state'],'RELEASED')
 
+    def test_version_pin_filters_nodes_and_retries_only_the_original_owner(self):
+        from dsec.contracts.environments import ARTIFACT_VERSION_FEATURE
+        api, node, edge, view = self.requirements_controller()
+        good, old = '3'*64, '4'*64
+        view = replace(view, load=1, artifact_versions={'default':good},
+                       capabilities=(*view.capabilities, ARTIFACT_VERSION_FEATURE))
+        stale = replace(view, node_id='n2', load=0, artifact_versions={'default':old})
+        api.placement.watcher.probes.update(n1=lambda:view, n2=lambda:stale)
+        api.placement.watcher.poll()
+        args = {'artifact_version':good}
+        with self.assertRaises(NoPlacement):
+            api.call(self.token, self.envelope(args={'artifact_version':'5'*64}))
+        self.assertIsNone(self.iam.lookup('case', '1'*32))
+        with patch.object(node, 'health', return_value=view):
+            result = api.call(self.token, self.envelope(args=args))
+        receipt = self.iam.lookup('case', '1'*32)
+        self.assertEqual(receipt['node'], 'n1')
+        self.assertEqual(receipt['args']['environment_contract']['revision'], 'a'*64)
+        with patch.object(node, 'health', side_effect=AssertionError('Replay should use proof')):
+            self.assertEqual(api.call(self.token, self.envelope(args=args))['id'], result['id'])
+        self.assertEqual(edge.created, 1)
+        with patch.object(node, 'health', return_value=replace(view, artifact_versions={'default':old})):
+            with self.assertRaises(ServiceError):
+                api.call(self.token, self.envelope(request_id='2'*32, args=args))
+        self.assertEqual(self.iam.lookup('case','2'*32)['state'], 'RELEASED')
+        self.assertEqual(edge.created, 1)
+
     def test_callers_cannot_publish_environment_contracts_in_creation(self):
         api, _, edge = self.controller()
         with self.assertRaisesRegex(ValueError,'control plane'):

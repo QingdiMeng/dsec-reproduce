@@ -12,7 +12,7 @@ from dsec.contracts.native import NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_F
 from dsec.contracts.native import REQUIREMENTS_FEATURE, execution_requirements
 from dsec.contracts.sandbox import DSecContainerRunArgs, UnsupportedCapability
 from dsec.contracts.rollout import ROLLOUT_FEATURE
-from dsec.contracts.environments import ENVIRONMENT_REQUIREMENTS_FEATURE
+from dsec.contracts.environments import ARTIFACT_VERSION_FEATURE, ENVIRONMENT_REQUIREMENTS_FEATURE, validate_artifact_version
 from dsec.contracts.cluster import NoPlacement
 
 
@@ -91,7 +91,7 @@ class ClusterAPI:
         if operation == 'health':
             from dsec._release import installed_release
             return dict(protocol=PROTOCOL, protocol_features=[PROTOCOL, 'container-rpc-v1', 'fncall-rpc-v1', 'fullvm-rpc-v1', 'fullvm-desktop-v1',
-                'busy-nonadmission-v1', 'node-admission-v1', 'node-upgrade-v1', ROLLOUT_FEATURE, NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_FEATURE, HTTP_FEATURE, REQUIREMENTS_FEATURE, ENVIRONMENT_REQUIREMENTS_FEATURE],release=installed_release())
+                'busy-nonadmission-v1', 'node-admission-v1', 'node-upgrade-v1', ROLLOUT_FEATURE, NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_FEATURE, HTTP_FEATURE, REQUIREMENTS_FEATURE, ENVIRONMENT_REQUIREMENTS_FEATURE, ARTIFACT_VERSION_FEATURE],release=installed_release())
         if operation == 'node.list':
             if args:
                 raise ValueError('Node inventory takes no arguments')
@@ -119,6 +119,11 @@ class ClusterAPI:
                 backend = 'fullvm'
             if 'environment_contract' in args:
                 raise ValueError('Environment contracts are selected by the control plane, not callers')
+            version = args.get('artifact_version')
+            if 'artifact_version' in args:
+                validate_artifact_version(version)
+                if backend != 'microvm':
+                    raise ValueError('Portable artifact versions require a MicroVM')
             required = execution_requirements(args.get('required_capabilities', ()))
             # Retain the old digest when nothing is requested. Equivalent order,
             # duplicates and implicit native dependencies name the same intent.
@@ -142,19 +147,22 @@ class ClusterAPI:
                     args.get('spec',{}).get('execution_mode') == 'fncall' else ())
                 if backend == 'fullvm':
                     capabilities = ('fullvm-execution-v1',)
+                if version is not None:
+                    capabilities += (ARTIFACT_VERSION_FEATURE, ENVIRONMENT_REQUIREMENTS_FEATURE)
                 capabilities = tuple(sorted(set(capabilities) | set(required) |
                     ({REQUIREMENTS_FEATURE, ENVIRONMENT_REQUIREMENTS_FEATURE} if required else set())))
                 candidate = self.placement.choose(backend, environment, demand,capabilities=capabilities,
-                                                 execution_capabilities=required)
-                if required or backend == 'fullvm':
+                                                 execution_capabilities=required, artifact_version=version)
+                if required or backend == 'fullvm' or version is not None:
                     selected = self.placement.watcher.snapshot().get(candidate)
                     contract = selected.environment_contract(backend, environment) if selected else None
-                    if contract is None or not set(required) <= set(contract.capabilities):
+                    if (contract is None or not set(required) <= set(contract.capabilities) or
+                            version is not None and selected.artifact_versions.get(environment) != version):
                         raise NoPlacement('Environment observation expired before admission')
                     args['environment_contract'] = contract.as_dict()
             else:
                 candidate = receipt['node']
-                if (required or backend == 'fullvm') and 'environment_contract' in receipt['args']:
+                if 'environment_contract' in receipt['args']:
                     # The original request digest is computed above, before
                     # resolving publication metadata. Reconciliation preserves
                     # the first observed revision rather than choosing today's.
