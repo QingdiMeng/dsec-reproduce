@@ -63,9 +63,9 @@ python -m dsec_image.pack_diff --policy policy.json --delta dependency.delta.jso
 取决于发布者的内容审查。已存在目标、符号链接父目录和不匹配的父版本会终止发布。
 此版本覆盖新增文件，暂不支持覆盖、删除、整盘块差分、运行态内存或热加载目录。
 
-### OverlayBD 根盘的派生发布（TASK-025 验收中）
+### OverlayBD 根盘的派生发布（TASK-025）
 
-候选实现沿用上面的捕获格式和文件策略。父环境发布者使用
+此路径沿用上面的捕获格式和文件策略。父环境发布者使用
 `pack_diff_root=overlaybd-ext4-opt-v1` 声明 `/opt` 位于 OverlayBD 提供的 ext4 根文件系统。
 基础镜像的有序 lower、大小和 SHA-256 仍由父目录固定。当完整根盘已由这些 lower
 提供时，目录可省略 `boot_template` 和 `boot_sha256`。如显式提供副本，发布器仍校验它。
@@ -87,10 +87,7 @@ python -m dsec_image.pack_diff --policy policy.json --delta dependency.delta.jso
 保留父 lower 的顺序，并把新 commit 放在栈顶。daemon 回执丢失或身份变化时，错误中会给出
 待核对的工作目录。管理员应先确认设备归属再清理该目录。
 
-2026-11-24 在 Linux 安装包上用上游工具生成两个空的 OverlayBD commit，分别发布父子目录。
-子目录复用了父对象库中的 4 个对象（inode 相同），仅新增 1 个 8 KiB commit 和 1 个 JSON，
-lower 顺序正确，未生成 ext4 副本。8 KiB 是该空层的大小。实际写入依赖后的大小、
-子 VM 启动与父子隔离仍待 ublk 实机验收。
+Linux 实机验收中，从 64 MiB Alpine 启动盘构造的两个父 lower 均得到复用。发布一个新增依赖只增加 76 KiB 的 commit 和 441 字节的描述文件。新建子 VM 可以执行程序，父环境和其他子 VM 的内容保持独立。详见[实机验收记录](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md)。
 
 ## TASK-023 设计提案 · 单次发布内复用本地校验
 

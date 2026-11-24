@@ -619,7 +619,8 @@
         "EV-VERITY-COST",
         "EV-ENV-1030",
         "EV-PUBLICATION-READ-1124",
-        "EV-PUBLICATION-REUSE-1124"
+        "EV-PUBLICATION-REUSE-1124",
+        "EV-PACK-DIFF-OVERLAYBD-1124"
       ],
       "roadmap": [
         "RM-101",
@@ -680,7 +681,7 @@
       "state": "partial",
       "owner": "maintainer",
       "scope": "隔离 MicroVM 构建并捕获已批准的新增文件，绑定父版本，原子发布，独立子 VM 恢复。",
-      "limits": "本地原生 ext4 的 /opt 文件级增量，发布端物化完整子盘。任意磁盘块、覆盖/删除、OverlayBD 后端及在线目录更新仍待实现或验收。",
+      "limits": "本地原生 ext4 或 OverlayBD ext4 根盘，仅支持 /opt 下批准的新增文件。前者物化完整子盘，后者复用父 lower 并发布一个增量块层。任意块导出、覆盖、删除及在线目录更新待验收。",
       "sources": [
         {
           "path": "src/dsec_image/pack_diff.py"
@@ -692,7 +693,8 @@
         }
       ],
       "evidence": [
-        "EV-PACK-DIFF-FILES-1124"
+        "EV-PACK-DIFF-FILES-1124",
+        "EV-PACK-DIFF-OVERLAYBD-1124"
       ],
       "roadmap": [
         "RM-103"
@@ -1633,6 +1635,23 @@
           "section": "2026-11-24 TASK-024 构建依赖的文件级增量发布"
         }
       ]
+    },
+    {
+      "id": "EV-PACK-DIFF-OVERLAYBD-1124",
+      "title": "OverlayBD 复用父 lower 的增量发布与独立恢复",
+      "date": "2026-11-24",
+      "date_kind": "run",
+      "kind": "linux",
+      "verdict": "passed",
+      "identity": "Core wheel 5863e9e5, Firecracker 1.17, pinned Rust ublk daemon b78207e6, four sequential SDK MicroVMs.",
+      "scope": "Two original lowers reused in order with matching inodes and hashes. One 77824-byte commit and one 441-byte manifest added. Child execution, parent/sibling isolation and device reclamation verified.",
+      "limits": "One Linux host and local artifact pool, add-only dependency under /opt. No throughput or remote storage measurements.",
+      "records": [
+        {
+          "path": "docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md",
+          "section": "2026-11-24 TASK-025 OverlayBD 父层复用与子 VM 恢复"
+        }
+      ]
     }
   ],
   "work": [
@@ -2383,7 +2402,7 @@
       "id": "TASK-025",
       "title": "OverlayBD 分层根盘的增量发布与恢复",
       "kind": "feature",
-      "state": "in_progress",
+      "state": "done",
       "owner": "maintainer",
       "capabilities": [
         "CAP-PACK-DIFF",
@@ -2408,7 +2427,9 @@
       "depends_on": [
         "TASK-024"
       ],
-      "evidence": [],
+      "evidence": [
+        "EV-PACK-DIFF-OVERLAYBD-1124"
+      ],
       "reopens": []
     }
   ]
