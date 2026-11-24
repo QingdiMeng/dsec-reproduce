@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dsec-swegym-case"
+version = "0.1.0.dev0"
+description = "Optional SWE-Gym execution and official scoring through the DSec API"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = ["dsec-reproduce==0.1.0.dev0"]
+
+[project.optional-dependencies]
+data = ["pyarrow>=14"]
+harness = ["swebench @ git+https://github.com/SWE-Gym/SWE-Bench-Fork.git@242429c188fcfd06aad13fce9a54d450470bf0ac"]
+agent = ["transformers>=5.12.1,<6", "jinja2>=3.1"]
+
+[project.scripts]
+dsec-swegym-prepare = "dsec_swegym_case.dataset:main"
+dsec-swegym-verify = "dsec_swegym_case.acceptance:main"
+dsec-swegym-rollout = "dsec_swegym_case.agent:main"
+dsec-swegym-openhands = "dsec_swegym_case.openhands_sdk:main"
+dsec-swegym-openhands-legacy = "dsec_swegym_case.openhands:main"
+dsec-swegym-git-baseline = "dsec_swegym_case.repository:main"
+dsec-swegym-train-sao = "dsec_swegym_case.train_sao:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

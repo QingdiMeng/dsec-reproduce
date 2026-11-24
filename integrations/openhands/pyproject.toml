@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dsec-openhands"
+version = "0.1.0.dev0"
+description = "OpenHands runtime adapter over the public DSec sandbox API"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+readme = "README.md"
+dependencies = [
+    "dsec-reproduce==0.1.0.dev0",
+]
+
+[project.optional-dependencies]
+sdk = ["openhands-sdk==1.58.2", "openhands-tools==1.58.2"]
+legacy = [
+    "openhands-ai @ git+https://github.com/SWE-Gym/OpenHands.git@e644a2ca45c3623b27a7e6c169e3d479f0a87fbc",
+    "litellm @ git+https://github.com/BerriAI/litellm.git@33ceb7ca1ffab1401decca773253b58d5fc461a2",
+    "e2b==0.17.1",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

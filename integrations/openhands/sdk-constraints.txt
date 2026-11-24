@@ -1,0 +1,8 @@
+# Linux Python 3.12 controller + optional SWE-Gym verifier compatibility.
+# These are dependency constraints, not a replacement agent or scorer.
+openhands-sdk==1.58.2
+openhands-tools==1.58.2
+browser-use==0.13.9
+click==8.3.3
+huggingface-hub==1.16.1
+datasets==3.6.0

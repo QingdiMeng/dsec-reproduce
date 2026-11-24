@@ -10,7 +10,8 @@ def check(root):
     errors = []
     files = [root / 'README.md', root / 'CONTRIBUTING.md', root / 'ROADMAP.md',
              root / 'THIRD_PARTY_NOTICES.md', *sorted((root / 'docs').rglob('*.md')),
-             *sorted((root / 'apps').rglob('README.md'))]
+             *sorted((root / 'apps').rglob('README.md')),
+             *sorted((root / 'integrations').rglob('README.md'))]
     for source in files:
         text = re.sub(r'```.*?```', '', source.read_text(), flags=re.S)
         for target in re.findall(r'\[[^\]\n]+\]\(([^)\n]+)\)', text):

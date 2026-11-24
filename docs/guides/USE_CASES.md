@@ -23,6 +23,7 @@ are demonstrated in the [cluster SDK guide](CLUSTER_DEPLOYMENT.md#remote-native-
 | UC-04: Repeated episodes from prepared state | Baseline sealing/fork API; installed fork acceptance tool | State isolation, actual snapshot recovery and shared-object cleanup validated on an OverlayBD-backed case. |
 | UC-05: Custom tasks outside TB2.1 | Task adapter protocol; counter task and `dsec-host smoke` | Non-TB execution, scoring, restart recovery and cleanup validated. |
 | UC-06: MBPP GRPO with verl | Optional `apps/mbpp` data, verification, native training and comparison entry points | Qwen3.5-2B completed all 374 train tasks, 187 updates and eight responses per task. Full 500-task before/after evaluation improved mean sample success from 39.775% to 42.275%. |
+| UC-07: SWE-Gym repository execution | Optional SWE-Gym application and OpenHands SDK v1.58.2 adapter; separate legacy fork | Real API tool/cancellation conformance and official SWE-Gym scoring; DeepSeek Flash solved the accepted mypy case. Single-case acceptance is distinct from benchmark solve rate or SAO training. |
 
 Start with the [deployment quickstart](QUICKSTART.md). Commands below assume
 the core is installed in the active Linux venv and that an isolated instance
@@ -241,6 +242,31 @@ checkpoint recovery. Keep failed evidence separately; use a complete replacement
 post-evaluation from the final checkpoint, with no extra gradient updates or
 mixing of partial results. See the [case report](../reports/MBPP_VERL_FIRST_USE.md)
 for the actual failure/recovery, preserved evidence and measurement limits.
+
+## UC-07 — SWE-Gym repository tasks
+
+Follow the [SWE-Gym application guide](../../apps/swegym/README.md) to prepare a
+pinned SWE-Gym-Lite subset, publish an official task image, and run
+`dsec-swegym-verify` with an empty, official or supplied candidate patch through
+the public API. Repository inspection, edits and verification share one writable
+Container workspace. Evaluation uses the pinned upstream script/parser/scorer;
+full logs and cleanup evidence are retained separately from numeric rewards.
+Use `dsec-swegym-openhands` with the optional
+[OpenHands SDK adapter](../../integrations/openhands/README.md) for SDK v1.58.2's
+official Agent/Conversation. The optional old fork is separately available as
+`dsec-swegym-openhands-legacy`. Both retain upstream prompting/parsing/history and call
+the public DSec API; model interactions share one persistent workspace and the
+actual candidate is graded in a fresh sandbox. Its normalized completion/event
+logs are frozen evaluation evidence, not native SAO training tensors.
+The older `dsec-swegym-rollout` scaffold remains a separate token-boundary
+diagnostic. Neither entry point implements or manages a trainer.
+
+The [first-use record](../reports/SWEGYM_FIRST_USE.md) separates real harness
+acceptance and valid model failures from pending SAO training. Installing the core does not
+install this dataset, application, evaluation fork or training framework.
+FnCall's reset semantics do not substitute for a persistent repository, and
+this acceptance does not claim the same repository task was run on all three
+execution paths.
 
 ## Comparing applications on Docker and DSec
 

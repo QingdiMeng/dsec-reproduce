@@ -1,0 +1,6 @@
+# Build a guest wheelhouse first; LiteLLM's old PyPI artifact is no longer available.
+ipykernel==6.29.5
+ipython==8.29.0
+pexpect==4.9.0
+openhands-aci==0.1.0
+litellm @ git+https://github.com/BerriAI/litellm.git@33ceb7ca1ffab1401decca773253b58d5fc461a2
