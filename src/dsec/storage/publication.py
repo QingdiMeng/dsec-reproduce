@@ -189,6 +189,8 @@ def publish_microvm(source_catalog: Path, environment_id: str, destination_catal
     store = local_store.resolve() / "objects"
     for path_key, sha_key, suffix in (("boot_template", "boot_sha256", ".ext4"),
                                       ("kernel", "kernel_sha256", ".kernel")):
+        if resolved[path_key] is None:
+            continue  # An OverlayBD root can boot entirely from its pinned lowers.
         path, digest, _ = _copy_object(Path(source[path_key]), store, suffix, source[sha_key],
                                        verification=verification)
         source[path_key], source[sha_key] = str(path), digest

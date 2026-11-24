@@ -115,6 +115,34 @@ class ArtifactPublisherTest(unittest.TestCase):
                 publish_microvm(source, "tools", destination, root / "store")
             self.assertFalse(destination.exists())
 
+    def test_overlaybd_only_publication_keeps_ordered_pins_without_ext4_export(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work).resolve()
+            source, files = self.fixture(root)
+            config = json.loads(source.read_text())
+            entry = config["environments"]["tools"]
+            del entry["boot_template"], entry["boot_sha256"]
+            files["boot.ext4"].unlink()
+            child = root / "child.commit"
+            child.write_bytes(b"delta")
+            overlay = entry["overlaybd_root"]
+            overlay["lowers"].append(dict(file=str(child), sha256=sha(b"delta"), bytes=5))
+            image = Path(overlay["image"])
+            image.write_text(json.dumps({"lowers": [{"file": pin["file"]} for pin in overlay["lowers"]],
+                                         "upper": {}}))
+            overlay["image_sha256"] = sha(image.read_bytes())
+            source.write_text(json.dumps(config))
+            output = root / "published.json"
+            publish_microvm(source, "tools", output, root / "store")
+            published = MicroVMEnvironmentCatalog(output)
+            self.assertIsNone(published.resolve("tools")["boot_template"])
+            self.assertNotIn("boot_sha256", published.entries["tools"])
+            objects = root / "store" / "objects"
+            self.assertFalse(list(objects.glob("*.ext4")))
+            lowers = published.entries["tools"]["overlaybd_root"]["lowers"]
+            self.assertEqual([pin["file"] for pin in lowers],
+                             [str(objects / (sha(data) + ".commit")) for data in (b"lower", b"delta")])
+
     def test_each_publication_reads_shared_source_and_existing_object_once(self):
         with tempfile.TemporaryDirectory() as work:
             root = Path(work).resolve()

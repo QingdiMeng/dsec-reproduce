@@ -13,7 +13,7 @@ import struct
 import time
 import uuid
 
-from dsec.storage.ublk import UblkDaemonClient
+from dsec.storage.ublk import UblkDaemonClient, UblkDaemonError
 
 
 class OverlayBDRootStore:
@@ -88,9 +88,14 @@ class OverlayBDRootStore:
         try:
             response = self.client.create_runtime_device(source_image,
                                                          self.global_config, runtime)
-        except Exception:
+        except UblkDaemonError:
             if runtime.exists():
                 shutil.rmtree(runtime)
+            raise
+        except (OSError, EOFError, ValueError) as exc:
+            # The request may have reached the daemon. Its live upper must
+            # survive a lost/malformed reply for reconciliation.
+            exc.add_note(f"Unconfirmed ublk creation; retain {runtime}")
             raise
         dev_id, device = response["dev_id"], Path(response["device_path"])
         try:

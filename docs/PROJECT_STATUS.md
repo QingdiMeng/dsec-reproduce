@@ -39,8 +39,6 @@
 
 ## 执行与候选任务
 
-当前没有执行中的系统开发/实验；选择下一项前先复核下面的增量、资源和终点。
-
 ### TASK-001：建立当前状态台账与防重复工作流
 
 状态：完成；类型：`maintenance`；负责人：`maintainer`。
@@ -390,6 +388,22 @@
 - 完成证据：EV-PACK-DIFF-FILES-1124
 
 变更边界：新增可移交的文件级增量和受信发布端入口。
+
+### TASK-025：OverlayBD 分层根盘的增量发布与恢复
+
+状态：进行中；类型：`feature`；负责人：`maintainer`。
+
+- 关联能力：CAP-PACK-DIFF、CAP-PUBLICATION；依赖：TASK-024。
+- 新增价值：将批准的依赖写入父 OverlayBD 镜像上的私有 upper，发布一个新 commit，复用父 lower 并由新 VM 恢复。
+- 复用：复用 TASK-024 的白名单捕获、OverlayBD 私有写盘与 restack、现有内容寻址 publisher。
+- 触发原因：TASK-024 虽然只传文件增量，发布端仍物化完整子 ext4；此外 publisher 无条件要求 boot_template，与 catalog 已支持的纯 OverlayBD 根盘不一致。
+- 既有证据：EV-PACK-DIFF-FILES-1124、EV-PUBLICATION-REUSE-1124、EV-R3-1008
+- 资源：受信 OverlayBD 工具和 Linux KVM、兼容的 ublk 服务及其可写工作目录。
+- 验收：纯 OverlayBD 环境不要求保留 ext4 副本，缺失或损坏的必要 pin 仍拒绝发布；使用真实父 lower 生成单个子 commit，量化新增字节；新 VM 可执行依赖，父环境和兄弟实例保持独立，回收临时资源
+- 停止条件：真实发布和启动验收通过后关闭；缺少可验证运行环境时保留实测边界和阻塞。
+- 完成证据：未完成，不得推断通过
+
+变更边界：新增 OverlayBD 派生发布路径，沿用父环境与策略固定、文件校验及原子发布。
 
 ## 实现、测试与决策索引
 

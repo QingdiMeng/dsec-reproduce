@@ -23,6 +23,28 @@ class OverlayBDDaemonPermissionsTest(unittest.TestCase):
             store.client.create_runtime_device.assert_not_called()
             self.assertEqual(list(root.glob('ublk-runtime-*')),[])
 
+    def test_lost_create_reply_preserves_daemon_workspace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = root / "image.json"
+            image.write_text("{}")
+            store = OverlayBDRootStore.__new__(OverlayBDRootStore)
+            store.socket_identity = Mock(return_value=[1, 2, 123, "tick", "boot"])
+            store.require_daemon_group_access = Mock()
+            store.client = Mock()
+
+            def lost_reply(source, config, runtime):
+                runtime.mkdir()
+                (runtime / "upper").write_bytes(b"live")
+                raise EOFError("lost reply")
+
+            store.global_config = root / "global.json"
+            store.client.create_runtime_device.side_effect = lost_reply
+            with self.assertRaises(EOFError):
+                store.create(image, root, root / "disk")
+            self.assertEqual([p.read_bytes() for p in root.glob("ublk-runtime-*/upper")], [b"live"])
+            store.client.delete.assert_not_called()
+
     def test_missing_umask_is_not_treated_as_permissive(self):
         with patch.object(Path,'read_text',return_value='Name:\tublk\n'):
             with self.assertRaisesRegex(RuntimeError,'creation refused'):
