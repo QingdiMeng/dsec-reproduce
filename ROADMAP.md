@@ -1,6 +1,13 @@
 # Roadmap: reproducing DSec as a usable elastic sandbox system
 
-Updated: 2026-10-25. Baseline: `0.1.0.dev0`, with modular R3 functional acceptance complete.
+Updated: 2026-10-30. Baseline: `0.1.0.dev0`, with modular R3 functional acceptance complete.
+
+For current capability completion, scoped evidence and selected work, use the
+[generated project status](docs/PROJECT_STATUS.md). Its single source is
+[project/registry.json](project/registry.json). This roadmap owns direction,
+paper alignment and release gates; the dated implementation narratives below
+are historical context, not another current task queue. Work must be selected
+under the [contribution workflow](CONTRIBUTING.md#work-management).
 
 The goal is a general elastic sandbox system for agent workloads and RL, with
 reproducible evidence for the mechanisms described in the
@@ -14,6 +21,38 @@ of the paper's production platform or its performance results. Future version
 names below are planning targets, not released capabilities or calendar
 commitments. Follow the milestone order; move a date rather than weaken an
 acceptance gate.
+
+The 2026-10-30 application review prioritizes **sandbox-system generality**, not
+one integration per agent/trainer. The [generality decisions and acceptance
+method](docs/architecture/AGENT_ENVIRONMENT_CONTRACT.md) separate workload
+requirements, execution/state semantics, ownership, deadlines and evidence from
+agent logic and scoring. No new MiMo or mini-swe-agent adapter is part of this
+iteration. The targeted Linux base-native/stream and cross-client continuation
+gate is complete. Session-scoped files and interruption/recovery were also
+implemented and accepted in earlier Linux runs; absence from the latest run
+does not reopen their implementation. On 2026-11-24, TASK-002 verified session files, a bounded loopback HTTP POST
+and duplicate request handling through the public API on an isolated MicroVM.
+An environment missing the HTTP capability was rejected before admission. Reuse existing tests for changed boundaries and name any new fault precisely
+before adding work. Long-task budget composition and reusable artifact validation
+remain distinct general-system candidates, rather than another generic
+"extension and recovery" development round.
+
+Direct SDK creation now binds declared execution capabilities to a concrete
+catalog environment and deployment revision. Placement checks that environment,
+IAM retains the first binding, and Node plus Edge check it before new execution
+intent; cached/unknown requests retain their original proof/owner. The optional
+requirements leave existing wire/digests unchanged when omitted. The optional
+claim is validated by generic MicroVM and QEMU catalogs, and verified MicroVM
+publication rebinds it after path rewrites without granting new capabilities.
+Missing claims mean unknown support. This is a trusted publisher declaration,
+not automatic guest conformance or production isolation. A separate
+[Linux acceptance](docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md#generality-linux-20261030)
+passed 27 real-runtime checks, including both controlled revision-change windows,
+and 77 installed-wheel regressions without skips. It exercises networkless
+Firecracker MicroVM and QEMU Container/FnCall through the HTTPS API/mTLS Node;
+it does not cover HTTP extensions, multi-host placement or training.
+The bounded EnvironmentBinding model and paired Edge code-guard mutations cover
+stale publication between Node inspection and Edge admission.
 
 The networkless QEMU Container/FnCall preview now requires per-VM authenticated
 control/native channels, catalog schema 2 and rebuilt guests. Linux acceptance
@@ -91,7 +130,9 @@ to a retained version, preserved stopped episode/reward history, and per-replica
 API image upgrade/rollback without rebuilding etcd members. The baseline and
 candidate were controlled test builds; this is not evidence for arbitrary older
 releases, state-format migration, privileged/VMM updates or independent-host HA.
-Certificate/key rotation and clean-host operator workflows remain next.
+Bounded certificate/access-credential rotation has also passed installed-wheel
+acceptance; long-lived route keys and etcd peer/JWT roots remain separate gaps.
+Clean-host operator workflows retain their own unclosed gate.
 CPU/GPU mixed deployment keeps trainers/model servers
 external and gives DSec explicit sandbox budgets. These operational flows remain
 open where their corresponding real-host evidence is not yet recorded.
@@ -143,11 +184,11 @@ path does not establish the same result for every storage or runtime backend.
 
 | Paper capability | v0.1 status | Remaining boundary |
 | --- | --- | --- |
-| libdsec-style client and backend selection | Partial | Public networkless QEMU Container/FnCall paths share API/IAM/Edge admission with Firecracker MicroVM. FnCall cleans each invocation; Container retains native sessions/workspace. FullVM, mediated networking, production QEMU confinement and some run arguments remain unfinished. See execution isolation and acceptance boundaries. |
+| libdsec-style client and backend selection | Partial | Public QEMU Container/FnCall paths share API/IAM/Edge admission with Firecracker MicroVM; bounded host confinement and opt-in isolated IPv4 egress have passed acceptance. FullVM desktop production isolation and broader validation, Container memory offload, broader production isolation and some run arguments remain unfinished. See execution isolation and acceptance boundaries. |
 | Shared EROFS layers and private OverlayFS writes | Validated on single-host paths | Generic offline layer compaction is not yet a supported publication policy. |
 | On-demand storage, local metadata and local/3FS sources | Validated on selected paths | Distributed throughput, failure handling and heterogeneous workload benefits are not established. |
 | Rust OverlayBD and ublk storage path | Validated integration | External upstream components; not bundled binaries or a reproduction of their implementation. |
-| pmem/DAX sharing of read-only file pages | Validated on generic two-VM paths | Not enabled in the latest paired-cost or GRPO acceptance; DAX objects currently require local backing and a compatible VMM. |
+| pmem/DAX sharing of read-only file pages | Validated on generic two-VM paths and one SWE-Gym task | QEMU Container/FnCall now support pinned uncompressed EROFS pmem layers; installed-wheel Linux checks confirmed shared file pages, private copy-up/whiteouts and read-only FnCall mounts on 2026-10-26. The mypy SWE-Gym baseline/oracle also passed after real-file DAX and shared-inode checks; see the first-use report. Not enabled in the historical paired-cost or GRPO acceptance; DAX objects require local backing and a compatible VMM. |
 | DAMON and free-page reporting | Partial | FPR is supported; DAMON remains profile-specific rather than a general workload policy. |
 | LS/BE CPU QoS | Partial | Container experiments exist; automatic placement and VMM coverage are incomplete. |
 | microVM pause, terminate and snapshot resume | Validated | Small-scale real recovery, not exhaustive failure or scale validation. |
@@ -161,7 +202,7 @@ Mechanism references: [paper §3](https://arxiv.org/html/2609.22978#S3),
 [§5](https://arxiv.org/html/2609.22978#S5), and
 [§6](https://arxiv.org/html/2609.22978#S6).
 
-The current candidate passed 49 core regressions, short GRPO with rewards
+The historical v0.1 GRPO candidate passed 49 core regressions, short GRPO with rewards
 `[1,0]` / `[0,0]`, four actual VMM terminate/resume events and prepared-state
 isolation. This establishes integration and a valid learning update, not
 long-term learning gains or all-task correctness. See the
@@ -278,12 +319,12 @@ not a prerequisite for describing a smaller working deployment accurately.
 
 ## Tracking and acceptance rules
 
-- Use the work IDs above as stable issue references. They are planned work
-  items, not already-created GitHub issues. Each implementation issue records
-  its owner, dependencies, scope, acceptance command and evidence location.
-- Track each item as `planned`, `in progress`, `blocked`, or `validated`.
-  Change it to `validated` only with evidence tied to an exact source/package
-  revision and deployment configuration. Milestone placement is not a status.
+- RM IDs above are stable milestone/release-gate references, not automatically
+  created GitHub issues or current execution statuses. TASK/CAP/EV records and
+  their state vocabulary are maintained only in the
+  [project register](project/registry.json), with a
+  [generated view](docs/PROJECT_STATUS.md). Follow the
+  [opening, revalidation and closure rules](CONTRIBUTING.md#work-management).
 - A historical E experiment is supporting evidence. It does not replace an
   installed-system regression after integration, and an enabled feature is
   not automatically an enabled default.
@@ -299,11 +340,12 @@ not a prerequisite for describing a smaller working deployment accurately.
 - Keep frozen release evidence immutable. Documentation changes enter the next
   source export; runtime changes need the corresponding installed acceptance.
 
-The immediate execution order is **RM-001/002/003 → RM-101 →
-RM-102/103/104 → RM-201/202/203**. The production and distributed milestones
-remain explicit future scope. The current v0.1 delivery checklist is maintained
-in [the release plan](ROADMAP.md), and historical implementation
-records are in [system status](ROADMAP.md).
+Milestone dependencies prioritize reproducible installation before storage,
+reuse and broader training/production claims. They do not reopen accepted
+increments or automatically select the next experiment. Active work, uncommitted
+delivery state, candidate increments and missing resources are visible in
+[project status](docs/PROJECT_STATUS.md). Dated implementation records remain
+in the reports linked by its evidence index.
 
 ## HA cluster preview — implementation on 2026-10-11
 

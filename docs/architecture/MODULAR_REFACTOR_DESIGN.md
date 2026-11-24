@@ -139,6 +139,95 @@ TC eBPF 绑定 TAP ingress，先安装并核验，再启用接口；IPv4 TCP/UDP
 7 项 SDK 与 29 项有限实机检查，包括内核实际附着程序、出网/拒绝、接管和完整退役；
 范围仍为单个已准备 Node、无代理策略，不外推为多租户对抗、洪泛或规模验收。
 
+CPH-016（2026-10-25）：增加预构建环境不应使已退役实例的历史无法读取。
+执行目录可显式携带最多 16 个旧目录的路径/内容摘要；只在原环境定义、CID 池、
+宿主隔离与网络策略逐项相同时接受旧实例摘要，不传递信任旧目录自己的历史列表。
+目录及旧快照在 Edge 运行期间仍不可修改；需要维护、保留旧快照并显式重启。
+该机制允许追加环境，不允许借目录更新解释旧实例为另一镜像或另一组资源/权限。
+SDK 调用者不能设置该列表，新增环境也不需要重装固定实例的管理员 helper。
+
+CPH-017（2026-10-26）：QEMU 私有磁盘的缓存模式是环境的一部分，不由 SDK 临时覆盖。
+旧环境默认 buffered；新环境可显式选择 Direct I/O，同时保留 flush，不因文件系统不支持
+而静默退回缓存路径。实机故障已证明大镜像导入的宿主脏页/回写页会与 guest RAM 争用
+同一 cgroup 限额；修复应消除这份宿主副本，而非仅抬高内存预算。该选项不是 DAX，
+不改变 guest RAM 或只读共享层机制。接管继续逐项核对配置和完整 argv。
+资源退役保持原死亡、身份和空 cgroup 门槛；删除内核计数器前将 peak/OOM/CPU/I/O
+原始字段持久化到实例目录，缺失字段不编造为零。模型、工具解析器及 RL 算法仍在可选应用。
+
+CPH-018（2026-10-26）：EROFS＋virtio-pmem/DAX 是跨实例共享只读数据的正式执行能力，
+不能用 Direct I/O 替代。QEMU 目录显式固定有序只读层与 task 内的共享目录；宿主映射使用
+原文件、share、readonly 和 ROM，不做每 VM 拷贝或预分配。guest 强制挂载 ro,dax=always，
+同时检查实际文件 STATX_ATTR_DAX；设备、层顺序、容量、DAX 或 private upper 不匹配时
+拒绝 READY，不静默退回 virtio-blk。可写修改落在每 VM 私有 ext4 上的 OverlayFS upper；
+FnCall 的共享目录只读，不能把一次调用的修改带入下次调用。
+
+制品发布使用未压缩、无 inline regular-file data 的 EROFS，并按 128 MiB 对齐。
+这与压缩的分发配置分开，不能仅凭 EROFS 扩展名声称所有文件支持 DAX。pmem 数量与
+容量有界，guest 的 struct-page 元数据占用也纳入可用 RAM 检查；不把映射容量等同于 RSS。
+首次节点授权固定共享制品根目录；每实例只申请该目录下所需文件的 read/mmap 权限，并将
+精确层身份写入原策略状态机，claim/retire 使用原记录，不允许中途扩权或替换层。
+后续发布到该根目录无需重装 helper；SDK 不能指定宿主路径或覆盖目录。运行时全文件
+SHA-256 校验目前仍会触碰制品数据，尚不能将这条路径声称为冷缓存按需读取性能验收；
+应接续已有 fs-verity 发布凭据机制后再测按需 I/O。单元回归不能替代 Linux
+双 VM 共享、应用迁移或性能验收。2026-10-26 已安装版的有限 Container/FnCall
+验收已证明文件页共享和私有写入，见安装验收报告；真实应用迁移与性能测量仍须单独完成。
+
+CPH-019（2026-10-26）：共享目录迁移属于离线镜像发布，不属于 SDK 请求或任务执行。
+从固定 local image ID 创建不启动的导出容器，流式拆分扁平 tar：共享目录内容进入
+不可变 EROFS，目录挂载点留在 lean archive，原 runtime Config 与文件数值身份、模式、
+tar 元数据保持。跨分区 hardlink、声明 volume、非目录根等不能保持语义的输入明确拒绝。
+不执行宿主任务代码，不修改宿主 Docker 驱动，不借构建工具跳过官方任务初始化/测试。
+新 image/template/layers 作为新环境发布，旧环境继续保留；build 的 task-image 与
+固定摘要的 task-archive 互斥。只读文件页共享与私有 copy-up 分别验收，不能把迁移后
+较小的私有导入归因于冷启动或整 VM 内存优势。
+
+CPH-020（2026-10-26）：长命令预算由管理员准备 guest 与执行目录共同固定，应用可在
+该上限内分别指定工具/verifier 预算；默认 30 秒，当前最多 300 秒，与远程传输等待边界匹配。
+状态与结果查询不持有长执行锁，避免工作繁忙被误判为失联；同一沙盒的效果操作仍由既有
+operation gate 串行准入，stop 不能越过已准入 shell。客户端取消/断开不撤销已准入效果。
+
+Edge 丢回复/重启后只查询原 guest 的持久化结果：请求身份、参数摘要、DONE 与成功响应
+必须同时匹配，才把主机 UNKNOWN 补成 DONE；没有证明就保持未知，不重放、不退款冒充完成。
+超时/异常收尾命令后代；Linux subreaper 覆盖 setsid/orphan，清理不确定不得成功。
+成功的 Container 命令保留显式后台服务的既有语义；容器 init 回收退出的孤儿进程，
+避免后台服务停止后积累僵尸；可信 init 只读挂到保留的 `/dsec-init` 根路径，
+不使用会被 `/usr` 分层挂载遮蔽的 Docker 隐式 `/sbin/docker-init`。FnCall 仍整容器重置。原生 session 的
+编译期上限、主机 channel 与 guest 转发等待也使用同一准备预算，不保留隐藏的短上限。
+对应 `QemuCommandRecovery` 的 AtMostOnce、DoneRequiresExactProof 与查询独立性，
+受控回归在 `test_qemu_commands.py`，精确证明的守卫变异由 `check_command_refinement.py`
+验证并记录模型/源码/测试摘要。有限状态模型不等同于实现完整形式化证明或存活性保证。
+
+CPH-021（2026-10-27）：agent、沙盒执行和 benchmark harness 分别拥有独立边界。
+成熟 agent 的提示词、解析、对话历史、控制循环保留在上游；`integrations/<agent>` 只把
+上游 runtime/action/observation 映射到公开 DSec SDK，不包含题目、评分器或训练算法。
+`apps/<benchmark>` 只负责公开 instruction、环境选择、候选制品和独立评分，不能要求
+核心根据 benchmark/agent 名称选择后门。依赖始终向 SDK/contracts，不导入 runtime/host
+具体驱动，也不因接入新 agent 修改 API Server 或 Edge 的协议分支。
+
+能力对齐包含语义：持久 cwd/env、PTY stdin、非阻塞轮询、interrupt、文件行范围、编辑
+撤销与 Python 状态分别验收；不能把“调用成功”视为完整兼容。OpenHands 的 PTY 与
+ipykernel/ACI 作为可选 guest 工具制品，经已有 native HTTP 通道访问；DSec 原生文件
+传输仍用于文件读写。工具与任务解释器、只读层、配置分离，工具依赖离线准备，可跨任务
+复用，不在 episode 中下载，也不把工具 Python 的 PYTHONHOME/PYTHONPATH 传给任务 shell。
+guest companion 绑定 guest loopback，不开放宿主端口、不执行宿主任务代码、不新增 root
+helper。未来多个 agent 都需要相同交互原语时，再按版本化能力契约提升为原生能力；不能
+把某个 agent 的工具服务协议混入 DSec 核心协议。
+
+OpenHands event ID 与 conversation ID 决定稳定 mutation ID；参数变化复用 ID 必须拒绝。
+断线/未知结果不重放。交互工具进程 epoch 改变后拒绝丢失的会话，不能无声重建。
+终端的一次新 action 对应完整脚本的一次完成边界，不能以多行脚本中第一行的 PS1 提示符
+认定整条命令完成；结果必须包含最终退出码，后续 action 不得消费遗留帧。持久 shell 内
+整段求值保留 cwd/env/alias，已有前台进程的输入仍按原始 stdin 处理。用确定性的多行、
+heredoc 和下一条命令输出归属测试验收，不能仅检查 HTTP 调用或退出码可用。
+agent 持有 VM 的生命周期，harness 通过新沙盒评分；未知执行或不完整评测不变成合法
+负样本。模型权重、训练 token/logprob、策略版本与算法属于外部 trainer；OpenHands
+冻结模型的消息日志不自动等于可训练的 TITO。兼容验证分别记录本地契约、实际上游控制
+循环、真实模型轨迹和官方评分；oracle 成功不替代模型正分，应用成功不替代所有上游能力。
+适配器关闭先建立拒绝新工作的边界，再等待已提交 SDK 请求结束，最后请求 stop。
+上游 awaiter 被取消不等于已接纳效果被撤销；不能提前关掉承载该请求的 SDK event loop。
+只有明确未接纳的 ServiceBusy 可在有界等待内复用同一 stop ID；UNKNOWN 保持粘性，
+再次 close/atexit 不自动重放。实际恢复另存查询/回收证明，不覆盖原来的未知记录。
+
 CPH-008 于 2026-10-21 根据“重构要面对部署问题”的要求追加。它扩充验收范围，
 不表示批量安装、动态入群或升级回滚已完成，也不扩大现有 HA 验收结论。
 

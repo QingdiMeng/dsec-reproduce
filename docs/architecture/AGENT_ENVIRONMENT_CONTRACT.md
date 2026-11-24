@@ -1,5 +1,117 @@
 # Agent 环境接口
 
+## 通用性设计方法（2026-10-30）
+
+目标是 **DSec 沙盒系统的通用性**。TB2.1、MBPP、SWE-Gym、OpenHands、
+mini-swe-agent 和 MiMo 是需求来源及验证案例，不是核心模块的组织方式。
+本节不新增统一 agent 框架，也不要求外部应用采用下文的 rollout 接口。
+
+每次从应用中发现问题，按以下顺序处理：
+
+1. 用执行事实描述需求，例如“同一实例的文件保留，但每条命令使用新 shell”，
+   不用某个 benchmark、agent 或 trainer 的名字描述系统能力。
+2. 明确需求属于执行、状态、制品、资源、网络、恢复还是部署，找出现有状态所有者。
+3. 区分应用规则和系统保证。应用决定 prompt、步数、上下文、评分与训练样本接收；
+   DSec 保证受理、隔离、执行结果、状态身份和回收事实。
+4. 优先补现有协议和模块；只有无法表达的系统语义才增加版本化能力。
+5. 写出与模型、agent 无关的验收，再用多个应用检查是否可复用。
+   接口测试、真实 Linux 执行、完整应用运行和性能结论分别记录。
+
+### 关键决策
+
+| 决策 | 系统约束 | 实践中的来源 |
+| --- | --- | --- |
+| GEN-001：调用方拥有交互循环 | 直接使用公开 SDK 即可；`AgentEnvironment` 是可选组合，不是所有应用的必经入口。核心不解析 bash 代码块、不管理 Thinking/摘要，也不生成训练 token/logprob | TB2.1 的反馈与 TITO、OpenHands 的上下文与工具协议 |
+| GEN-002：按能力匹配，不按应用分支匹配 | 创建时声明版本化执行能力，与环境 ID、执行模式和资源需求共同约束放置；API 支持该协议不等于每个 Node 都支持 | 多后端工具、文件和流式 SDK 的可移植性 |
+| GEN-003：状态语义不能被统一接口抹平 | 文件持久与 shell 状态持久是两件事；FnCall 每次独立调用，Container 保留工作区，MicroVM 有自己的恢复边界。后端不支持时明确拒绝，不能换执行模式或回落宿主机 | 多步代码修复、MBPP 独立评测、跨 episode 分叉 |
+| GEN-004：恢复按状态所有权分层 | Edge 负责实例与执行证明，控制面负责准入与原节点路由，应用负责自身状态；沙盒恢复不能证明外部 agent、模型轨迹或训练 checkpoint 同步恢复 | 断连对账、原生工具 epoch、SAO 训练 |
+| GEN-005：预算与结果保留原始含义 | 排队、创建、命令、调用方等待、应用总预算及评分预算分别处理；连接超时不合成命令超时。核心返回执行与截断证据，应用决定其评分含义 | TB2.1 verifier、长轨迹与缺失反馈 |
+| GEN-006：环境是可复用制品，写状态属于实例 | 核心接受发布的环境身份，保留 EROFS/OverlayBD/ublk、适用的 pmem/DAX 和本地/3FS 存储路径；不可变层共享，私有写入隔离。任务映射和依赖准备属于可选应用或发布流程 | 多任务镜像、安装依赖与重复 rollout |
+| GEN-007：完成必须有证据 | 命令完成、任务得分有效、实例停止和资源退还分别证明；UNKNOWN 保留原身份并禁止副作用重放，不能折算成训练零分或自动释放资源 | 失败轨迹、官方 verifier、停机与租约回收 |
+
+### 能力声明与环境绑定
+
+公开 `DSecClient.run_microvm/run_container` 增加可选的
+`required_capabilities`。复用现有 [native 协议能力](../../src/dsec/contracts/native.py)、
+Node 能力视图、PlacementEngine 和 IAM 准入，不增加独立的环境调度器。
+
+- 目前接受 `native-sessions-files-v1`、`native-stream-v1`、
+  `native-aether-chronus-v1`、`native-http-v1`；扩展自动要求基础 native 协议。
+- `sandbox-requirements-v1` 和 `environment-requirements-v1` 表示 API/Node 理解
+  创建需求和环境绑定，**不是执行能力本身**。SDK 在旧 API 上拒绝带需求的创建；
+  放置排除不理解该契约的旧 Node。
+- 需求按集合规范化，存入 IAM 请求身份。相同 ID 修改需求必须冲突；空需求保持
+  旧请求摘要和 Edge wire。应用不能在创建请求中伪造 `environment_contract`；
+  控制面从 watcher 选定环境契约后将其固定在 IAM receipt。
+- Node 的执行协议能力取自实时 Edge health，而非只相信部署配置；派发前复核。
+  如果 watcher 过期且当前 Node 不满足需求，仅在确认未派发、Edge 无 intent 时
+  释放准入并拒绝。已派发或 UNKNOWN 的请求继续查询原所有者，不另选节点。
+- 具体环境由 `EnvironmentView` 描述：环境 ID、后端、执行模式、部署 revision
+  和明确声明的协议能力。同节点的其他环境具备某能力不能代替当前环境。
+  环境目录未声明能力时按未知处理，不能从运行时名称或 Node 协议自动推断。
+- 能力声明绑定到环境描述中的制品 pins；内核、启动盘、层、模式或配置改变，旧声明
+  即失效。发布器只在验证源声明和字节后，为改写后的部署路径重新绑定。
+  revision 是部署身份，包含路径和配置，**不是跨主机内容去重或 OCI 镜像摘要**。
+- Node 派发前核对选定 revision。Edge 在新建意图进入日志前再次核对，避免 Node
+  复核之后服务被替换而运行不同环境。绑定进入 Edge 创建摘要；已受理/完成请求
+  仍按旧日志对账，不因新目录撤回环境而重放。绑定不会传给 guest 或 VMM。
+- 这是**受信发布者的声明与制品绑定**，不是自动 guest 探测、形式化 guest ABI
+  验证或程序依赖证明。pmem/DAX、网络策略、生产隔离及快照兼容性仍需相应证据，
+  不能通过任意字符串或一份声明获得支持。运行时原有制品完整性检查保持不变。
+- 这是直接 SDK 创建的能力声明；不改变可选 rollout API、FnCall 调用或旧任务插件。
+  不提供自动选择执行模式，也不把 FnCall 转成持久会话。
+
+`tests/unit/test_api_sdk.py` 与 `tests/unit/test_cluster_control.py` 覆盖旧端拒绝、
+需求筛选、规范化与冲突、能力撤回、未知结果不重放以及旧摘要兼容。
+这些控制面/传输夹具测试不等同于真实混合节点、旧 guest 或训练验收。
+滚动部署时应先升级全部 API 副本；健康探测不是跨旧副本的协议保证。
+
+2026-10-30 本地相关回归运行 205 项，203 项通过；2 项 Linux mountinfo/`/proc`
+专属检查在 macOS 跳过。现有集群守卫工具的 14 个代码变异对照均按预期失败，
+包括 MicroVM 与 Container 的最终环境守卫。文档链接与 diff 格式检查通过。
+这些结果不是实机验收。
+
+环境绑定进一步使用 [EnvironmentBinding](../../verification/EnvironmentBinding.tla)
+建模两次请求、两个 revision、过期 watcher、Node 检查后发生环境变化和 Edge 拒绝。
+`selected` 对应 IAM receipt 的环境绑定；`NodeCheck` 对应 Node 派发前复核；
+`EdgeAccept` 对应 Edge 在日志受理前对固定目录的版本校验。
+该模型假定目录和其制品 pins 在单个 Edge 生命周期中不可被重新解释；实际内容完整性
+由原有目录和后端验证负责。模型不证明构建声明真实、二进制语义或无限规模活性。
+`tools/check_concurrency_model.py` 要求安全模型通过，移除 Edge 守卫的负对照产生
+`AcceptedRevisionPinned` 反例。`tools/check_cluster_refinement.py` 将该守卫分别映射到
+MicroVM 和 Container 的本地 RPC 回归，移除检查时必须出现行为断言失败。
+本地安全模型遍历 484 个不同状态通过；移除守卫的模型找到所需反例。
+这是有界安全检查与指定代码守卫的对应证据，不是任意实现的完整形式化等价证明。
+
+2026-10-30 的[独立 Linux 验收](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md#generality-linux-20261030)
+进一步通过 27 项实际执行检查和 77 项安装版定向回归。真实 Firecracker MicroVM 和
+QEMU Container 经公开 HTTPS API、mTLS Node 完成按能力创建、二进制文件、持久会话、
+流式输出与重连，FnCall 保持调用间独立语义。分别在 API 已准入但尚未派发、Node
+已检查但尚未发送 Edge 创建 RPC 时，受控替换测试 Edge 的环境 revision；两次都
+返回 AdmissionDenied、Edge 无创建 intent、IAM 配额释放。原 DONE 证明仍可查询。
+这是所测两种 guest 的基础 native/stream conformance，不包括 HTTP/session 文件扩展、
+全部故障窗口、跨节点或训练验收，也不把发布声明变成自动 guest 认证。
+
+### 后续按共性缺口推进
+
+既有能力不因本轮未重测而重新列为未开发。会话文件扩展已有 2026-10-12 的真实
+MicroVM 验收；Edge 重启、执行中断、UNKNOWN 不重放已有 2026-10-10 和
+2026-10-25 的真实运行记录；API 副本失效后的原请求查询和流重连也已有验收。
+HTTP 已实现并有本地 C agent/SDK、超时和 POST 去重测试，当前记录未证明完整
+HTTPS API → QEMU guest HTTP 的端到端验收。具体证据见
+[执行与隔离契约](EXECUTION_ISOLATION.md)及[历史安装验收](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md)。
+后续只补明确缺失的组合证据；代码、协议、guest 或部署边界变化时重跑对应既有
+测试，不重新实现同一能力。新故障必须写明触发条件、缺失保证和验收终点后才立项。
+
+能力完成状态、证据和候选工作只维护在[项目台账视图](../PROJECT_STATUS.md)，
+本契约不再维护一张平行的优先级/待办表。新语义先明确系统不变量，再在所选任务的
+有限验收中选择有状态代码修复、独立代码执行等不同应用语义复核；已有能力按实际
+变更定向回归，不要求每次迭代重新跑全部应用。外部模型是否得分与沙盒是否正确
+是两组证据，不能互相替代。
+本轮不新增 MiMo/mini-swe-agent 专用适配器，也不启动新训练或扩大模型管理职责。
+
+## 可选 rollout 组合
+
 `AgentEnvironment` 是任务与训练框架之间的边界，定义在
 [dsec.rollout.environment](../../src/dsec/rollout/environment.py)，旧
 [agent_environment.py](../../src/dsec/rollout/environment.py) 保留兼容入口。它不替代沙箱 SDK，也不依赖
@@ -166,8 +278,9 @@ ID，附着并对账；不得新建 ID 重放可能已经生效的副作用。�
 - [Miles agent 适配器](../../src/dsec_adapters/miles_dsec_agent_function.py)
 - [接口回归](../../tests/unit/test_agent_environment.py)
 
-当前实现使用单机 Unix socket。生命周期与论文的 libdsec 思路相近，但本 agent
-协议是工程扩展，不声称与论文多机 apiserver/IAM 线协议兼容。
+正式入口经 API Server 与认证 Node gateway；单机 Unix socket 仅用于显式开发与
+内部服务通信。生命周期与论文的 libdsec 思路相近，但本 agent 协议是工程扩展，
+不声称与原始 DSec 实现的 apiserver/IAM 线协议兼容。
 
 最新真实训练、恢复与分叉验证见
 [GRPO 验收](../reports/DSEC_V01_GRPO_ACCEPTANCE.md)。短验收不代表全部 89 个任务、

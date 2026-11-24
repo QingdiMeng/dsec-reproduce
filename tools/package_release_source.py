@@ -11,6 +11,7 @@ import tomllib
 
 
 DOCS = (
+    'AGENTS.md', 'docs/PROJECT_STATUS.md',
     'README.md', 'docs/README.md', 'ROADMAP.md', 'docs/guides/USE_CASES.md', 'CONTRIBUTING.md', 'docs/guides/QUICKSTART.md', 'docs/guides/DSEC_HOST_CONFIGURATION.md',
     'docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md',
     'docs/guides/SERVICE_DEPLOYMENT.md', 'docs/architecture/SANDBOX_DAEMON.md',
@@ -22,12 +23,15 @@ DOCS = (
     'docs/reports/DSEC_VERITY_PILOT_REPORT.md',
     'docs/reports/DSEC_V01_GRPO_ACCEPTANCE.md',
     'docs/reports/MBPP_VERL_FIRST_USE.md',
+    'docs/reports/SWEGYM_FIRST_USE.md',
 )
 # These directories contain portable regression suites. Discovery is independent
 # of release construction; a new regression needs no parallel filename list.
 REGRESSION_DIRS = ('tests/unit', 'tests/contracts', 'tests/adapters', 'tests/packaging')
 
 TOOLS = (
+    'project/registry.json', 'tools/check_project.py',
+    '.github/ISSUE_TEMPLATE/work.md', '.github/pull_request_template.md',
     'deploy/cluster/prepare.py', 'deploy/cluster/planning.py', 'deploy/cluster/configuration.py', 'deploy/cluster/initialize.py',
     'deploy/cluster/pki.py','deploy/cluster/enroll_node.py',
     'deploy/cluster/upgrade.py',
@@ -42,7 +46,7 @@ TOOLS = (
     'tests/packaging/__init__.py',
     'tests/contracts/__init__.py', 'tests/contracts/v01_compatibility.json',
     'tools/build_smoke_guest.py', 'tools/build_docker_guest.py', 'tools/verify_installed_task.py',
-    'tools/build_native_agent.py',
+    'tools/build_native_agent.py', 'tools/build_erofs_dax.py', 'tools/split_docker_image.py',
     'tools/verify_native_sdk.py',
     'tools/verify_qemu_backend.py',
     'tools/verify_execution_paths.py',
@@ -57,9 +61,10 @@ TOOLS = (
     'tools/check_concurrency_model.py',
     'tools/check_shutdown_refinement.py',
     'tools/check_native_race_refinement.py',
-    'tools/check_fncall_refinement.py',
+    'tools/check_fncall_refinement.py', 'tools/check_command_refinement.py',
     'verification/AetherRouting.tla', 'verification/AetherRouting.cfg',
     'verification/QemuLifecycle.tla', 'verification/QemuLifecycle.cfg',
+    'verification/QemuCommandRecovery.tla', 'verification/QemuCommandRecovery.cfg',
     'verification/QemuCID.tla', 'verification/QemuCID.cfg',
     'verification/FnCallSlot.tla', 'verification/FnCallSlot.cfg',
     'verification/GuestChannelAuth.tla', 'verification/GuestChannelAuth.cfg',
@@ -71,6 +76,7 @@ TOOLS = (
     'verification/ContainerNativeGate.tla', 'verification/ContainerNativeGate.cfg',
     'verification/RaceReplay.tla',
     'verification/ClusterAdmission.tla', 'verification/ClusterAdmission.cfg',
+    'verification/EnvironmentBinding.tla', 'verification/EnvironmentBinding.cfg',
     'verification/NodeLifecycle.tla', 'verification/NodeLifecycle.cfg',
     'verification/NodeUpgrade.tla', 'verification/NodeUpgrade.cfg',
     'verification/CredentialRotation.tla','verification/CredentialRotation.cfg',
@@ -108,7 +114,8 @@ def source_files(root):
                      if all(part.isidentifier() for part in p.relative_to(directory).with_suffix('').parts))
         for pattern in settings.get('package-data', {}).get(package, []):
             files.update(str(p.relative_to(root)) for p in directory.glob(pattern) if p.is_file())
-    for name, package_name in (("tb21", "dsec_tb21_case"), ("mbpp", "dsec_mbpp_case")):
+    for name, package_name in (("tb21", "dsec_tb21_case"), ("mbpp", "dsec_mbpp_case"),
+                               ("swegym", "dsec_swegym_case")):
         app = root/'apps'/name
         files.update('apps/'+name+'/'+filename for filename in ('pyproject.toml', 'README.md', 'LICENSE'))
         app_config = tomllib.loads((app/'pyproject.toml').read_text())
@@ -117,10 +124,17 @@ def source_files(root):
                      if p.stem.isidentifier())
         files.update(str(p.relative_to(root)) for p in (app/'src'/package_name).glob('*.json')
                      if p.stem.isidentifier())
-        files.add('apps/'+name+'/tests/test_case.py')
+        files.update(str(p.relative_to(root)) for p in (app/'tests').glob('test_*.py')
+                     if p.stem.isidentifier())
     files.update('apps/osworld/'+name for name in (
         'README.md', 'desktop_regression.py', 'compare_trace.py', 'score_calc.py',
-        'boomerang.json', 'weekly-sales.json', 'workbook-sha256.json'))
+        'prepare_uefi_guest.py', 'boomerang.json', 'weekly-sales.json', 'workbook-sha256.json'))
+    integration = root/'integrations/openhands'
+    files.update('integrations/openhands/'+name for name in (
+        'pyproject.toml','README.md','LICENSE','upstream-constraints.txt','sdk-constraints.txt','guest-requirements.txt','prepare_tools.py'))
+    for directory in ('src/dsec_openhands','tests'):
+        files.update(str(p.relative_to(root)) for p in (integration/directory).glob('*.py')
+                     if p.stem.isidentifier())
     return config, sorted(files)
 
 

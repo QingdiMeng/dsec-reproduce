@@ -543,6 +543,79 @@ MicroVM, not FnCall. Choose stable request IDs when a result may need recovery;
 query UNKNOWN instead of reissuing the invocation under a fresh ID. Successful
 function replies follow process/tmpfs cleanup, and failed cleanup retires the VM.
 
+### Direct Linux FullVM preview
+
+On a prepared Linux KVM Node, build a pinned standalone guest. The build
+uses Docker only to export the trusted local base root filesystem; there is
+no Docker daemon inside the FullVM.
+
+```bash
+python tools/build_docker_guest.py --mode fullvm --base sha256:BASE_IMAGE_ID \
+  --source . --out /srv/dsec/artifacts/fullvm.ext4 --disk-mb 512
+```
+
+Use a Debian-compatible trusted base with Python 3, `setpriv` and standard
+mount/core utilities. The kernel must support the same QEMU virtio-blk,
+vsock and virtio-console devices used for Container/FnCall. In the QEMU
+catalog, set `mode: fullvm`, pin `binary`, `kernel` and `template`, and set
+`memory_mb` and `cpu_count`. Omit the inner Docker image and resource fields.
+This preview accepts a private local disk and no network. Register the
+environment on the Node with route backend `fullvm` and minimum demand
+including the entire VM and private disk. Use a new, private Edge instance
+when evaluating it; a prior Edge cannot open a catalog with FullVM entries.
+
+```python
+from dsec.sdk import DSecFullVMRunArgs
+
+box = await client.run_fullvm(
+    DSecFullVMRunArgs(environment_id="linux-fullvm", memory_limit_mb=512, cpu_cores_limit=1),
+    resource_demand=dict(cpu=1, memory_mb=512, disk_mb=512, network_mbps=0),
+)
+try:
+    print(await box.run_shell("id; uname -a"))
+finally:
+    await box.stop()
+```
+
+The request's CPU and memory must match the environment's fixed outer VM
+limits; the physical demand must also cover any configured host overhead.
+The guest supervisor authenticates vsock using the per-VM key. Commands
+and native sessions run as guest UID 1000, with no new privileges. Status
+reports `backend=fullvm`. For a scoped API check, run
+`tools/verify_execution_paths.py --fullvm-only` using `paths.fullvm.spec` and
+`paths.fullvm.demand` in the acceptance configuration. The default environment
+has no display; Windows and snapshot/restore remain unsupported.
+
+To opt in to the networkless desktop preview:
+
+- Use a pinned guest kernel with virtio GPU/DRM, virtio input, evdev, and
+  the normal FullVM virtio-blk, console and vsock drivers (built-in or
+  loaded by the guest before the authenticated service starts).
+- Add the desktop packages and a trusted executable `/opt/dsec-desktop/start`
+  to the base root filesystem. The builder's `--desktop` flag runs that hook
+  after guest mounts and before starting the native service. The hook must
+  return after starting a desktop; it is part of the pinned image.
+- For Xfce tasks that manipulate files through the desktop, include a file
+  manager that provides the session D-Bus service, such as Thunar. Xfdesktop
+  can display icons and the Rename menu even when that service is missing.
+- Set `"display": "virtio-2d"` on the FullVM catalog entry. Use an isolated
+  preview Edge without a QEMU host confinement profile; the desktop path
+  has not been qualified with that profile.
+
+`await box.screenshot()` returns PNG bytes and dimensions over the same
+authenticated API. `await box.desktop_input(events, request_id=...)` accepts
+up to 64 bounded key, button or absolute pointer events (coordinates 0–32767).
+For mouse clicks on the virtio tablet, send button-down and button-up in
+separate calls with distinct request IDs. A single batch containing both can
+return successfully without producing a visible click in the guest. When
+moving and clicking, send the absolute pointer position before button-down.
+Use `box.query_request(id)` if input may have been delivered before the
+reply was lost. No remote VNC port, guest TCP listener, GPU passthrough or
+accelerated graphics backend is required. The Ubuntu test image has an Xfce
+desktop and an xterm named `DSecDesktop`; use the existing
+`tools/verify_execution_paths.py --desktop-only` test with that fixture.
+
+
 `tools/verify_execution_paths.py --config PATH --out REPORT` runs installed SDK
 acceptance through HTTPS, with at most two simultaneous sandboxes and automatic
 stop attempts. Its JSON configuration contains `client` (the DSecClient keyword
@@ -570,8 +643,12 @@ using the actual runtime UID, instance name and service cgroup path:
 }
 ```
 
-The current broker binds one shared QEMU binary/kernel pair; use separate Nodes
-for different pairs. Templates and task images may differ. Start with a fresh
+The broker binds one shared QEMU binary and, for direct boot, one kernel.
+Use separate Nodes for different binaries or direct-boot kernels. Offline UEFI
+FullVMs declare firmware and QCOW2 files in the catalog. The renderer pins
+the exact read-only firmware and backing files for the administrator to approve.
+Each VM receives write access to its own QCOW2 overlay and UEFI variables.
+Start with a fresh
 drained Container state directory: policy is part of the immutable catalog and
 live VM identity, not a setting to switch underneath running instances.
 
@@ -653,6 +730,34 @@ Runtime does not compile code or accept a replacement eBPF object from callers.
 Different existing installations still reject replacement; use a fresh instance
 for this preview rather than overwriting running helpers or catalogs.
 
+Adding an environment with the same installed privileges does not require
+replacing helpers. Drain the Node, preserve the previous immutable catalog and
+add `"catalog_history": [{"path": "/srv/dsec/catalog-v1.json", "sha256": "..."}]`
+to the new catalog before explicitly restarting Edge. Historical instances are
+accepted only where that environment definition, CID pool and host/network
+policy are identical. Changing an old image, resource limit or policy is not an
+additive update. Preserve environments still needed by retained instances;
+history is explicit, bounded to 16 files and checked for content drift.
+
+Prepared environments can set `startup_timeout_s` from 1 to 240 seconds
+(default 15) for guest initialization, image import and authenticated readiness.
+The QMP readiness deadline remains 15 seconds and tool-command limits do not
+change. This budget is pinned in each instance record; old records use 15.
+Changing it creates a new environment version, rather than reinterpreting old
+instances. It is a startup allowance, not a measured creation-latency promise.
+
+An environment may set `"disk_cache": "direct"` for its private QEMU root disk.
+This requests Direct I/O on both block nodes, bypassing the host file cache
+while keeping flushes enabled. It prevents a second dirty/writeback copy of
+guest disk data from consuming the VMM's cgroup allowance. The default remains
+`buffered` for existing environments/records; changing modes requires a new
+environment version. Unsupported Direct I/O fails startup rather than falling
+back. This is not DAX or shared guest memory, and it does not reduce guest RAM.
+Before retiring an owned, empty cgroup, Edge saves available peak, OOM, memory,
+CPU and I/O counters to `host-resources-retired.json` in the instance directory.
+Missing kernel counters stay absent, not zero. This preserves failure evidence
+after kernel resource removal without weakening any retirement fence.
+
 TC guards load before any link is activated. The first policy admits IPv4
 TCP/UDP public egress, exact DNS and optional proxy exceptions, and only the ARP
 needed by the fixed gateway. It rejects source spoofing, IPv6, VLAN, IP options,
@@ -678,3 +783,106 @@ the original host Docker/Grafana containers were unchanged. This used the fixed
 DNS `192.168.0.1` and no proxy; it does not validate another Node's prerequisites,
 configured proxy egress, adversarial multi-tenant use or connection floods. See
 the [acceptance evidence](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md).
+
+
+### QEMU shared EROFS through virtio-pmem/DAX
+
+This opt-in environment capability is distinct from `disk_cache`. Private ext4
+I/O may use `direct` while immutable shared data uses pmem/DAX. No SDK changes
+or model dependencies are required. Bounded installed-wheel Linux acceptance
+passed for two Container VMs and a sequential FnCall slot on 2026-10-26; see the
+[acceptance report](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md). This does not
+establish whole-VM savings or production-scale capacity. A separate bounded
+[SWE-Gym mypy migration](../reports/SWEGYM_FIRST_USE.md#real-task-erofspmemdax-migration-2026-10-26)
+passed real-file DAX checks and official baseline/oracle scoring.
+
+Publish each **staged filesystem directory** with:
+
+```bash
+python tools/build_erofs_dax.py --source staged-layer --out /srv/dsec/layers/base.erofs
+```
+
+The publisher requires `mkfs.erofs` with `--tar=f` and `noinline_data` support.
+It preserves numeric ownership via tar, disables compression, adds a reserved
+DAX probe, and pads capacity to 128 MiB. This command does not fetch images,
+convert OCI whiteouts, or preserve arbitrary filesystem xattrs; use the existing
+OCI-aware publication path for whiteout conversion. Do not substitute a
+compressed EROFS image. All layers are immutable regular files with no write bits.
+
+Pass a JSON list of the returned `{path, sha256, bytes}` objects, bottom layer
+first, to `tools/build_docker_guest.py --readonly-layers layers.json`, and repeat
+`--shared-mount /opt/toolkit` for each directory supplied by their merged tree.
+The directories may contain task workspaces or dependencies; they are bind-mounted
+from the composed guest filesystem into the task container. Container writes copy
+up to its VM's private ext4 upper; FnCall mounts them read-only. Mounting a shared
+directory alone does not remove its old copy from the task image. To remove that
+copy during publication, use `tools/split_docker_image.py` on a pinned local image
+and pass its lean archive with `--task-archive` and `--task-archive-sha256` instead
+of `--task-image`. These inputs are mutually exclusive. The builder validates the
+archive hash before host effects and rechecks the copied input. The split tool
+preserves runtime Config and tar ownership/metadata; declared volumes and
+cross-partition hardlinks require separate preparation. See the
+[SWE-Gym operator recipe](../../apps/swegym/README.md#move-shared-task-files-to-erofsdax)
+for publication, catalog and application verification steps.
+
+Add the builder's `readonly_layers` and `shared_mounts` arrays to the new catalog
+environment. The paths are administrator-controlled, not API request parameters.
+There are at most eight layers per environment, each 128 MiB–32 GiB and aligned
+to 128 MiB. The total pmem capacity divided by 64 must leave at least 128 MiB of
+guest RAM; this is only a metadata floor, not a workload sizing recommendation.
+Private disk quota remains charged separately; shared capacity is not multiplied
+into every sandbox's writable-disk reservation. Guest readiness requires actual
+DAX attributes, correct device capacities and private ext4/OverlayFS mounts.
+
+For a new Node, render its normal privilege bundle with the explicit publication
+root (which must already exist):
+
+```bash
+dsec-host --config host.json render-qemu-privileges --user dsec --out qemu-privileges --layer-root /srv/dsec/layers
+```
+
+Administrator installation is required once for this capability. The broker
+subsequently accepts exact per-VM read/mmap grants only inside that fixed root;
+it does not grant writes or a blanket directory rule. A running instance cannot
+change its layers. Claims and retirement keep the original policy identity, and
+shared artifacts are never deleted by instance cleanup. Existing no-layer
+profiles retain their original text and lifecycle behavior. Updating an existing
+broker requires draining its VMs first and retaining the previous helper/config.
+
+Runtime whole-file SHA-256 verification currently reads these local artifacts;
+this path has **not** established cold-cache lazy-read performance. Reusing the
+existing fs-verity publication receipts is required before making that claim.
+
+### Bounded QEMU commands and recovery
+
+Existing environments retain the 30,000 ms command ceiling. To support longer
+commands, build a **new** guest with `--command-timeout-ms 120000` and set the
+same `command_timeout_ms: 120000` in its new execution-catalog environment. The
+maximum supported ceiling is 300,000 ms; API callers cannot raise it. Readiness
+checks the guest's configured ceiling against the pinned catalog. Rebuild the
+guest rather than changing only its catalog, and retain every explicitly required
+historical catalog pin when appending an environment; history trust is not
+transitive. Existing no-field environments remain compatible.
+
+The caller supplies a bounded `timeout_ms` for each command. State and result
+queries do not queue behind its execution lock. Client disconnection or task
+cancellation does not undo an already admitted action. Save its request ID and
+query `box.query_request(id)` after reconnecting instead of sending it again.
+A stop that collides with active shell work is rejected as `ServiceBusy` before
+admission; let the bounded command finish or time out, then stop the sandbox.
+This is not an immediate per-command cancellation API.
+
+After Edge owner loss, the host journal preserves uncertain intent. A query can
+commit DONE only from the exact original VM's matching request ID/digest and
+durable guest DONE response. Missing, mismatched or unavailable proof stays
+UNKNOWN; no command replay or successful result is inferred from VM liveness.
+On Linux, the command helper uses a subreaper boundary to retire orphaned/setsid
+and background descendants on timeout or failure. Failure to prove retirement
+fails the command/slot rather than reporting clean success. Successful Container
+shells retain the existing ability to leave deliberate background processes;
+the inner container init reaps exited orphan processes to avoid zombie buildup.
+It is mounted read-only at reserved `/dsec-init`, outside task shared directories;
+Docker's implicit `/sbin/docker-init` can be hidden by a shared `/usr` mount.
+FnCall still resets its entire container between calls. Native sessions inherit
+the same prepared command ceiling: the builder compiles that agent limit, the
+host channel enforces it, and the guest proxy allows that bounded response time.

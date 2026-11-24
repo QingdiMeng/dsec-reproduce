@@ -11,6 +11,80 @@ behavior, actual result and a minimal reproduction. For planned work, include
 the roadmap work ID (for example, `RM-103`) and its acceptance gate. Remove
 credentials and private task data from any attached logs.
 
+<a id="work-management"></a>
+
+## Work management
+
+Read [current capability/task status](docs/PROJECT_STATUS.md) before proposing or
+continuing work. [project/registry.json](project/registry.json) is the only
+manually maintained current-status register. The Markdown view is generated;
+ROADMAP defines direction and milestone gates, architecture documents own design
+decisions, and reports retain versioned historical evidence. GitHub issues and
+PRs reference register IDs; their conversation is not a second status authority.
+
+Before execution, create or select one `TASK-NNN` and record:
+
+- Kind: `feature`, `bugfix`, `regression`, `integration_acceptance`, `performance`
+  or `maintenance`. A missing combination test does not reopen implementation.
+- Related `CAP-*`, roadmap IDs through those capabilities, an accountable owner,
+  existing implementation/tests and `EV-*` reviewed before starting.
+- A concrete trigger, the added behavior or evidence, reuse plan and affected
+  boundary. A new feature on an accepted capability must explain that boundary.
+- Finite acceptance checks, required local/Linux/GPU/admin resources,
+  dependencies and a stop condition. State explicitly what ends an experiment.
+
+Task states are `candidate` (not committed), `ready`, `in_progress`, `blocked`,
+`done` and `cancelled`. Only one execution item may be `in_progress`, including
+experiments and management work. A blocked item records the missing condition;
+do not silently switch to optional work. Candidates do not automatically become
+the next task. First check that the proposed increment advances the current
+user objective, then select it explicitly for execution. Routine reversible
+implementation choices do not require a new approval.
+
+Keep completed tasks closed. A later task that reopens one references its ID in
+`reopens`, reviews prior evidence and names `changed_boundary`. Ordinary scoped
+regression or a new combination is a separate task, preserving the earlier
+completion and its limits. Splitting one behavior across multiple new IDs to
+avoid this review is not acceptable.
+
+Capability states are `accepted` **within the recorded scope**, `partial`,
+`implemented` (remaining evidence) and `planned`. Evidence distinguishes local
+tests, real Linux runs, applications and formal models. `date_kind` distinguishes
+run dates from later index reviews. Each evidence entry points to a report/test
+and retains the artifact/configuration identity or its location; failed runs
+stay in reports and never close a gate. Imported historical evidence does not
+certify the current working tree. `delivery` separately records `working_tree`,
+`committed` or `released`; passing a test is not a release.
+
+Revalidation is triggered by a change to relevant code, protocol, guest artifact,
+configuration or deployment boundary, a reproducible defect, or an explicit
+release gate. Age or omission from the latest report is not such a trigger.
+Use the existing test first; add a case only for a named missing guarantee.
+The CLI can suggest affected capabilities without changing their status:
+
+```sh
+python tools/check_project.py --base HEAD
+python tools/check_project.py --changed src/dsec/sdk/native.py
+```
+
+On closure, record what changed, validation results, evidence and remaining
+limits; stop/reconcile owned resources when a real environment was used. A
+`done` task needs evidence and completed dependencies. Design changes update the
+existing GEN/CPH decision record, not a parallel diary. Update the register and
+regenerate/check its view:
+
+```sh
+python tools/check_project.py --write
+python tools/check_project.py
+python tools/check_docs.py
+```
+
+CI rejects stale views, broken references, unknown capability/evidence IDs,
+missing closure evidence, missing reopen rationale, dependency cycles and excess
+WIP. It checks record consistency; reviewers still assess duplication, scope and
+whether evidence actually supports a claim. Status updates use the task ID and
+report new findings, the remaining gate and the stop condition, not only counts.
+
 Keep changes focused on one behavior. A pull request should explain the user
 impact, implementation choice, validation and remaining limits. Preserve the
 project's MIT license and the Apache-2.0 notices for Miles-derived code.

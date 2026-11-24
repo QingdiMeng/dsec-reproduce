@@ -4,6 +4,43 @@
 > refer to experiment files outside this repository. They are not runnable
 > instructions for the current release. Use the [documentation index](../README.md) for supported entry points.
 
+## 当前执行能力声明（2026-10-30）
+
+应用通过公开 SDK 声明所需协议；受信发布者负责为具体环境提供能力声明。通用
+MicroVM 目录和 QEMU schema 2 目录的每个环境可以有以下可选字段：
+
+```python
+from dsec.contracts.environments import artifact_revision
+from dsec.contracts.native import NATIVE_FEATURE, STREAM_FEATURE
+
+# entry 是最终制品 pins、执行模式和配置已确定的一个环境条目。
+# 先对这份 guest 完成对应协议检查，再记录通过的能力。
+entry["execution_contract"] = {
+    "schema": 1,
+    "artifact_revision": artifact_revision(entry),
+    "capabilities": [NATIVE_FEATURE, STREAM_FEATURE],
+}
+```
+
+没有该字段表示能力未知，旧环境可继续按原接口使用；显式要求某能力的新创建
+不能仅凭 Node 整体支持而选择它。字段与环境描述绑定，替换模板、kernel、EROFS
+层、模式或资源配置后必须重新核对。FnCall 不能声明持久 native 会话/文件能力。
+能力字符串只能来自当前支持的 native 协议，不接受模型或 benchmark 名称。
+
+这份声明是发布者的保证，不能替代真实 guest 验收。目录中的 SHA-256 验证仍负责
+确认制品身份；系统不会通过读取一份声明自动证明工具存在或安全隔离成立。
+本轮没有扫描/启动旧 guest 来自动补声明，旧目录也不需要批量迁移。
+
+MicroVM 发布器先验证源条目和声明，再复制并核对制品字节，最后为改写后的路径
+重建绑定。它保留原能力集合，不增添能力。QEMU 目录由发布者在最终条目上生成
+绑定，目录加载仍执行原来的制品校验。revision 包含部署路径/配置，不能拿来作
+跨节点内容去重键。对已有运行环境应发布新版本 ID；不要原地改目录或给活实例
+补写声明。旧请求使用原持久日志，不在新目录下重放。
+
+应用的 `required_capabilities` 不会被直接传入 guest。控制面选择绑定，Node 复核，
+Edge 在写创建 intent 前核对版本；已缓存的结果仍保留原证明。独立于此的存储、
+网络、生产隔离与快照兼容性验收见[执行与隔离边界](../architecture/EXECUTION_ISOLATION.md)。
+
 ## 可选 fs-verity 完整性路径（2026-10-06，实机验收通过）
 
 `artifact_integrity.py` 是不依赖任务或训练框架的完整性工具。管理员在支持

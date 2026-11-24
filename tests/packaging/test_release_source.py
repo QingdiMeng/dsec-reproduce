@@ -2,12 +2,15 @@
 import hashlib
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
 
 from tools.package_release_source import package, source_files, SECRET
 from tools.check_docs import check
+from tools.check_project import load as load_project, render as render_project, validate as validate_project
 
 
 class SourceReleaseTests(unittest.TestCase):
@@ -25,6 +28,9 @@ class SourceReleaseTests(unittest.TestCase):
                     self.assertEqual(hashlib.sha256(archive.extractfile(name).read()).hexdigest(), digest)
                     self.assertFalse(name.startswith(('experiments/', 'results/', '.runtime/')))
                 for name in ('src/dsec/host/console/index.html', 'src/dsec/host/console/console.js',
+                             'AGENTS.md', 'project/registry.json', 'docs/PROJECT_STATUS.md',
+                             'tools/check_project.py', '.github/ISSUE_TEMPLATE/work.md',
+                             '.github/pull_request_template.md',
                              'src/dsec/host/console/console.css', 'src/dsec/control/cluster_inventory.py',
                              'docs/guides/CLUSTER_CONSOLE.md', 'tests/unit/test_cluster_console.py',
                              'LICENSE', 'licenses/miles-APACHE-2.0.txt', 'guest_agent.c', 'guest_native.c',
@@ -33,6 +39,7 @@ class SourceReleaseTests(unittest.TestCase):
                              'tools/check_shutdown_refinement.py',
                              'tools/check_native_race_refinement.py', 'tests/unit/test_native_races.py',
                              'verification/QueueCancellation.tla', 'verification/QueueCancellation.cfg',
+                             'verification/EnvironmentBinding.tla', 'verification/EnvironmentBinding.cfg',
                              'verification/NativeCallbackFence.tla', 'verification/NativeCallbackFence.cfg',
                              'verification/ContainerNativeGate.tla', 'verification/ContainerNativeGate.cfg',
                              'verification/RaceReplay.tla',
@@ -43,6 +50,18 @@ class SourceReleaseTests(unittest.TestCase):
                              'docs/guides/QUICKSTART.md', 'apps/tb21/pyproject.toml',
                              'apps/mbpp/pyproject.toml', 'apps/mbpp/src/dsec_mbpp_case/reward.py'):
                     self.assertIn(name, manifest['files'])
+                self.assertIn('apps/osworld/prepare_uefi_guest.py', manifest['files'])
+                for name in ('apps/swegym/pyproject.toml','apps/swegym/src/dsec_swegym_case/harness.py',
+                             'apps/swegym/src/dsec_swegym_case/acceptance.py','docs/reports/SWEGYM_FIRST_USE.md',
+                             'apps/swegym/tests/test_patch.py', 'apps/swegym/src/dsec_swegym_case/openhands.py',
+                             'integrations/openhands/pyproject.toml', 'integrations/openhands/src/dsec_openhands/runtime.py',
+                             'integrations/openhands/src/dsec_openhands/guest.py', 'integrations/openhands/tests/test_transport.py',
+                             'integrations/openhands/src/dsec_openhands/sdk.py',
+                             'integrations/openhands/src/dsec_openhands/sdk_guest.py',
+                             'integrations/openhands/src/dsec_openhands/sdk_llm.py',
+                             'integrations/openhands/tests/test_sdk.py', 'integrations/openhands/tests/test_sdk_linux.py',
+                             'apps/swegym/src/dsec_swegym_case/openhands_sdk.py'):
+                    self.assertIn(name,manifest['files'])
                 self.assertFalse(any(' ' in Path(name).name for name in manifest['files']))
                 for name in ('deploy/cluster/planning.py', 'deploy/cluster/configuration.py',
                              'deploy/cluster/enroll_node.py', 'deploy/cluster/pki.py',
@@ -101,6 +120,19 @@ class SourceReleaseTests(unittest.TestCase):
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes(archive.extractfile(name).read())
                 self.assertEqual(check(exported), [])
+                project = load_project(exported)
+                self.assertEqual(validate_project(exported, project), [])
+                self.assertEqual((exported/'docs/PROJECT_STATUS.md').read_text(), render_project(project))
+                # A fresh source user gets the same management gate as CI.
+                view = exported/'docs/PROJECT_STATUS.md'
+                view.write_text('stale manual status\n')
+                command = [sys.executable, str(exported/'tools/check_project.py')]
+                stale = subprocess.run(command, capture_output=True, text=True)
+                self.assertNotEqual(stale.returncode, 0)
+                self.assertIn('is stale', stale.stderr)
+                regenerated = subprocess.run(command+['--write'], capture_output=True, text=True)
+                self.assertEqual(regenerated.returncode, 0, regenerated.stderr)
+                self.assertEqual(view.read_text(), render_project(project))
             with self.assertRaises(FileExistsError):
                 package(root, a)
 

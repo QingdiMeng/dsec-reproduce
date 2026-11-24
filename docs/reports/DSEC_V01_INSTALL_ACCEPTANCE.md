@@ -654,6 +654,390 @@ Linux 已安装版关键回归 **127 项通过**。原有限模型未改，本�
 实际策略使用固定 DNS `192.168.0.1`、无代理；未验证实际代理例外、IPv6、ICMP、
 热策略、带宽整形、洪泛、多租户对抗或规模。`production` 仍为 false。
 
+
+## 2026-10-26：QEMU EROFS＋virtio-pmem/DAX 文件共享
+
+本轮关闭的是 opt-in QEMU Container/FnCall 的本地只读层共享功能验收，
+不是整机内存优势、冷启动速度、真实训练或生产规模验收。使用正常 HTTPS SDK →
+API/IAM/Placement → mTLS Node → Edge，独立真实 etcd；不使用 GPU。
+最多两台 VM 并发，之后顺序运行一台 FnCall。每台 guest RAM 仍为 1024 MiB、
+VMM cgroup 上限仍为 1280 MiB、inner 限额仍为 512 MiB，没有放宽内存或隔离限制。
+
+发布两个未压缩、无 inline regular-file data、128 MiB 对齐的 EROFS 层，
+包含 32 MiB 固定数据及上层覆盖文件。最终 Container/FnCall 模板均由开源
+`tools/build_docker_guest.py` 构建，使用固定的本地 Python/Docker-tools 镜像，
+指定同一组 `readonly_layers` 和 `shared_mounts`。宿主只读共享 ROM 映射原始 inode；
+guest 挂载 `ro,dax=always` 并检查实际文件的 `STATX_ATTR_DAX`，随后组成 private
+ext4 upper 的 OverlayFS。任务容器不能访问 pmem 设备或 guest 管理目录。
+
+最终 **32 项编排检查通过**，包括：
+
+- 两台 VM 的 PID/CID 独立，实际 DAX 和层身份、顺序正确。
+- 同时访问全部 8192 个数据页时，两个 VMM 对基础层的映射均为 `r--s`，
+  device/inode 完全相同。每台 `RSS=32836 KiB`、`PSS=16418 KiB`、
+  `Shared_Clean=32836 KiB`、`Private_Dirty=0`；两台该映射的 PSS 合计
+  **32836 KiB，约 32.07 MiB**。RSS 直接相加会重复计算这些共享页。
+- Container 修改原文件产生私有 copy-up，新建文件与删除产生的 whiteout 均不影响另一台。
+- FnCall 可读 DAX 目录，写入返回 `Read-only file system`；连续调用清除 `/work` 和
+  `/tmp` 的标记，同时保持原 VMM/容器身份，最终正常停止。
+- 三台 VM 的 `memory.events` 均为 `oom=0, oom_kill=0`；cgroup 内核 peak 分别为
+  `1072611328`、`1070272512`、`1069010944` 字节。这是整个 VMM cgroup 的 peak，
+  与上面的共享文件映射 PSS 不是同一统计边界。
+- 通过正常 API 回收后，物理/IAM/CID 租约归零，私有可写盘和专用 cgroup 消失，
+  共享制品摘要不变，宿主/网络退役证明完成。原五个宿主容器的 ID/PID/启动时间/网络
+  不变，原网络 helper 摘要不变。
+
+候选 core wheel SHA-256：
+`1beffe47aa4d97bdc2c77966866dff4f105b28a95a0e7aacb7705b46f44b6691`。
+固定 launcher 摘要仍为
+`80177075f4a3823175240999ba172c391bbc82a4bad912c362672e8d07b43bc3`。
+本地干净导出 **623 项：614 通过、9 平台跳过**；Linux 定向 **84 项通过**，
+本地/Linux 的 8 项既有宿主/网络守卫变异检查通过。管理员更新经过 4 项模拟检查，
+只替换固定实例的 AppArmor helper 和配置，新增固定 publication root；不改 sudoers、
+网络或服务。每 VM 将精确层身份写入原策略账本，不授予目录通配写权限；后续新增该
+根目录内的层无需重装 helper。未改有限模型，未再次运行 TLC 遍历。
+
+原始实验机证据：`dsec-pmem-20261026/api-r3/report.json`、`final-audit.json`、
+`service-r3.log`，以及各实例退役前保存的原始内核计数器。本地非秘密副本位于
+`.runtime/swegym-20261026/pmem-evidence/`。两次早期验收脚本失败保留：r1 的嵌套
+Python 字符串转义错误；r2 已完成共享/隔离检查，但汇总时误把公开 handle 当成物理
+目录名。它们不计最终成功轮，最终 r3 从正式模板重新运行并正常退出。
+
+服务墙钟 140.993 秒包含控制面启动、历史实例恢复校验、三次创建及 20 秒受控映射
+保持期，不是 VM 创建延迟。历史实例恢复还会反复全量校验旧模板；新层的运行时
+SHA-256 校验也会读取文件内容，因此本轮不能证明冷缓存按需读取或创建速度。
+应复用现有 fs-verity 发布凭据后再验证冷读取，不能降低完整性要求。
+
+该结果只证明所测共享文件的数据页没有变成两份 guest 缓存；**不表示整个 VM 只有
+32 MiB 内存，也不表示整机内存下降 50%**。尚未将 SWE-Gym 的仓库/依赖迁入该路径，
+原 MBPP GRPO 和 SWE-Gym 成绩仍属于各自历史文件方案。压缩数据、OCI whiteout 发布、
+大规模/跨节点负载、3FS 直接 DAX、真实应用的总内存收益及对 Docker 的优势仍需单独验证。
+
+<a id="generality-linux-20261030"></a>
+
+## 2026-10-30：通用环境能力与版本绑定 Linux 验收
+
+本轮验证直接 SDK 创建的环境能力契约，不运行模型或训练，也不使用 GPU。
+核心候选 wheel 在既有专用测试 venv 中临时安装，使用 Python isolated mode，
+公开 HTTPS API → IAM/Placement → mTLS Node → 私有 Edge → 实际 guest。
+独立 etcd 使用已有镜像，host networking 但仅监听 loopback 的两个固定测试端口；
+不启动私有 dockerd，不创建 Docker 网桥，不新增管理员权限或变更 root helper。
+固定 AppArmor launcher 摘要保持不变，QEMU 仍使用既有 cgroup/AppArmor 隔离路径。
+
+最终候选 core wheel SHA-256：
+`83fdb51b08aff638ab5fdb47fd6247d1f8afee7c1ea7718a0d29fe6da556a84a`。
+wheel 边界检查通过：214 个运行模块、225 个条目。结果：
+
+| 检查 | 结果 |
+| --- | --- |
+| 真实执行编排 | 27 项全部通过，无清理错误；最多一台业务 guest 同时运行 |
+| 安装版 Linux 定向回归 | 77 项通过，0 跳过、0 失败、0 错误；环境、API、集群、Container Edge、制品发布五个模块 |
+| MicroVM / Container 基础能力 | 按具体环境声明创建；二进制文件往返、持久 shell 会话、stdout/stderr/result 流、重连原会话并读取原流，副作用只发生一次 |
+| 不同模式与兼容 | MicroVM 暂停/恢复保留文件；FnCall 两次调用不保留私有工作文件；未声明能力的 legacy guest 带需求被 NoPlacement 拒绝，空需求仍可执行 |
+| API 已准入、Node 尚未派发 | 文件屏障暂停请求，替换本轮 Edge 的固定环境 revision，再释放屏障；AdmissionDenied，Edge NOT_FOUND，IAM RELEASED |
+| Node 已检查、Edge 尚未收到创建 | 仅在实际 RPC 发送前设置屏障，替换本轮 Edge，再发送原绑定；Edge 守卫拒绝，未产生创建 intent，IAM RELEASED |
+| 原证明与收尾 | 版本替换后原 MicroVM/Container DONE 创建证明仍可查询，配额不重新计费；Edge 全部租约和 IAM 五项使用量归零 |
+| 宿主影响 | 原五个容器 ID/PID/启动时间/网络、docker0 地址和默认路由与基线一致；测试 API/Node/Edge/etcd 已停止 |
+
+这次修复 `ContainerRuntime` 在已证明停止的状态查询、再次停止和恢复停止结果中
+遗漏 `resource_cleanup_complete=true` 的返回字段；只有后端 `prove_stopped` 成功才
+报告完整回收，证明异常仍返回错误。新增真实本地 RPC 回归检查该语义。修复后本地
+Container/QEMU/集群 87 项通过，集群对应检查的 14 个守卫移除对照仍按预期失败。
+原 EnvironmentBinding 有界模型未修改，本轮没有重复 TLC 遍历。
+
+实机原始报告：`/home/xiaoxiaohu/dsec-generality-20261030/r5/report.json`，
+安装版回归为 `tests-r2/regressions.json` / `.log`，最终归档/恢复证明为
+`post-cleanup.json`、`install-after.json`。本地非秘密副本在
+`.runtime/system-generality-20261030/linux-final/`；密钥和 guest 凭据未复制入仓库。
+失败轮次全部保留且不计成功检查：首轮直接改变已有环境声明，被历史实例身份守卫
+拒绝；之后改为保留原环境和显式固定 catalog history、添加新环境。另两轮修正了
+验收脚本的 TIME_WAIT 端口误判与 API 启动等待；随后发现并修复上述返回字段遗漏。
+没有放宽历史身份、能力守卫、隔离或资源回收条件。
+
+三份本轮已退休 QEMU 记录和七条对应生命周期日志在核对 STOPPED、进程为空、CID
+为空、私有盘删除与 cgroup 回收后，单独归档到证据目录；原八份历史实例不变。
+借用的专用 venv 已恢复原 wheel，逐 Python 文件核验一致，不影响原环境的后续使用。
+实验机剩余磁盘约 31 GiB，本轮未清理其他数据。
+
+边界：只证明所测 native/stream 基础能力、四次正常创建及两处确定性版本变化窗口；
+不证明所有 guest 的声明真实、HTTP/session 文件扩展、跨主机 HA、3FS/ublk、pmem/DAX
+性能、网络隔离或 RL 训练效果。已有有限模型、先前隔离验收与本轮真实执行证据分别保留。
+
+## 2026-10-30：TASK-007 正式 API 首次使用路径（本地阶段通过，Node 阶段受阻）
+
+本次交付目标是让新用户从公开源码制品完成首次正式 API 用例。复用已有生成器、
+API/IAM/Node、固定回复 Miles-compatible counter 验收工具，不增加运行时协议或
+重新实现恢复。TASK-002 等扩展组合仍为候选；本节不把本地阶段计作最终 Node 验收。
+
+从 allowlist 干净导出 521 个受摘要保护的文件（归档另含一份 manifest），源码归档 SHA-256：
+`10bdeb0472723a7df4f07103c87947aa5e16fa5832914aaf0c14283617eeb9fd`。
+在该目录构建核心 wheel，SHA-256：
+`f522aed875efe0b6d99c3a3876634381cf68dc86ce37f6932a551dc12338618a`。
+新建独立 venv，离线安装，确认导入来自 site-packages 且未安装 TB2.1/MBPP/SWE-Gym。
+wheel 边界通过（214 运行模块、225 条目），已安装环境可运行 API 验收工具的帮助入口。
+部署生成器按文档用普通 Python 运行；运行时和单文件 API 验收可使用 isolated mode。
+
+采用公开 `deploy/cluster/prepare.py --plan` 后生成私有部署，用缓存中的固定 Python
+与 etcd 镜像，实际执行公开 Compose 构建、三个 etcd 成员启动、认证/IAM 初始化、
+两个 API 副本启动。未改模板来绕过 TLS、认证或动态成员管理。两个 API 分别经正式
+HTTPS SDK 验证；quorum 有限运行在本机 Docker，不声称独立宿主故障域 HA。
+Python 镜像为 `python@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1`，
+etcd 为 `quay.io/coreos/etcd@sha256:3397341272b9e0a6f44d7e3fc7c321c6efe6cbe82ce866b9b01d0c704bfc5bf3`。
+
+发现并修正一个公开首次使用断点：生成配置启用了 `node_lifecycle`，初始化器只建
+IAM/配额，主部署步骤却没有串上初始 Node 的 join/activate；该操作原先埋在后面的
+维护章节。现已在主部署流程明确 join → activate，并在 Quickstart 串上已有
+`verify_rollout_api.py` 的默认非 TB 固定回复用例。真实 API 的 join 返回 JOINING、
+version 1、held 0；对未激活节点的创建实际返回 NoPlacement。没有为跳过该步骤改动
+准入实现，也没有把它误报为系统创建故障。
+
+本地部署/台账/导出回归 **35 项通过**，使用独立 venv 中已安装核心。
+随后对更新后的干净源码归档逐文件校验 521 项摘要，并确认运行时代码与上述核心
+wheel 完全一致。在独立安装环境完成以下本地回归，测试不从工作树导入运行模块：
+
+| 范围 | 总数 | 通过 | 跳过 |
+| --- | --- | --- | --- |
+| 核心可移植回归 | 680 | 670 | 10 |
+| TB2.1 可选应用 | 5 | 5 | 0 |
+| MBPP 可选应用 | 15 | 14 | 1 |
+| SWE-Gym 可选应用 | 73 | 51 | 22 |
+| OpenHands 适配器 | 54 | 26 | 28 |
+
+核心和 MBPP 跳过项涉及 Linux 专属进程、权限和 guest 条件；SWE-Gym/OpenHands
+还包含本环境未安装的可选上游 SDK、官方 harness 与 PyTorch/verl 条件。这些不是
+通过项，不代替真实 guest、上游完整集成或训练验收。OpenHands 首轮因测试环境
+遗漏 CI 指定的 `pexpect` 而产生 9 个导入错误；补齐 `pexpect==4.9.0` 和
+`ptyprocess==0.7.0` 后同一套测试通过，初始失败日志保留，未改产品依赖。
+
+四个可选应用均从干净源码构建并通过各自 wheel 边界检查，随后以 `--no-index
+--no-deps` 安装到独立环境；安装前已确认核心不自动带入这些应用。制品 SHA-256：
+
+| 可选包 | SHA-256 |
+| --- | --- |
+| dsec-tb21-case | `372c669e8d5f2e9ea9fb97d168dff069befe939ad7aaa3807f5dfa44d129d4b3` |
+| dsec-mbpp-case | `1747d4e63755747bef3ebaa5bf0b8e8c5778ee4d9061ace97aa79e81b4fafb31` |
+| dsec-swegym-case | `479d3a96406945aaf282837699c87e02afdda4b7f2f8e75afad682583380a12d` |
+| dsec-openhands | `77b032a0cd64c65ab1e81b9f592aa9fc18a783adaf1c2451c9e9d385ad989363` |
+
+在源码目录外，16 个已安装命令的 `--help` 全部成功；此项只验证入口可加载。
+
+实验机 `192.168.0.110` 先出现 SSH 超时，复核为 No route to host；用户随后确认
+机器暂不可用、仅继续本地工作，此后未访问远端，也没有启动该 Node、VM、模型或训练。激活后 counter 评分及 Node 回收证据尚未取得；TASK-007
+保持受阻，不能关闭或声称已完成从零全流程，也不能代替第二台新 Linux 宿主验收。
+
+停栈前真实 API 证明 root 项目五项使用量全为 0，admissions 为空，JOINING Node
+held 为 0。本轮两个 API、三个 etcd 容器及专用网络正常停止/回收；保留专用私有
+配置和 etcd 卷以便恢复同一入群状态。没有修改远端服务或既有宿主容器。
+原始本地证据位于 `.runtime/release-entry-20261030/`：`controller-startup.json`、
+`membership-check.json`、`pre-stop-audit.json`、`compose-services.json`、`local-regressions-r2.json`、`installed-entrypoints-r2.json`
+和 API/回归日志；
+私有部署目录包含凭据，不进入源码或 wheel。
+
+## 2026-11-04：TASK-008 正式 API 的无网 Linux FullVM
+
+在实验机普通账户上安装独立核心 wheel，并从已有 Python 基础镜像离线构建
+512 MiB ext4 启动盘。Docker 仅用于离线导出根文件系统与临时 loopback etcd；
+FullVM 运行时不启动内层 Docker。验收经 HTTPS SDK → API/IAM/Placement →
+mTLS Node → 私有 Edge → QEMU/KVM。使用先前验证的 Linux 6.1.186 内核、
+现有共享 CID 池、1 vCPU/512 MiB；同时最多一台 VM，未使用 GPU 或 sudo。
+
+- 核心 wheel SHA-256：`823817cc8947d299b773cbf80aca52e2060a4d103d1fa749ea83c9e4a74411d8`。
+- 最终模板 SHA-256：`b3b333d3171e4025b6db7613971972c4c8c84aed94141788fb6e83922938e0fe`。
+- API 四项验收：错误后端/固定资源修改拒绝；独立 FullVM 路由与创建收据；
+  guest UID 1000 命令、原请求 ID 去重、重连及会话和二进制文件；干净新盘和停止证明。
+- 两次顺序启动后，私有盘都已删除，QEMU 进程、CID、物理租约和 IAM 用量均归零。
+  临时控制服务与 etcd 已停止，原五个 Docker 容器的身份、PID 和启动时间保持不变。
+- 本地可移植核心回归 681 项，671 通过、10 跳过；未重跑原三条路径的实机矩阵。
+
+构建验收发现私有 umask 会限制导出根文件系统与 Python 库权限。最终构建器保留
+固定基础镜像的文件模式，明确设置新加入的 guest 文件权限；任务仍以非 root、
+`NoNewPrivs` 执行。失败轮日志保留；最终原始证据在实验机
+`/home/xiaoxiaohu/dvf04/f/report.json` 和 `api-report.json`。
+这是无网、无显示的 Linux 执行预览。没有验收桌面、OSWorld、外网、FullVM
+快照、GPU 或生产租户隔离。
+
+## 2026-11-04：TASK-009 FullVM 2D 桌面与 OSWorld 单题
+
+通过独立安装版走 HTTPS API → mTLS Node → Edge → QEMU/KVM。Ubuntu
+22.04.5/Xfce guest 使用 Ubuntu 7.0.0-38 内核和对应 virtio 驱动、1 vCPU、
+1024 MiB RAM、1024 MiB 私有盘；无网，无物理 GPU 或 3D 加速。截图与
+键鼠走私有 QMP，未暴露 VNC 或 guest TCP 端口。首轮启动参数和 Ubuntu
+Python 3.10 的类型导入错误均修正；失败记录保留。
+
+- 运行 wheel SHA-256：`3408596769fbe8dc02bc21d8daa03f19d82616920829feafdb34a18d98a5b5d6`。
+  guest 使用兼容 Python 3.10 的 `execution.py`，模板摘要
+  `612f258c4a83b626e0753347bdfca9d6f4e76ce18621be43e44e82a7edb98f46`。
+- Ubuntu/Xfce 截图为 1024×768 PNG；鼠标目标和实测均为 (140,248)；
+  点击后通过 virtio 键盘在 xterm 输入命令并产生文件。相同鼠标请求 ID
+  可取回原证明；本地回归另验证 QMP 丢回复时不重放。
+- OSWorld 固定提交 `8903ebeb0efdf74331bd7dc37ed91ccbbff22317`，任务
+  `e0df059f-28a6-4169-924f-b9623e7184cc`，把桌面目录 Jan_1 重命名为
+  Jan_2。DSec guest 用普通用户重建同样的初始目录，保留任务的验证命令
+  和原版 `exact_match` 函数。固定动作在终端先输入 `cd`，再输入
+  `mv Desktop/todo_list_Jan_1 Desktop/todo_list_Jan_2`。动作前 **0.0**，
+  动作后 **1.0**。首跑由于终端初始 cwd 不同得到 0，截图证实按键完整到达；
+  修正固定动作后用新实例重跑，未修改任务或评分规则。
+- 通过轮为实验机 `~/dvd04/d/api-report.json`（桌面）和
+  `~/dvd04/e/osworld-report.json`、`report.json`（单题及回收）。
+  后者确认 VM、CID、私有盘、物理和 IAM 租约全部回收，原宿主容器未变。
+
+首轮未运行官方 Docker provider 基线。官方镜像 ZIP64 目录记录显示
+`Ubuntu.qcow2` 解压后为 24,460,197,888 字节，超过实验机可用空间；
+压缩包另需 12,273,896,463 字节，运行时还要预留写层。仅请求了 ZIP 尾部
+64 KiB，未下载整盘。这一阶段的 1.0 仅覆盖 DSec 执行和官方评分函数；后续同题对照见下。
+
+### 2026-11-04：OSWorld 官方 Docker provider 单题对照完成
+
+实验机清理后约有 134 GiB 可用。续跑使用相同 OSWorld 提交、任务文件
+SHA-256 `a507ec6c35284c1413efe0d8a325b41a1626522221efc14f153742a865f1c04d`、
+相同的两条终端输入和上游 `exact_match` 函数。官方侧沿用上游
+DockerProvider 启停和原版 Ubuntu QCOW2，使用任务的官方初始化与命令结果 getter。
+唯一的 provider 启动适配是将映射端口限制在 loopback 并加入回收标签。
+观察到 QEMU 使用 KVM；未使用 GPU。
+
+| Provider | 输入动作前 | 输入动作后 |
+| --- | ---: | ---: |
+| DSec FullVM | 0.0 | 1.0 |
+| OSWorld 官方 Docker | 0.0 | 1.0 |
+
+官方磁盘来自 Hugging Face 提交 `a5d9c3eaae98eebf6e3a0beb84e7e47cf72ae133`。
+下载的 ZIP 摘要与官方 SHA-256 一致；解包后 QCOW2 SHA-256
+`6bf667a852b3c307f61d9f09c42559351f45e0607e428b4997becf534cf4d313`，
+官方运行镜像 `happysixd/osworld-docker@sha256:0e6497a9295647cf05bf2b2af522fdd79bdeba2737595259cab310a3bcf6baa9`。
+首轮通过截图就绪检查后，因本次验收脚本的 Docker 进程查询漏了 PID 字段而退出；
+已完整回收，未评分。最终轮取得有效分数、保存前后截图并移除临时容器，
+宿主现有容器 ID、PID 和启动时间不变。
+
+原始官方证据位于实验机 `~/dvd04/official-run-r2/`。本地对照清单
+`.runtime/fullvm-desktop-20261104/evidence-final/osworld-comparison.json`
+记录双方分数、动作和截图摘要。只证明这一个任务在两种桌面环境下评分一致；
+资源配置和桌面基底不同，本轮不比较性能，也不推断全量 OSWorld 兼容。
+
+## 2026-11-04：TASK-010 GUI-Owl 2B 单题视觉 rollout
+
+沿用 TASK-009 的目录重命名任务、Ubuntu 22.04.5/Xfce FullVM 和官方
+`exact_match` 评分器。模型为 `mPLUG/GUI-Owl-1.5-2B-Instruct`，
+版本 `528ceaec795bbfbe6103bd79e03db849feadfb24`。外部 harness 使用上游
+提示和动作格式，模型观察为任务说明、1024×768 截图及历史动作。动作只走
+DSec 桌面 API。初始化和评分在 harness 侧执行，评分结果不进入模型上下文。
+
+- 官方得分 **0.0**。模型在 16 步内交替生成 8 次右键和 8 次 Delete。
+  第一次右键目标落在目录图标内。随后的截图未显示菜单，模型继续按
+  Delete，且始终没有发起重命名或输入新名字。动作解析和 SDK 调用均成功，
+  右键菜单未出现在截图中的原因仍待确认。
+- RTX 4080 上用 Transformers BF16 贪心解码，每次最多生成 256 token。
+  16 次推理合计 12.33 秒，rollout runner 用时 28.88 秒，含模型加载、
+  VM 启停和评分。PyTorch 峰值分配 4626 MiB，峰值预留 4778 MiB。
+- 首轮误将截图路径以 `file://` URI 传给当前 Transformers，模型加载后
+  在读图时退出，无动作和得分。修正路径后用新 VM 按同一配置重跑。
+- 完成轮退出后 GPU 回到 35 MiB 基线，IAM、物理租约和 CID 均归零，
+  私有盘已回收，宿主原有容器身份、PID 和启动时间一致。
+
+实验机 `~/dvd04/owl2-r2/` 保存 `osworld-report.json`、`report.json`、
+`trace.jsonl` 和每步截图。首轮失败日志在 `~/dvd04/owl2-r1/inference.log`。
+本轮验收覆盖单条可评分轨迹和资源回收。模型任务本身失败，未重跑官方 provider。
+
+## 2026-11-04：TASK-011 修正鼠标点击并补齐桌面文件管理服务
+
+在同一个临时 FullVM 上对照了三种右键输入。鼠标实测到达 (76,322)，
+位于目标图标内。同一 API 请求中的按下和松开没有弹出菜单。拆成两个
+请求、相隔约 80 ms 后，右键菜单可见，guest 内 `xdotool click 3`
+正控也打开了同样的菜单。外部 harness 随后把鼠标移动、按下、松开
+分别提交，保留每个请求的独立 ID。原始对照在 `~/dvd04/owl-rightclick-r1/`。
+
+| 条件 | 官方评分 | 观察到的行为 |
+| --- | ---: | --- |
+| 原 harness、原桌面 | 0.0 | 右键后看不到菜单，模型交替右键和 Delete |
+| 拆分点击、原桌面 | 0.0 | 第 2 步点击 Rename，Xfce 报缺少文件管理服务 |
+| 拆分点击、补齐 Thunar | 1.0 | 第 4 步改名成功，模型继续操作至第 16 步上限 |
+
+修正轮继续使用原核心 wheel、模型版本、官方任务、截图尺寸、
+贪心解码与 16 步上限。Thunar `4.16.10-1` 安装在独立的 guest
+构建镜像内。新模板 SHA-256 为
+`f08c91676caa170eb41cd8bfba178920ae0ed991e483a735a3d05c10a14f8db2`。
+第 5 张截图确认新目录名。最终官方评分命令确认新目录存在、旧目录不存在。
+最终轮 runner 用时 33.20 秒，其中模型推理共 13.11 秒。模型未输出
+`terminate`，成功完成任务后继续操作的问题可从原始轨迹复核。
+
+原桌面重跑和最终轮分别在 `~/dvd04/owl2-r3/` 与 `~/dvd04/owl2-r4/`。
+三次验收均归还 VM、CID、IAM 和物理租约，回收私有盘，原宿主容器未变。
+最终 GPU 回到 35 MiB 基线。验收范围为单题视觉轨迹。
+
+## 2026-11-04：TASK-012 GUI-Owl 停止行为复测
+
+使用 TASK-011 的固定模型、原上游 prompt、贪心解码、16 步上限、
+修正后的鼠标事件和 Thunar 模板。依次启动四台全新 FullVM，每台一条轨迹。
+这是同配置实机重跑，未改变解码随机性或做 prompt 对照。每条的第 5 张
+截图均显示第 4 步已完成改名。官方 verifier 仍只在整条轨迹结束后运行。
+
+| 有效轨迹 | 第 4 步完成改名 | 主动终止 | 停止步数 | 官方最终得分 |
+| --- | --- | --- | ---: | ---: |
+| `owl-stop-r01` | 是 | 否 | 16 | 0.0 |
+| `osrp02` | 是 | 否 | 16 | 1.0 |
+| `osrp03` | 是 | 否 | 16 | 1.0 |
+| `osrp04` | 是 | 否 | 16 | 1.0 |
+
+四条轨迹的第 5 步回复都提及正确的新目录名，仍选择继续操作。首条在
+第 15 步输入 `todo_list_Jan_3`，第 16 步确认，最终截图验证了这一改动。
+另一次尝试 `owl-stop-r02` 在 VM 启动阶段失败，未产生模型动作；
+日志未给出具体启动原因，已确认 CID、VM 和私有盘退役，该尝试不计入样本。
+四条有效轨迹均回收临时资源，GPU 回到 35 MiB，原宿主容器未变。
+本地证据在 `.runtime/fullvm-desktop-20261104/evidence-owl-stop-repeat/`，
+实验机目录名见表。
+
+## 2026-11-10：TASK-013 QEMU 逐步差分辅助 CUA harness 修复
+
+沿用 TASK-011 的 QEMU/KVM、Thunar FullVM 模板、同一 OSWorld 任务与官方
+`exact_match` 评分器。各用一台新 VM 重放同一右键。原实现与参考实现的
+API 回执均成功且指针同位，首次分歧为右键后是否显示 XFCE 菜单。原实现
+得 0 分，参考实现得 1 分并通过在不同位置重命名另一个目录的回归。
+
+两组使用同一离线 Qwen2.5-3B-Instruct、CPU 8 线程、temperature 0.6、
+top-p 0.9、96 个生成 token 上限和最多 3 轮。四个配对随机种子，组顺序
+AB/BA/AB/BA。两组均得到源码和两条原始事件及窗口观测，B 组额外得到
+自动对齐的首次分歧描述。截图留存审计，文本模型读取截图对应的 X11
+窗口观测。候选限定于鼠标事件分组和间隔，以 JSON 表达并记录成对应源码
+改动。每个候选在新 VM 实测，评分和留出回归由外部固定执行器控制。
+
+| 组 | 3 轮内修复 | 首次合格轮次 | 候选 VM 数 | 单会话耗时中位数 |
+| --- | ---: | --- | ---: | ---: |
+| A 原始证据 | 4/4 | 2, 2, 2, 2 | 8 | 26.22 s |
+| B 原始证据加对齐报告 | 4/4 | 2, 2, 2, 2 | 8 | 26.56 s |
+
+八个会话第一轮都把 down/up 放在同一批，第二轮都将两者拆开。复核原始
+结果时发现 B4 两轮都使用 0 ms 间隔，其余会话两轮均使用 80 ms。
+所有合格候选均通过官方评分和留出回归。耗时包括每轮 CPU 推理与
+实机评测，提取差分约 12 微秒，双方共享控制轨迹的生成成本约 12.77 秒。
+记录的是单次实机试验，微小耗时差异不据此作性能判断。
+
+在这个单故障和窄编辑空间中，额外的对齐报告未减少尝试次数。两组已
+能从原始日志直接看见批次区别，报告增加的是定位提示。该对照不能
+外推到多步、长轨迹、多故障或开放源码编辑。实验机 `~/dvd04/cdiff1/`
+保留逐轮报告与截图。18 台 VM 的私有盘已回收，IAM、物理及 CID
+租约均归零，提案进程已退出，宿主已有容器保持原状态。
+
+## 2026-11-10：TASK-014 CUA 差分修复 RTX 4080 复测
+
+在修复 NVIDIA 驱动后，沿用 TASK-013 的模型、FP32、输入格式、四个
+配对种子、运行顺序、候选上限和固定 VM 评测，将推理移至 RTX 4080。
+CUDA 关闭 matmul TF32，峰值分配 11954.2 MiB。两组同样读窗口观测，
+原始截图留作证据。CPU 与 CUDA 的采样序列不保证逐 token 相同。
+
+| 组 | 修复成功 | 首次合格轮次 | 每会话模型推理中位数 | 每会话总耗时中位数 |
+| --- | ---: | --- | ---: | ---: |
+| A 原始证据 | 4/4 | 2, 2, 2, 2 | 1.24 s | 13.81 s |
+| B 加差分报告 | 4/4 | 2, 2, 2, 2 | 1.26 s | 13.88 s |
+
+合格候选均拆分 down/up 并保留 80 ms，官方评分与留出回归通过。
+GPU 轮显著缩短了模型推理时间，本轮依旧未观察到差分报告减少轮数。
+耗时口径为每会话各轮的推理与 VM 验证之和，公共模型加载和对照准备
+在会话计时之外。
+
+一次 VM 创建失败且 SDK 证明清理，按实验脚本策略重试后成功。
+18 台评测 VM 和 1 台启动失败 VM 的私有盘均退役，物理及 IAM 租约、
+CID 归零，宿主容器未变。提案进程退出后 GPU 回到 1 MiB。
+证据位于实验机 `~/dvd04/cdiffg1/`。
+
 ## 2026-11-10：TASK-015 两题 FullVM Calc 回放与故障定位
 
 使用固定 OSWorld 提交 `8903ebeb0efdf74331bd7dc37ed91ccbbff22317`、
@@ -714,3 +1098,262 @@ B 2/6。该小样本没有观察到整体修复加速，结果限于合成故障
 物理、IAM、CID 租约全部归零，宿主已有容器保持一致，模型退出后
 GPU 回到 1 MiB。回放、评分与差分脚本已纳入源码发行清单，任务输入、
 参考工作簿、模型与运行证据独立保存。
+
+## 2026-11-10：TASK-016 FullVM 输入与帧来源差分
+
+沿用 TASK-015 的两道 OSWorld 题、固定镜像、SDK 与动作序列。
+`compare_trace.py --diagnose` 分开报告首次提交事件差异、按钮末态
+差异、首次帧来源差异和首次可见检查点差异。按钮末态根据 SDK 已确认的
+事件推导，未用于推断 guest 实际收到的事件。截图记录两个捕获 ID、
+本机单调时钟返回时点和内容摘要。若 harness 交付的是动作前的帧，
+实际捕获的动作后 PNG 另存。旧轨迹仍可比较输入和可见状态，帧来源
+标为不可用。
+
+两道题各两次健康回放均获官方 1.0。三个故障各两次，增强报告
+6/6 给出正确步骤与边界：
+
+| 故障 | 步骤 | 增强证据 |
+| --- | ---: | --- |
+| 拖拽提前释放 | 7 | 移到终点与左键释放的顺序互换，双方帧均来自动作后 |
+| 组合键丢 Shift | 3 | 同一组合键意图，SDK 接受 6 个对 4 个事件，缺少 Shift 成对事件 |
+| 图表向导旧帧 | 17 | 输入事件顺序一致，参考返回后帧，故障侧返回前帧并独立留存后帧 |
+
+复验 TASK-015 的错误拖拽补丁时，旧可见比较没有分歧，增强报告
+指出第 7–9 步仍有左键处于按下状态。健康和故障矩阵保存在实验机
+`~/dvd04/cdm1/`，十台 FullVM 的私有盘和租约全部回收。
+
+### 2026-11-10：TASK-016 增强证据 A/B 复测
+
+沿用原题、三类故障、Qwen2.5-3B-Instruct BF16、配对种子、组内
+执行顺序和三轮预算。两组共同看到带坐标、事件回执和帧捕获 ID 的原始
+轨迹，并在每次实机候选验证后收到同一增强诊断。B 组独有首轮提案前
+的对齐报告。新增按钮末态和帧来源检查适用于两组。与 TASK-015 的
+跨轮比较同时存在原始证据、反馈和门槛变动，本轮组内配对用于判断
+提前提供报告的增量。
+
+| 故障 | A 首次合格轮次 | B 首次合格轮次 |
+| --- | --- | --- |
+| 拖拽 | 2、未通过 | 2、未通过 |
+| 组合键 | 3、未通过 | 3、3 |
+| 旧帧 | 1、未通过 | 未通过、未通过 |
+
+两组均修好 3/6。B 一对更早，一对更晚，四对打平。A 共 15 轮、
+13 次 VM 回放，每会话耗时中位数 63.31 秒；B 共 17 轮、14 次
+VM 回放，每会话耗时中位数 85.53 秒。首轮选中正确配置项均为 2/6，
+B 的两次均是旧帧题，且都把故障值 `before` 原样提交，因此在评测前
+被拒绝。首轮报对步骤为 A 2/6、B 5/6，B 组预先获得步骤编号。
+
+两组各有一条拖拽轨迹首轮改错帧来源，验证报告同时显示第 7 步的
+原始输入差异和第 17 步新增的前帧，下一轮均改对事件顺序。组合键
+出现同类回归，报告保留第 3 步原差异和第 17 步新增帧差异。
+这些结果证明验证反馈能区分原故障和新回归。在此模型、受控故障和
+小样本下，额外的首轮报告未减少修复轮数或耗时。
+
+实机报告在 `~/dvd04/cda1/`。共 27 台候选评测 VM 完成退役，
+物理、CID、IAM 租约均归零，宿主已有容器未变，GPU 回到 1 MiB。
+
+## 2026-11-10：TASK-017 自主视觉 CUA 健康基线
+
+本轮重新从健康桌面建立基线。此前固定动作的数据只用于 FullVM
+回归，不作为自主 CUA 的故障或修复对照。八条轨迹每条使用全新
+FullVM，模型读取任务指令和实时 PNG，自行选择每步键鼠动作。
+真实动作通过 HTTPS SDK 执行。任务结束后才运行固定 OSWorld
+任务所需的保存和上游 `compare_table` 评分。保存不到目标文件时仍
+按实际导出的工作簿评分，并保留 postconfig 的窗口激活状态。
+
+| 校准 | BoomerangSales | WeeklySales |
+| --- | ---: | ---: |
+| GUI-Owl-1.5-2B-Instruct，48 步 | 0.0 | 0.0 |
+| Qwen3.5-4B 视觉 non-thinking，48 步 | 0.0 | 0.0 |
+| GUI-Owl-1.5-2B-Instruct，预配置桌面，56 步 | 0.0 | 0.0 |
+| GUI-Owl-1.5-4B-Instruct，预配置桌面，56 步 | 0.0 | 0.0 |
+
+预配置只关闭 Calc 首次提示和 XLSX 格式确认，给模型通用的
+避免重复、保存和结束提示，保留最近两帧历史。这些是独立校准轮，
+不把不同模型和配置的结果作为单变量对照。4B 制品固定到
+`3f061c2c562cc860c42bf32542a70e07a7ff4840`，两片权重完成整文件
+SHA-256 校验，GPU 峰值分配约 9694 MiB。两条预配置 WeeklySales
+轨迹的工作簿确有变化，仍未把要求的图表留在 Sheet2；4B 主任务
+留在图表向导的数据系列页，未完成范围输入。八条轨迹均正常进入
+官方评分，无工具解析失败，均触及步数上限。
+
+健康基线的满分准入条件未达到，故障和修复 A/B 留待有可用的自主
+基线后进行。证据位于实验机 `~/dvd04/{clive1,cqv1,cop2,cop4}/`。
+八台 FullVM、私有盘、CID、物理及 IAM 租约均已回收，现有宿主容器
+保持不变，GPU 回到 1 MiB。
+
+## 2026-11-10：TASK-018 GUI-Owl 4B 自主扫描 OSWorld
+
+在 RTX 4080 和 Ubuntu 22.04/Xfce、Calc 7.3.7 的 DSec FullVM 上，
+固定 GUI-Owl-1.5-4B-Instruct `3f061c2c562cc860c42bf32542a70e07a7ff4840`，
+使用 BF16、贪心生成和最近两帧历史。OSWorld 固定为
+`8903ebeb0efdf74331bd7dc37ed91ccbbff22317`。按镜像现有应用选 8 道
+题，每题在新 VM 上最多 32 个模型决策。模型读实时桌面画面和原题
+指令，经正式 SDK 发出键鼠事件。成功题在另一台新 VM 上自主复跑。
+上游评分函数和规则保持原样，来宾路径改为 `/work`，Calc 沿用
+首次提示和格式确认的预配置及官方评分前的保存动作。
+
+| 任务 ID 前缀 | 任务 | 首跑得分 | 模型步数 | 复跑 |
+| --- | --- | ---: | ---: | ---: |
+| `e0df059f` | 桌面目录改名 | 1.0 | 5 | 1.0（5 步） |
+| `51b11269` | 按金额升序排序 | 1.0 | 3 | 1.0（3 步） |
+| `1334ca3e` | 缩小工作表显示 | 0.0 | 7 | — |
+| `4188d3a4` | 冻结表头范围 | 0.0 | 11 | — |
+| `1273e544` | 复制 Revenue 列到新表 | 0.0 | 10 | — |
+| `1e8df695` | 添加 Profit 列及公式 | 0.0 | 32 | — |
+| `0cecd4f3` | 复制和重命名工作表 | 0.0 | 24 | — |
+| `5ea617a3` | 从回收站恢复海报 | — | 0 | — |
+
+七道有效评分题均从 0 分开始。两道满分题分别由模型完成右键改名，
+以及通过 Calc 的 Data 菜单选择 Sort Ascending。四道零分题由
+相同动作和相同帧的停滞守卫结束，Profit 题反复点击同一个位置但
+截图哈希变化，触及步数上限。回收站题因镜像缺少 `gio` 在初始化
+阶段退出。两次首次启动失败均清理完成并重试成功。
+
+实验机证据在 `~/dvd04/scan1/`，含官方评分、原始回复、输入事件、
+截图与终止原因。共 10 条任务运行、12 块私有盘退役（含两次启动
+重试），IAM、物理和 CID 租约归零，宿主现有容器保持不变，GPU
+回到 1 MiB。这是主动挑选的小样本健康基线，与 TASK-017 原题或
+故障修复效果分开统计。
+
+## 2026-11-11 TASK-019 GUI-Owl 4B 扫描 OSWorld 360 题
+
+使用 OSWorld `8903ebeb0efdf74331bd7dc37ed91ccbbff22317` 的
+`test_nogdrive.json`，覆盖十类应用、360 个唯一任务。模型沿用
+TASK-018 的 GUI-Owl-1.5-4B-Instruct `3f061c2c562cc860c42bf32542a70e07a7ff4840`、
+BF16、贪心生成和最近两帧历史。每题最多 32 次模型决策。
+为覆盖桌面应用，使用 OSWorld 官方 Ubuntu 镜像的独立 QEMU/KVM
+VM，1920×1080，4 vCPU 和 4 GiB 内存。此轮结果与 TASK-018 的
+DSec FullVM 成绩分开记录。guest 无公网出口，622 份官方输入和
+评分素材从宿主缓存提供，使用原版初始化和评分规则。
+
+| 结果 | 题数 |
+| --- | ---: |
+| 首跑、全新 VM 复跑均 1.0，且无操作对照低于 1.0 | 73 |
+| 首跑 1.0，复跑低于 1.0 | 18 |
+| 首跑和复跑 1.0，无操作对照也为 1.0 | 1 |
+| 首跑部分得分 | 6 |
+| 首跑官方 0.0 | 192 |
+| 当前隔离配置缺少代理或任务所需外网 | 64 |
+| 初始化失败 | 3 |
+| 输入链路异常 | 1 |
+| 评分异常 | 2 |
+
+92 道首跑满分题均已另建 VM 复跑，复跑满分后再另建 VM 做无操作
+对照。73 道稳定满分覆盖全部十类应用，其中 Impress 17 道、OS 11 道、
+Thunderbird 和 VS Code 各 7 道。新增例子包括 Calc 数据透视表、
+GIMP 居中黄色三角形和从回收站恢复海报。Spotify 的原始试跑
+虽然返回 0 分，但因缺少在线安装源，归为环境受限并保留原记录。
+一轮独立异常复核后，仍有 6 道无有效评分，具体包含 3 道初始化异常、
+1 道 X11 输入断开、2 道评分后处理 HTTP 500。
+
+实验机原始报告、每步截图和输入证据位于
+`~/dvd04/osw360/campaign/`。逐题清单和满分清单已对照官方任务 ID
+校验。471 个 VM 运行记录全部确认回收，私有盘、QEMU 进程和活跃
+episode 均归零，GPU 回到 1 MiB。
+
+## 2026-11-11 TASK-020 DSec FullVM 启动 OSWorld 官方镜像
+
+安装版 wheel SHA-256 为
+`242efe82f37b4e5bc6ff490123b09ec1ec211cb5a09bc99997c789692573306a`。
+OSWorld 官方 Ubuntu QCOW2 作为只读基盘，独立增量层仅负责准备
+DSec guest agent 的启动环境。每次 SDK 创建都分配私有 QCOW2 写入层
+和 UEFI 变量文件。两次验收后，官方基盘和 guest agent 层的
+SHA-256 均与各自的启动前记录一致。
+
+通过正式 HTTPS SDK、API、Node 和 Edge 启动两台全新 KVM VM。来宾
+为 Ubuntu GNOME，1920×1080，4 vCPU 和 4 GiB RAM，无外网。SDK
+认证后以 UID 1000 运行命令，确认 UEFI 已启动，上传并读回官方素材，
+并执行原题的 `gio trash` 初始化。来宾端原路径及官方 `exact_match`
+评分函数沿用 OSWorld 固定版本 `8903ebeb0efdf74331bd7dc37ed91ccbbff22317`。
+
+| 回收站恢复海报 `5ea617a3` | 初始评分 | 最终评分 | 模型步数 |
+| --- | ---: | ---: | ---: |
+| GUI-Owl-1.5-4B-Instruct 首跑 | 0.0 | 1.0 | 32 |
+| 全新 FullVM 复跑 | 0.0 | 1.0 | 32 |
+
+两条轨迹均由模型看图并通过 SDK 发出鼠标动作。恢复后的海报经 SDK
+读回，SHA-256 与原始素材一致。两条轨迹都达到模型步数上限。验收中
+根据 systemd 日志修复了固件启动期间过早发放认证密钥、原生 Unix
+socket 目录的属主问题，并让评测适配器处理 1920×1080 以及通用
+`click` 动作。
+
+139 项 Linux 回归和 17 项 Node 预检回归通过。两台正式验收 VM 的
+写入层和 UEFI 变量文件均已删除，CID、物理和 IAM 租约均归零。
+逐步截图、原始模型输出、SDK 回执、官方评分和回收证明位于实验机
+`~/dvd04/uf6/`。
+
+## 2026-11-11 TASK-021 UEFI FullVM 宿主隔离
+
+安装版 wheel SHA-256 为
+`a2208af545d19047c60f68017ed04faeb226f6f8e2ae53bccfab1bf0bd6865e9`。
+复用官方 Ubuntu 基盘与 guest agent 层。管理员安装独立
+`dsec-ufiso` broker，Edge 在普通用户委派服务内启动两台全新离线
+FullVM。经正式 HTTPS SDK 运行回收站题 `5ea617a3`，两次均从
+0.0 到 1.0，均达到 32 步上限，恢复海报 SHA-256 与原始素材相同。
+
+两台 VMM 均处于各自的 AppArmor enforce profile 和独立 cgroup。
+内核审计记录每台 VMM 各一次实例外读拒绝和实例外截图创建拒绝。
+实机文件描述符证明 OVMF 固件、官方 QCOW2 基盘和 guest agent
+层以只读方式打开，实例 QCOW2 与 UEFI 变量文件以读写方式打开。
+每台 VMM 的 cgroup 限制为 4 个 CPU 配额、5 GiB RAM、swap 0、
+256 个 PID。本轮委派控制器为 CPU、内存和 PID，文件访问权限由
+AppArmor 执行。独立委派服务已实测 CPU 限流、内存 OOM 和 PID
+拒绝，另有 141 项 Linux 回归通过。
+
+两台 VM 停机后，AppArmor 策略、每实例 cgroup、QCOW2 写入层、
+UEFI 变量文件、CID、物理和 IAM 租约均已回收。基盘与 guest agent
+层通过停机后的摘要复核。验收脚本原始状态因同期新增其他 Docker
+容器而为失败。独立核对 Docker 事件确认原有 Grafana、Prometheus、
+node-exporter 和 wandb-local 无生命周期事件，本次验收所属临时
+etcd 已销毁。原始脚本结果与内核审计复核一并保留，实机证据位于
+`~/dvd04/ui1-before-docker-check-fix/`。
+
+## 2026-11-11 TASK-022 修正 OSWorld 验收的 Docker 检查
+
+验收前记录宿主运行中容器的完整 ID 和启动时间。结束时只核对这些容器是否仍运行且启动时间未变。临时 etcd 使用本次运行独有的标签，回收后连同已停止的容器一起查询。模拟回归覆盖新增容器、原有容器停机、重启或移除，以及临时 etcd 残留。
+
+沿用 TASK-021 的安装版和隔离配置，经正式 HTTPS SDK 在两台全新 FullVM 上运行回收站题 `5ea617a3`。两次官方评分均从 0.0 到 1.0，均达到 32 步上限，恢复海报的摘要与原始素材一致。
+
+原始总报告为 `passed`，进程退出码为 0。4 个原有容器均保持运行且未重启，临时 etcd 已删除。两台 VM 的写入层、UEFI 变量文件、cgroup 和租约均已回收，IAM、物理和 CID 租约均归零。实机原始报告为 `~/dvd04/ui1/report.json`，SHA-256 为 `103084e4c5698adee02035a29bc87f77e3647a0879bf616113384629823eb546`。
+
+## 2026-11-24 TASK-007 正式 API 首次使用实机验收
+
+从工作树按发布白名单导出 530 个文件，归档 SHA-256 为
+`1843a64daa863705976f77a3957c73c551d4d04259fda811055e826287c5a970`。
+从归档离线构建唯一所需的核心 wheel，
+SHA-256 为 `6f914048b6b6bed39706243e51340407aabf6d191ca757df24128f86b0b1bd70`。
+Mac 客户端、两个容器化 API 和独立 Linux Node 使用同一 wheel。
+按公开部署指南生成配置，初始化三成员 etcd，注册并激活 Node。
+
+Linux 复用宿主 KVM 和已有 Alpine 3.20 镜像，重新取得 Firecracker
+1.17.0 与官方 CI 内核 6.1.188，用发布包中的构建器生成离线 ext4 guest。
+通过正式 HTTPS API 提交内置 counter 任务。两轮固定回复中，第一轮在
+guest 写入计数值 3，第二轮结束任务。verifier 读取结果，评分 1.0。
+rollout ID 为 `8f0499d019e0443ead3832678614ca7c`。该用例覆盖 API
+部署和验证器执行，不采样模型。
+
+沙盒与 rollout 的持久记录均为 STOPPED，物理租约为 RELEASED，Node
+退役收据为 RETIRED、held=0。三个 Linux 用户服务均已停止，临时
+Compose 容器、网络、etcd 卷和控制面镜像已回收。工作区证据在
+`.runtime/release-entry-20261124/`，包含评分报告、Node 退役收据和回收日志。
+
+## 2026-11-24 TASK-002 正式 API 下的会话文件与 HTTP
+
+复用 TASK-007 安装的核心 wheel（SHA-256 前缀 `6f914048`）、Firecracker
+1.17.0 和 Linux 6.1.188。经独立的双 API 控制面和一台 Linux Node
+发布两个环境。测试 guest 内的 BusyBox HTTP 服务只监听回环地址。
+客户端通过正式 HTTPS SDK 请求文件及 HTTP 两项能力。
+
+只声明会话文件的环境返回 `NoPlacement`，查询项目准入清单得到空列表。
+具备两项能力的环境创建了一台 MicroVM。在同一会话内写入并读回
+69,888 字节，逐字节相同。对来宾回环服务发送含二进制正文的 POST，
+响应状态 200、响应头符合预期、正文为前 16 字节且标为 truncated。
+相同请求 ID 重发得到相同响应，服务端执行计数为 1。
+
+沙盒停止，唯一物理租约释放，Node 以 held=0 退役。5 个原有宿主容器
+保持运行和原启动时间。本轮 Node、Edge、Compose 服务、卷和网络均已回收。
+工作区记录位于 `.runtime/session-http-20261124/run2/` 和同级回收收据。
+早期尝试中，在 etcd 初始化完成前复制 Node 配置遗漏了签发的凭据。
+按公开指南补齐后以原 ID 确认激活。拒绝用例的证明取自正式准入清单。
+此次实机范围为无外网的单 MicroVM、回环 HTTP 和有界响应。

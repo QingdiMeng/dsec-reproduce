@@ -13,7 +13,7 @@ The backend mapping follows [DSec §3.1–3.3](https://arxiv.org/html/2609.22978
 | FnCall | A precreated container inside QEMU/KVM, then task cleanup | Networkless Edge/SDK path. Read-only root and per-invocation tmpfs/process reset; failed cleanup retires the VM. No aether/chronus on the task path. |
 | Container | Docker inside an outer QEMU/KVM VM; per-sandbox aether/chronus | Networkless QEMU guest with inner Docker and native agent. Legacy host Docker remains a distinct development configuration. |
 | MicroVM | Firecracker; per-sandbox aether/chronus | Existing real runtime; new guest execution gates have passed. |
-| FullVM | Full QEMU/KVM VM; per-sandbox aether/chronus | Private QEMU primitive passed real Linux execution/fault gates; no public FullVM/Edge integration yet. Do not substitute Firecracker. |
+| FullVM | QEMU/KVM guest OS directly; per-sandbox aether/chronus | Public SDK/Edge path for a pinned, networkless Linux guest with a private disk. Optional virtio-gpu 2D desktop; 3D, alternate OS boot and snapshots remain separate capabilities. |
 
 These paths share SDK contracts and Edge ownership; their boot, containment and
 recovery capabilities stay backend-specific. A production Container request
@@ -31,12 +31,17 @@ boundary, not another placement or lifecycle authority. The existing local UDS
 SDK remains a compatibility/development interface, not the production cluster
 ingress. See [cluster ownership and routing](CLUSTER_CONTROL_DESIGN.md).
 
-`sdk/cluster.py` and `control/cluster_api.py` already implement this remote path
-for the supported backends. Adding public FullVM requires extending the same
-SDK/API/IAM/placement/Node/Edge chain, with capability checks and owner-bound
-request IDs throughout. QEMU artifact paths and CID allocation remain node-local
-administrator configuration; callers select environments and resource demands.
-The private QEMU primitive and CID acceptance do not yet establish that full path.
+FullVM has its own signed route, IAM admission and physical lease backend.
+The existing Container RPC family is a shared transport for QEMU lifecycles;
+the immutable `execution_mode=fullvm` and environment revision select direct
+guest execution. Placement requires an observed FullVM environment; Node
+and Edge recheck the bound revision before create. QEMU artifact paths and CID
+allocation remain node-local; callers select environments and resource demands.
+The optional desktop profile attaches virtio-gpu 2D, a keyboard and an absolute
+pointer device. Only the owning Edge requests PNG captures and bounded input
+from the private QMP socket. Input uses the existing action journal before QMP
+effects; lost replies do not permit replay. The display profile is an opt-in,
+networkless preview without the host confinement profile.
 
 ### QEMU execution primitive
 
@@ -115,7 +120,7 @@ flowchart LR
     Edge --> FC[MicroVM: Firecracker]
     Edge --> Q[Container: QEMU/KVM, inner Docker, aether and chronus]
     Edge --> FN[FnCall: QEMU/KVM and precreated clean container]
-    Edge -. planned public backend .-> FV[FullVM: QEMU/KVM]
+    Edge --> FV[FullVM: QEMU/KVM, direct guest execution]
 ```
 
 ### Networkless Container and FnCall integration
@@ -156,6 +161,12 @@ reporting DONE it restarts that same precreated container, replacing processes
 and tmpfs. If execution/cleanup becomes uncertain, Edge retires the entire VM.
 FnCall has no persistent sessions or snapshot API. Container keeps its writable
 workspace and native sessions until stopped; snapshots/offload remain unsupported.
+
+Offline FullVM previews can select UEFI with a pinned QCOW2 boot disk. Edge
+binds the QEMU image tool, firmware and backing images to the environment
+revision, attaches the backing chain read-only and reserves disk space from
+the virtual disk size. Each VM owns its write layer and firmware variables.
+A systemd guest service starts the same authenticated DSec guest protocol.
 
 ### Authenticated QEMU guest channels
 
@@ -224,8 +235,10 @@ This completes a networkless execution path, not production confinement. QEMU
 still reports `production=False`: host cgroup/LSM enforcement, connection-flood
 resilience, mediated outbound networking, Container memory offload,
 and shared read-only image storage remain separate gates. The current preparation
-uses a private ext4 guest and inner VFS Docker; it is not an EROFS/OverlayBD
-performance result. Existing MicroVM EROFS, DAX, OverlayBD/ublk and 3FS mechanisms
+used a private ext4 guest and inner VFS Docker; it is not an EROFS/OverlayBD
+performance result. The opt-in QEMU EROFS/pmem-DAX directory-mount profile was
+added on 2026-10-26 and passed bounded Container/FnCall sharing and write-isolation
+acceptance; see the Host guide and install report. Existing MicroVM EROFS, DAX, OverlayBD/ublk and 3FS mechanisms
 are unchanged. There is no 60 ms cold-start or large-scale density claim.
 
 ## Canonical execution implementation
@@ -300,6 +313,12 @@ pathname sockets require the exact file permissions. Abstract binds and
 connections remain ungranted, without an address-qualified deny that would
 also suppress address-independent creation. Fine-grained Unix socket mediation
 is mandatory. Broader network policy remains a separate gate.
+
+For offline UEFI FullVMs, the administrator-approved catalog supplies exact
+read-only grants for the OVMF code and the QCOW2 backing chain. The per-VM
+profile grants writes to the instance QCOW2, firmware variables and screenshot
+output. The broker records the chosen boot files with the profile and reuses
+that identity during claim and retirement.
 
 The broker serializes prepare/claim/retire. A claim binds the exact cooperative
 launcher PID, UID, executable/argv, boot ID and start time. Retirement requires

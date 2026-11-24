@@ -11,6 +11,7 @@ performance or memory advantage over Docker.
 [Quickstart](docs/guides/QUICKSTART.md) ·
 [Use cases](docs/guides/USE_CASES.md) ·
 [Documentation](docs/README.md) ·
+[Project status](docs/PROJECT_STATUS.md) ·
 [Roadmap](ROADMAP.md) ·
 [Development release](https://github.com/QingdiMeng/dsec-reproduce/releases/tag/v0.1.0-dev.0)
 

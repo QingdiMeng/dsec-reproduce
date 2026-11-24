@@ -19,13 +19,15 @@ record the tested revision and configuration; they are not installation guides.
 | [RL integration](guides/RL_FRAMEWORK_ADAPTERS.md) | Trainer responsibilities, Miles integration and historical GPU experiments |
 | [TB2.1 application](../apps/tb21/README.md) | Optional task staging, image preparation and registration |
 | [MBPP + verl training case](../apps/mbpp/README.md) | Optional Python environment, Qwen3.5-2B GRPO, full-epoch training and before/after evaluation |
+| [SWE-Gym execution case](../apps/swegym/README.md) | Optional pinned repository tasks and official baseline/oracle scoring through the API; RL integration pending |
+| [OpenHands runtime adapter](../integrations/openhands/README.md) | Optional upstream agent integration, reusable coding conformance and explicit capability/ownership boundaries |
 
 ## Architecture and contracts
 
 | Document | Purpose |
 | --- | --- |
 | [Modular refactor design](architecture/MODULAR_REFACTOR_DESIGN.md) | Approved boundaries, paper alignment, migration progress and acceptance gates |
-| [Agent environment](architecture/AGENT_ENVIRONMENT_CONTRACT.md) | Task lifecycle, scoring boundary, durable actions and recovery |
+| [Agent environment and generality](architecture/AGENT_ENVIRONMENT_CONTRACT.md) | Workload-to-system design method, capability admission, optional task lifecycle, durable actions and recovery |
 | [HA control design](architecture/CLUSTER_CONTROL_DESIGN.md) | Ownership, failure boundaries and acceptance evidence |
 | [Sandbox daemon](architecture/SANDBOX_DAEMON.md) | Durable request handling and sandbox control plane |
 | [Comparison protocol](architecture/DOCKER_DSEC_BENCHMARK_PROTOCOL.md) | Matched workloads, cache conditions and complete backend accounting |
@@ -46,6 +48,7 @@ Current operational instructions are in the guides above.
 
 ## Project
 
+- [Current capabilities and task register](PROJECT_STATUS.md): implementation, scoped evidence, current work and candidate increments; generated from one register.
 - [Roadmap and paper alignment](../ROADMAP.md)
 - [Contribution guide](../CONTRIBUTING.md)
 - [License](../LICENSE) and [third-party notices](../THIRD_PARTY_NOTICES.md)
