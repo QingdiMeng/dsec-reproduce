@@ -119,6 +119,28 @@ docker compose up -d --no-deps api1 api2
 docker compose ps
 ```
 
+Register and activate the initial Node before submitting work. The generated
+controller and Node configurations enable managed membership; the initializer
+bootstraps IAM credentials/quota but does not join Nodes. From the operator's
+installed core environment, for the fresh `node1` in the example:
+
+```sh
+python -m dsec.host.fleet --client "$DSEC_PREVIEW_DIR/client.json" \
+  --out "$DSEC_PREVIEW_DIR/join-node1.json" \
+  join --spec "$DSEC_PREVIEW_DIR/node/registration.json"
+python -m dsec.host.fleet --client "$DSEC_PREVIEW_DIR/client.json" \
+  --out "$DSEC_PREVIEW_DIR/activate-node1.json" \
+  activate --node node1 --version 1
+```
+
+Use the version returned by join; `1` is only the fresh-node example. Retain
+both intent/result files. For a lost reply, inspect the retained request and
+membership before another mutation. Batch output uses
+`nodes/<id>/registration.json` instead of `node/registration.json`. See the
+[membership workflow](#dynamic-membership-maintenance-and-retirement) for status,
+maintenance and retirement. A running but JOINING Node is intentionally excluded
+from placement.
+
 Give callers `client.json` and the referenced **API CA and IAM token only**;
 adjust its file references after copying. Do not distribute the whole secret
 directory. API endpoints default to ports 18440/18441, etcd to 18430–18432 and

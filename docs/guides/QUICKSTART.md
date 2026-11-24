@@ -41,6 +41,39 @@ ID, never silently retried against a direct Edge connection.
 retain that development behavior. `DSEC_SOCKET` does not configure the product
 client. Node-internal UDS communication remains private to trusted services.
 
+Applications that need native files/sessions or streaming can declare those
+execution requirements on the existing creation call:
+
+```python
+from dsec.contracts.native import STREAM_FEATURE, SESSION_FILE_FEATURE
+from dsec.sdk import DSecMicroVMRunArgs
+
+sandbox = await client.run_microvm(
+    DSecMicroVMRunArgs(environment_id="general-tools"),
+    request_id=create_request_id,  # save this 32-lowercase-hex ID before sending
+    resource_demand=NodeDemand(1, 512, 1024, 1),
+    required_capabilities=[STREAM_FEATURE, SESSION_FILE_FEATURE],
+)
+```
+
+`run_container` accepts the same optional field. Dependencies on the base native
+protocol are added automatically. An old API rejects the request before creation;
+placement excludes incompatible Nodes, and the chosen Node rechecks before first
+dispatch. `NoPlacement` means no admission was made, not an execution failure.
+Changing requirements under an already used creation ID is a conflict. On a lost
+reply, query the original ID; do not create a replacement. Omitting requirements
+preserves existing behavior. Upgrade all API replicas before using this feature.
+
+The selected environment must have an operator-published, artifact-bound
+execution claim; a Node-wide protocol flag alone is insufficient. The default
+legacy smoke environment has no such claim. See [publishing execution claims](ARTIFACT_PUBLICATION.md).
+The resolved deployment revision is retained in IAM and checked again at Edge;
+it is included in the creation proof, not passed to the VMM.
+Claims do not prove tool dependencies, storage/network policy or snapshot
+compatibility. Use a prepared environment with separately validated semantics.
+No API silently switches an independent FnCall into a persistent
+workspace. See the [generality design and acceptance boundaries](../architecture/AGENT_ENVIRONMENT_CONTRACT.md).
+
 The host steps below prepare a Node and its development acceptance instance;
 they do not substitute for API/IAM deployment or production isolation gates.
 
@@ -125,7 +158,52 @@ The smoke records its result and releases its sandbox. Check `status` for an
 empty queue before stopping the two services. Stopping the sandbox service
 preserves VMMs for recovery; it is not a substitute for stopping owned sandboxes.
 
-## 4. Add a task application or optional storage
+## 4. Finish API deployment and run the first workload
+
+The local `smoke` above checks the prepared Node. To complete the application
+entry path, follow the [Docker controller deployment](CLUSTER_DEPLOYMENT.md#docker-preview-with-an-external-linux-node)
+with this instance's actual Edge **and worker** sockets in the Node spec. Keep
+`default` in its advertised environments and use at least the counter recipe's
+minimum: one concurrency slot, one CPU, 512 MiB RAM, 1024 MiB disk and 1 Mbps
+network reservation. The reservation does not require a networked guest.
+Controllers use a separately installed core wheel; no task application or model
+is needed for this first fixed-response check.
+
+Complete these steps in order:
+
+1. Generate/review the deployment, start the three etcd members and run its
+   initializer as documented in the cluster guide.
+2. Transfer the Node-only bundle to its declared directory; keep secrets private.
+   Start the prepared Edge/worker, Node gateway and both API replicas.
+3. [Join and activate the initial Node](CLUSTER_DEPLOYMENT.md#dynamic-membership-maintenance-and-retirement).
+   Generated deployments use managed membership: a running gateway or a visible
+   Watcher entry alone does not make a Node eligible for placement.
+4. From the source distribution, run the existing API-only acceptance command
+   with the generated operator client configuration:
+
+```sh
+.venv/bin/python -I tools/verify_rollout_api.py \
+  --api-config "$DSEC_PREVIEW_DIR/client.json" \
+  --out ./evidence/first-api-use
+```
+
+Use a new evidence directory. Without the optional MBPP/TB2.1 arguments, this
+runs the built-in counter task through the packaged Miles-compatible loop with
+fixed replies. It should record `miles_loop_through_api`, score 1 and two policy
+replies. This is execution/verification evidence, not a model or RL result.
+The script uses only the API configuration; its credentials and CA references
+are resolved relative to that file. Do not pass a worker or Edge socket.
+
+The generated `client.json` is the private root-project operator client. Retain
+it for this trusted preview and provision appropriately scoped credentials for
+other callers. If the first run returns `NoPlacement`, inspect Node ACTIVE
+membership, advertised `default` environment, worker health and physical demand;
+do not bypass the API. An uncertain request retains its original episode ID
+for reconciliation. Before stopping services, confirm the episode is stopped
+and its held quota/Node lease is released, using the
+[inventory API or management console](CLUSTER_DEPLOYMENT.md#remote-native-sdk).
+
+## 5. Add a task application or optional storage
 
 TB2.1/Miles and MBPP/verl use `RolloutAPIClient` and an API configuration file.
 Their earlier training scores remain historical local-worker evidence; API
