@@ -229,7 +229,13 @@ def publish_microvm(source_catalog: Path, environment_id: str, destination_catal
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    import sys
+    if sys.argv[1:2] in (["export"], ["import"]):
+        from dsec.storage.handoff import main as handoff
+        handoff()
+        return
+    parser = argparse.ArgumentParser(description=__doc__,
+        epilog="Use 'export --help' or 'import --help' for portable MicroVM manifests.")
     parser.add_argument("--source-catalog", type=Path, required=True)
     parser.add_argument("--environment-id", required=True)
     parser.add_argument("--destination-catalog", type=Path, required=True)

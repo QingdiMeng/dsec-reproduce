@@ -20,7 +20,7 @@ class PlacementEngine:
         self.membership = membership
 
     def choose(self, backend, environment, demand: Quota, *, capabilities=(), exclude=(),
-               execution_capabilities=()):
+               execution_capabilities=(), artifact_version=None):
         views = self.watcher.snapshot()
         eligible = self.membership.active_nodes() if self.membership is not None else set(views)
         with self.lock:
@@ -30,6 +30,7 @@ class PlacementEngine:
             candidates = [view for node,view in views.items()
                 if node in eligible and node not in exclude and backend in view.backends
                 and environment in view.environments
+                and (artifact_version is None or view.artifact_versions.get(environment) == artifact_version)
                 and set(capabilities) <= set(view.capabilities)
                 and (not execution_capabilities or
                      (view.environment_contract(backend, environment) is not None and

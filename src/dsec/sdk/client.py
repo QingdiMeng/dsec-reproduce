@@ -8,7 +8,7 @@ from dsec.sdk.sandbox_transport import SandboxClient, ServiceError
 from dsec.contracts.resources import NodeDemand
 from dsec.sdk.native import NativeSandboxMixin
 from dsec.contracts.native import REQUIREMENTS_FEATURE, execution_requirements
-from dsec.contracts.environments import ENVIRONMENT_REQUIREMENTS_FEATURE
+from dsec.contracts.environments import ARTIFACT_VERSION_FEATURE, ENVIRONMENT_REQUIREMENTS_FEATURE, validate_artifact_version
 
 
 class DSecSandbox(NativeSandboxMixin):
@@ -117,13 +117,18 @@ class _SandboxClient:
 
     async def run_microvm(self, args: DSecMicroVMRunArgs | None = None, *, timeout: float | None = None,
                           request_id: str | None = None, resource_demand=None,
-                          required_capabilities=()):
+                          required_capabilities=(), artifact_version=None):
         self._require_open()
         if args is None:
             args = DSecMicroVMRunArgs()
         if not isinstance(args, DSecMicroVMRunArgs):
             raise TypeError("run_microvm requires DSecMicroVMRunArgs")
         service_args = args.service_args()
+        if artifact_version is not None:
+            validate_artifact_version(artifact_version)
+            if ARTIFACT_VERSION_FEATURE not in self._features:
+                raise UnsupportedCapability('Upgrade API Server for portable MicroVM artifacts')
+            service_args['artifact_version'] = artifact_version
         if timeout is not None:
             raise UnsupportedCapability("per-create timeout is not supported by the local service")
         result = await asyncio.to_thread(self._transport.call, "create",

@@ -47,6 +47,7 @@ class EnvironmentRequirementTests(unittest.TestCase):
     def test_node_wire_roundtrip_preserves_environment_and_legacy_has_no_claims(self):
         contract = published_environment('coding','microvm','microvm',claim({'boot_sha256':'a'*64}))
         view = NodeView('n1','boot',('microvm',),('coding',),(),0,Quota(1,1,512,1024,0),0,(contract,))
+        view = replace(view, artifact_versions={'coding':'c'*64})
         class RPC:
             def send(self,*args,**kwargs):
                 return json.loads(json.dumps(asdict(view)))
@@ -54,10 +55,10 @@ class EnvironmentRequirementTests(unittest.TestCase):
         self.assertEqual(remote.probe(),view)
         class OldRPC:
             def send(self,*args,**kwargs):
-                value = asdict(view); value.pop('environment_contracts')
+                value = asdict(view); value.pop('environment_contracts'); value.pop('artifact_versions')
                 return value
         self.assertEqual(RemoteNode(OldRPC(),token='internal',route_key=b'k'*32).probe(),
-                         replace(view,environment_contracts=()))
+                         replace(view,environment_contracts=(),artifact_versions={}))
         with self.assertRaisesRegex(ValueError,'Ambiguous'):
             replace(view,environment_contracts=(contract,contract))
         with self.assertRaisesRegex(ValueError,'advertised'):

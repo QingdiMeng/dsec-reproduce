@@ -59,7 +59,7 @@
       "title": "环境能力与版本绑定",
       "state": "accepted",
       "owner": "maintainer",
-      "scope": "按具体环境声明筛选，IAM 固定 revision，Node/Edge 在新建意图前复核。",
+      "scope": "按具体环境声明筛选，IAM 固定 revision，Node/Edge 在新建意图前复核。 MicroVM 可按可移交的制品版本请求放置。",
       "limits": "受信发布者声明，不是自动 guest attestation；扩展组合另列。",
       "sources": [
         {
@@ -100,7 +100,8 @@
       ],
       "evidence": [
         "EV-ENV-1030",
-        "EV-SESSION-HTTP-1124"
+        "EV-SESSION-HTTP-1124",
+        "EV-PORTABLE-MICROVM-1124"
       ],
       "roadmap": [
         "RM-005",
@@ -535,7 +536,8 @@
         }
       ],
       "evidence": [
-        "EV-R3-1008"
+        "EV-R3-1008",
+        "EV-PORTABLE-MICROVM-1124"
       ],
       "roadmap": [
         "RM-101",
@@ -591,7 +593,7 @@
       "title": "通用环境发布与完整性",
       "state": "partial",
       "owner": "maintainer",
-      "scope": "固定制品、发布目录、部分 fs-verity 对象及声明路径重绑定。",
+      "scope": "固定制品、发布目录、部分 fs-verity 对象及声明路径重绑定。 支持本地 MicroVM 对象库之间通过清单交付。",
       "limits": "本地已有共享层在同次发布中源和目标各全读一次。新 Edge 进程首次加载全读一次。通用 compaction 与跨进程免扫描仍未闭环。",
       "sources": [
         {
@@ -602,6 +604,9 @@
         },
         {
           "path": "src/dsec_image/prepare.py"
+        },
+        {
+          "path": "src/dsec/storage/handoff.py"
         }
       ],
       "tests": [
@@ -620,7 +625,8 @@
         "EV-ENV-1030",
         "EV-PUBLICATION-READ-1124",
         "EV-PUBLICATION-REUSE-1124",
-        "EV-PACK-DIFF-OVERLAYBD-1124"
+        "EV-PACK-DIFF-OVERLAYBD-1124",
+        "EV-PORTABLE-MICROVM-1124"
       ],
       "roadmap": [
         "RM-101",
@@ -1652,6 +1658,23 @@
           "section": "2026-11-24 TASK-025 OverlayBD 父层复用与子 VM 恢复"
         }
       ]
+    },
+    {
+      "id": "EV-PORTABLE-MICROVM-1124",
+      "title": "HTTPS SDK 版本放置与独立目录的 MicroVM 恢复",
+      "date": "2026-11-24",
+      "date_kind": "run",
+      "kind": "linux",
+      "verdict": "passed",
+      "identity": "Core wheel 990d6638, Firecracker 1.17, two Edge processes and two Node gateways on one Linux host.",
+      "scope": "Export and import into distinct object pools. With publisher objects offline, exact-version create and retry selected B. Guest file and executable survived pause/resume. Both Node leases empty and IAM released.",
+      "limits": "Local file-ext4 physical run, co-located gateways/controller and one etcd member. OverlayBD handoff covered by local tests. No remote 3FS or live relocation.",
+      "records": [
+        {
+          "path": "docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md",
+          "section": "2026-11-24 TASK-026 两个 Node 的制品交付与实例恢复"
+        }
+      ]
     }
   ],
   "work": [
@@ -2429,6 +2452,43 @@
       ],
       "evidence": [
         "EV-PACK-DIFF-OVERLAYBD-1124"
+      ],
+      "reopens": []
+    },
+    {
+      "id": "TASK-026",
+      "title": "发布一次 MicroVM 环境，在另一 Node 按同一制品版本创建实例",
+      "kind": "feature",
+      "state": "done",
+      "owner": "maintainer",
+      "capabilities": [
+        "CAP-PUBLICATION",
+        "CAP-ENV-BINDING",
+        "CAP-STORAGE"
+      ],
+      "delta": "交付与宿主绝对路径无关的制品清单，接收 Node 在自己的对象库校验并生成本地部署条目，调用方按发布版本请求新实例。",
+      "trigger": "在 bc4783b 上将同一源发布到 A/B 两个对象库，四类负载的摘要相同，部署 revision 不同。复制 A 的 catalog 后移走 A 的对象库，B 已有相同内容仍因找不到 A 的路径而失败。同名环境常规放置按负载选 Node。",
+      "changed_boundary": "新增可移交的制品身份和按该身份创建的约束。既有部署 revision 继续承担 Node/Edge 复核，暂停实例的 resume 仍回到原所有者。",
+      "reuse": "沿用对象摘要、原子发布、Node 环境声明、Placement、IAM 和 Edge 复核；复用 3FS 与节点加入的既有证据。",
+      "prior_evidence": [
+        "EV-R3-1008",
+        "EV-FLEET",
+        "EV-ENV-1030",
+        "EV-PACK-DIFF-OVERLAYBD-1124"
+      ],
+      "acceptance": [
+        "从 A 发布一次，B 凭受信清单和可见对象在不同路径登记相同制品身份；保持层顺序及执行配置，校验失败时不发布",
+        "同名异版的较空闲 Node 不获放置；全部不匹配时不占配额。请求重试保留所有者和受信部署版本",
+        "通过正式 SDK 在 B 创建派生 MicroVM、执行依赖，在 B 暂停、恢复、停止并核对回收；记录物理主机数和逻辑 Node 数"
+      ],
+      "resources": "本地对象库和控制面可验证身份；Linux KVM/ublk 可用两个独立 Node 实例进行功能验收。跨物理主机结论需第二台合格 Linux Node。",
+      "stop_condition": "完成制品交接、版本约束和 B 上 SDK 创建、恢复与归还后记录证据；运行态跨宿主迁移和独立故障域 HA 另计。",
+      "depends_on": [
+        "TASK-005",
+        "TASK-025"
+      ],
+      "evidence": [
+        "EV-PORTABLE-MICROVM-1124"
       ],
       "reopens": []
     }

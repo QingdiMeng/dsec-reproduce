@@ -20,7 +20,7 @@ from dsec.contracts.rollout import ROLLOUT_FEATURE, is_rollout
 from dsec.control.rollout_gateway import RolloutGateway
 from dsec.contracts.release import coherent_release
 from dsec._release import installed_release
-from dsec.contracts.environments import EnvironmentView, ENVIRONMENT_REQUIREMENTS_FEATURE
+from dsec.contracts.environments import ARTIFACT_VERSION_FEATURE, EnvironmentView, ENVIRONMENT_REQUIREMENTS_FEATURE
 from dsec.contracts.native import NATIVE_FEATURE
 
 
@@ -132,7 +132,7 @@ class NodeGateway:
         # Requirements stay in IAM. The resolved environment binding also
         # reaches Edge, so a service replacement cannot reinterpret the intent.
         return {key:value for key,value in receipt['args'].items()
-                if key != 'required_capabilities'}
+                if key not in ('required_capabilities', 'artifact_version')}
 
     def _release_failed_create(self, receipt, proof):
         response = proof.get('response') or {}
@@ -203,14 +203,16 @@ class NodeGateway:
                     self.iam.release(receipt['project'], receipt['request_id'], self.node_id,
                                      nonadmission=True)
                     raise ServiceError('AdmissionDenied', 'Owning Edge does not provide this FullVM within the admitted quota')
-            if required or backend == 'fullvm':
+            if required or backend == 'fullvm' or 'artifact_version' in args:
                 live = self.health()
                 actual = live.environment_contract(backend, environment)
                 expected = (EnvironmentView.from_dict(args['environment_contract'])
                             if 'environment_contract' in args else None)
                 missing = sorted(set(required) - set(live.capabilities) |
                                  (set(required) - set(actual.capabilities) if actual else set(required)))
-                if missing or actual != expected or expected is None:
+                version = args.get('artifact_version')
+                version_changed = version is not None and live.artifact_versions.get(environment) != version
+                if missing or actual != expected or expected is None or version_changed:
                     # The proof above establishes no Edge intent and dispatch
                     # has not begun. A stale watcher cannot authorize downgrade.
                     self.iam.release(receipt['project'], receipt['request_id'], self.node_id,
@@ -365,8 +367,14 @@ class NodeGateway:
                 if item.backend in self.backends and item.environment_id in self.environments:
                     supported = tuple(feature for feature in item.capabilities if feature in capabilities)
                     contracts.append(replace(item, capabilities=supported if NATIVE_FEATURE in supported else ()))
+        versions = {item.environment_id: health['artifact_versions'][item.environment_id]
+                    for item in contracts if item.backend == 'microvm' and
+                    item.environment_id in health.get('artifact_versions', {})}
+        capabilities.discard(ARTIFACT_VERSION_FEATURE)
+        if versions:
+            capabilities.add(ARTIFACT_VERSION_FEATURE)
         return NodeView(self.node_id, self.boot_id, self.backends, self.environments,
-                        tuple(sorted(capabilities)), load, available, active, tuple(contracts))
+                        tuple(sorted(capabilities)), load, available, active, tuple(contracts), versions)
 
     def lifecycle_proof(self, version):
         from dsec.control.node_lifecycle import NodeLifecycle

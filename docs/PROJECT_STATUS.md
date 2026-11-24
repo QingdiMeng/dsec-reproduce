@@ -15,7 +15,7 @@
 | 能力 | 状态 | 已有证据 | 范围与限制 |
 | --- | --- | --- | --- |
 | CAP-API：统一 API、IAM、Placement、Watcher | 限定范围已验收 | EV-CLUSTER-1011、EV-ENV-1030、EV-RELEASE-ENTRY-1124 | HTTPS SDK→mTLS Node→私有 Edge；配额与所有者固定、过期健康不释放执行资源；边界：开发预览；独立故障域 HA 另列。 |
-| CAP-ENV-BINDING：环境能力与版本绑定 | 限定范围已验收 | EV-ENV-1030、EV-SESSION-HTTP-1124 | 按具体环境声明筛选，IAM 固定 revision，Node/Edge 在新建意图前复核；边界：受信发布者声明，不是自动 guest attestation；扩展组合另列。 |
+| CAP-ENV-BINDING：环境能力与版本绑定 | 限定范围已验收 | EV-ENV-1030、EV-SESSION-HTTP-1124、EV-PORTABLE-MICROVM-1124 | 按具体环境声明筛选，IAM 固定 revision，Node/Edge 在新建意图前复核。 MicroVM 可按可移交的制品版本请求放置；边界：受信发布者声明，不是自动 guest attestation；扩展组合另列。 |
 | CAP-NATIVE：原生会话、二进制文件、流 | 限定范围已验收 | EV-NATIVE-1010、EV-ENV-1030 | 持久 cwd/env、chunked files、stdout/stderr/result、重连接续和精确取消；边界：不包含 PTY/交互 stdin 或 HTTP 响应流。 |
 | CAP-SESSION-FILES：会话级文件与 aether/chronus | 限定范围已验收 | EV-AETHER-1012、EV-SESSION-HTTP-1124 | session 文件复用 cwd/env/身份，关闭会话拒绝隐式重建；真实 MicroVM 已验；边界：带显式能力要求的 HTTPS API 已覆盖单 MicroVM 会话内二进制文件传输。 |
 | CAP-HTTP：有界会话 HTTP | 限定范围已验收 | EV-HTTP-LOCAL、EV-SESSION-HTTP-1124 | HTTP binary body、headers/status、timeout/truncation、POST 原 ID 去重；边界：正式 API 到单台 MicroVM 的回环 HTTP 已验，范围为有界 POST、响应截断和相同请求 ID 的重复提交。 |
@@ -25,9 +25,9 @@
 | CAP-FULLVM：公共 FullVM 路径 | 部分实现/验收 | EV-QEMU-1012、EV-FULLVM-1104、EV-FULLVM-DESKTOP-1104、EV-OSWORLD-PARITY-1104、EV-FULLVM-CALC-1110、EV-FULLVM-CALC-DIAG-1110、EV-OSWORLD-FULLVM-UEFI-1111、EV-OSWORLD-UEFI-HOST-ISOLATION-1111、EV-OSWORLD-UEFI-ACCEPTANCE-CLEANUP-1111 | 公共 FullVM SDK/HTTPS→Node→Edge；无网 Linux 原生执行、租约回收、可选 Ubuntu virtio-gpu 2D 截图和键鼠已实机验收。 UEFI/QCOW2 官方 OSWorld Ubuntu 镜像已走正式 SDK 验收。 离线 UEFI/QCOW2 FullVM 已实机验证 AppArmor 文件边界和每 VM cgroup 限制；边界：OSWorld 单题对照和官方镜像回收站单题已验收；其他 OS、网络、快照、3D 及生产隔离尚未验收。 |
 | CAP-ISOLATION：QEMU 宿主与通道隔离 | 限定范围已验收 | EV-QEMU-ISOLATION、EV-OSWORLD-UEFI-HOST-ISOLATION-1111、EV-OSWORLD-UEFI-ACCEPTANCE-CLEANUP-1111 | AppArmor/cgroup/seccomp/NoNewPrivs 和每实例认证通道，普通账户受限 helper。 离线 UEFI/QCOW2 FullVM 已实机验证 AppArmor 文件边界和每 VM cgroup 限制；边界：单 Node 有限内核证据；production=false，未覆盖全对抗负载。 |
 | CAP-NETWORK：QEMU 独立网络与固定策略 | 限定范围已验收 | EV-QEMU-NETWORK | netns/TAP/TC eBPF、固定 DNS/公网允许、宿主/metadata/私网拒绝及身份化回收；边界：无 IPv6/ICMP/热策略/带宽整形或规模承诺。 |
-| CAP-STORAGE：EROFS/OverlayFS、OverlayBD/ublk、3FS 源 | 限定范围已验收 | EV-R3-1008 | 单机既有分层只读/私有写、本地与真实 3FS 源功能、外部 Rust OverlayBD/ublk 集成；边界：不是跨主机 3FS 可用性/性能；未通用化所有存储能力声明。 |
+| CAP-STORAGE：EROFS/OverlayFS、OverlayBD/ublk、3FS 源 | 限定范围已验收 | EV-R3-1008、EV-PORTABLE-MICROVM-1124 | 单机既有分层只读/私有写、本地与真实 3FS 源功能、外部 Rust OverlayBD/ublk 集成；边界：不是跨主机 3FS 可用性/性能；未通用化所有存储能力声明。 |
 | CAP-DAX：EROFS＋pmem/DAX 只读页共享 | 限定范围已验收 | EV-DAX-1026 | 受测 QEMU Container/FnCall 与单个 SWE-Gym 环境的本地只读共享和写隔离；边界：压缩层、3FS 直接 DAX、整机收益与 Docker 优势没有由此证明。 |
-| CAP-PUBLICATION：通用环境发布与完整性 | 部分实现/验收 | EV-VERITY-COST、EV-ENV-1030、EV-PUBLICATION-READ-1124、EV-PUBLICATION-REUSE-1124、EV-PACK-DIFF-OVERLAYBD-1124 | 固定制品、发布目录、部分 fs-verity 对象及声明路径重绑定；边界：本地已有共享层在同次发布中源和目标各全读一次。新 Edge 进程首次加载全读一次。通用 compaction 与跨进程免扫描仍未闭环。 |
+| CAP-PUBLICATION：通用环境发布与完整性 | 部分实现/验收 | EV-VERITY-COST、EV-ENV-1030、EV-PUBLICATION-READ-1124、EV-PUBLICATION-REUSE-1124、EV-PACK-DIFF-OVERLAYBD-1124、EV-PORTABLE-MICROVM-1124 | 固定制品、发布目录、部分 fs-verity 对象及声明路径重绑定。 支持本地 MicroVM 对象库之间通过清单交付；边界：本地已有共享层在同次发布中源和目标各全读一次。新 Edge 进程首次加载全读一次。通用 compaction 与跨进程免扫描仍未闭环。 |
 | CAP-SNAPSHOT-REUSE：MicroVM 快照、prepared-state fork 和 ready 池 | 限定范围已验收 | EV-R3-1008、EV-NATIVE-1010 | 真实 MicroVM pause/restore、原状态接管、prepared-state 分叉隔离及 ready 租约交接；边界：不是 Container offload，也不是完整磁盘 pack_diff 发布。 |
 | CAP-PACK-DIFF：磁盘增量环境 pack_diff | 部分实现/验收 | EV-PACK-DIFF-FILES-1124、EV-PACK-DIFF-OVERLAYBD-1124 | 隔离 MicroVM 构建并捕获已批准的新增文件，绑定父版本，原子发布，独立子 VM 恢复；边界：本地原生 ext4 或 OverlayBD ext4 根盘，仅支持 /opt 下批准的新增文件。前者物化完整子盘，后者复用父 lower 并发布一个增量块层。任意块导出、覆盖、删除及在线目录更新待验收。 |
 | CAP-RESOURCES：资源准入、调度与可观测性 | 限定范围已验收 | EV-R3-1008、EV-ENV-1030 | Edge 物理预算、episode/API 配额分离、等待原因与所有者证明回收；边界：模型/GPU 不归 core 管理；全面成本/规模另验。 |
@@ -407,6 +407,22 @@
 
 变更边界：新增 OverlayBD 派生发布路径，沿用父环境与策略固定、文件校验及原子发布。
 
+### TASK-026：发布一次 MicroVM 环境，在另一 Node 按同一制品版本创建实例
+
+状态：完成；类型：`feature`；负责人：`maintainer`。
+
+- 关联能力：CAP-PUBLICATION、CAP-ENV-BINDING、CAP-STORAGE；依赖：TASK-005、TASK-025。
+- 新增价值：交付与宿主绝对路径无关的制品清单，接收 Node 在自己的对象库校验并生成本地部署条目，调用方按发布版本请求新实例。
+- 复用：沿用对象摘要、原子发布、Node 环境声明、Placement、IAM 和 Edge 复核；复用 3FS 与节点加入的既有证据。
+- 触发原因：在 bc4783b 上将同一源发布到 A/B 两个对象库，四类负载的摘要相同，部署 revision 不同。复制 A 的 catalog 后移走 A 的对象库，B 已有相同内容仍因找不到 A 的路径而失败。同名环境常规放置按负载选 Node。
+- 既有证据：EV-R3-1008、EV-FLEET、EV-ENV-1030、EV-PACK-DIFF-OVERLAYBD-1124
+- 资源：本地对象库和控制面可验证身份；Linux KVM/ublk 可用两个独立 Node 实例进行功能验收。跨物理主机结论需第二台合格 Linux Node。
+- 验收：从 A 发布一次，B 凭受信清单和可见对象在不同路径登记相同制品身份；保持层顺序及执行配置，校验失败时不发布；同名异版的较空闲 Node 不获放置；全部不匹配时不占配额。请求重试保留所有者和受信部署版本；通过正式 SDK 在 B 创建派生 MicroVM、执行依赖，在 B 暂停、恢复、停止并核对回收；记录物理主机数和逻辑 Node 数
+- 停止条件：完成制品交接、版本约束和 B 上 SDK 创建、恢复与归还后记录证据；运行态跨宿主迁移和独立故障域 HA 另计。
+- 完成证据：EV-PORTABLE-MICROVM-1124
+
+变更边界：新增可移交的制品身份和按该身份创建的约束。既有部署 revision 继续承担 Node/Edge 复核，暂停实例的 resume 仍回到原所有者。
+
 ## 实现、测试与决策索引
 
 ### CAP-API
@@ -517,7 +533,7 @@
 
 负责人：`maintainer`；路线图：RM-101、RM-102。
 
-- 实现：[src/dsec/storage/publication.py](../src/dsec/storage/publication.py)、[src/dsec/storage/integrity.py](../src/dsec/storage/integrity.py)、[src/dsec_image/prepare.py](../src/dsec_image/prepare.py)
+- 实现：[src/dsec/storage/publication.py](../src/dsec/storage/publication.py)、[src/dsec/storage/integrity.py](../src/dsec/storage/integrity.py)、[src/dsec_image/prepare.py](../src/dsec_image/prepare.py)、[src/dsec/storage/handoff.py](../src/dsec/storage/handoff.py)
 - 回归/验收入口：[tests/unit/test_artifact_publisher.py](../tests/unit/test_artifact_publisher.py)、[tests/unit/test_artifact_integrity.py](../tests/unit/test_artifact_integrity.py)、[tests/unit/test_image_prepare.py](../tests/unit/test_image_prepare.py)
 - 决策：[docs/architecture/AGENT_ENVIRONMENT_CONTRACT.md](../docs/architecture/AGENT_ENVIRONMENT_CONTRACT.md)
 
@@ -939,3 +955,12 @@ OverlayBD 复用父 lower 的增量发布与独立恢复；运行日期：2026-1
 - 覆盖：Two original lowers reused in order with matching inodes and hashes. One 77824-byte commit and one 441-byte manifest added. Child execution, parent/sibling isolation and device reclamation verified.
 - 限制：One Linux host and local artifact pool, add-only dependency under /opt. No throughput or remote storage measurements.
 - 记录：[2026-11-24 TASK-025 OverlayBD 父层复用与子 VM 恢复](../docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md)
+
+### EV-PORTABLE-MICROVM-1124
+
+HTTPS SDK 版本放置与独立目录的 MicroVM 恢复；运行日期：2026-11-24；层级：`linux`；结论：`passed`。
+
+- 版本身份：Core wheel 990d6638, Firecracker 1.17, two Edge processes and two Node gateways on one Linux host.
+- 覆盖：Export and import into distinct object pools. With publisher objects offline, exact-version create and retry selected B. Guest file and executable survived pause/resume. Both Node leases empty and IAM released.
+- 限制：Local file-ext4 physical run, co-located gateways/controller and one etcd member. OverlayBD handoff covered by local tests. No remote 3FS or live relocation.
+- 记录：[2026-11-24 TASK-026 两个 Node 的制品交付与实例恢复](../docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md)

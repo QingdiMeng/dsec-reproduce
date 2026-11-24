@@ -187,11 +187,13 @@ class Handler(socketserver.StreamRequestHandler):
                         "rejected_requests":self.server.rejected_requests}
             runtime = getattr(self.server, 'container_runtime', None)
             catalog = getattr(manager, 'microvm_environment_catalog', None)
+            from dsec.storage.handoff import artifact_versions
             contracts = ((catalog.execution_contracts() if catalog else ()) +
                          (runtime.execution_contracts() if runtime else ()))
             return {"pid":os.getpid(),"release":installed_release(),"recovery_events":manager.recovery_events,
                     "qemu_environments":runtime.execution_environments() if runtime else {},
                     "environment_contracts":[item.as_dict() for item in contracts],
+                    "artifact_versions":artifact_versions(catalog) if catalog else {},
                     "monitor_errors":manager.errors,"warm_pool":manager.warm_pool_status(),
                     "protocol_features":["container-rpc-v1", "fncall-rpc-v1", "fullvm-rpc-v1", "fullvm-desktop-v1", "busy-nonadmission-v1", NATIVE_FEATURE, STREAM_FEATURE, SESSION_FILE_FEATURE, HTTP_FEATURE, ENVIRONMENT_REQUIREMENTS_FEATURE] + (
                         ["node-admission-v1"] if getattr(self.server, 'node_admission', None) else []),

@@ -1,10 +1,10 @@
 """Versioned cluster envelopes; no host operations or control dependencies."""
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import hashlib
 import hmac
 import math
 import re
-from dsec.contracts.environments import EnvironmentView
+from dsec.contracts.environments import EnvironmentView, validate_artifact_version
 
 
 PROTOCOL = 'dsec-cluster-v1'
@@ -125,6 +125,7 @@ class NodeView:
     available: Quota
     active: int
     environment_contracts: tuple[EnvironmentView, ...] = ()
+    artifact_versions: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
         identifier(self.node_id)
@@ -145,6 +146,12 @@ class NodeView:
         keys = [(item.backend, item.environment_id) for item in self.environment_contracts]
         if len(keys) != len(set(keys)):
             raise ValueError('Ambiguous environment contracts')
+        if not isinstance(self.artifact_versions, dict):
+            raise ValueError('Expected a map of MicroVM artifact versions')
+        for name, version in self.artifact_versions.items():
+            if ('microvm', name) not in keys:
+                raise ValueError('Portable version requires a MicroVM deployment contract')
+            validate_artifact_version(version)
 
     def environment_contract(self, backend, environment):
         return next((item for item in self.environment_contracts if

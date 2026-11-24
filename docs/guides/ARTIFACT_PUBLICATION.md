@@ -89,6 +89,37 @@ python -m dsec_image.pack_diff --policy policy.json --delta dependency.delta.jso
 
 Linux 实机验收中，从 64 MiB Alpine 启动盘构造的两个父 lower 均得到复用。发布一个新增依赖只增加 76 KiB 的 commit 和 441 字节的描述文件。新建子 VM 可以执行程序，父环境和其他子 VM 的内容保持独立。详见[实机验收记录](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md)。
 
+## 跨 Node 交付同一 MicroVM 环境
+
+发布者先用原发布流程生成本地环境目录和对象库，再导出清单。输出的 SHA-256 是 SDK 的 `artifact_version`。清单保留环境配置、执行能力、层顺序和制品摘要。每台 Node 的绝对路径由接收方决定。
+
+```bash
+dsec-artifact-publisher export --catalog /srv/dsec/environments.json \
+  --environment-id with-tool --manifest with-tool.json
+```
+
+将清单、发布者给出的预期摘要以及对象库中的所需对象交给接收方。对象可预置在接收方或通过其可读的共享目录提供。接收方从可信发布渠道取得预期摘要，在 B 上执行下列命令，其中 `VERSION` 为该摘要。`--objects` 直接指向包含摘要文件的目录。
+
+```bash
+dsec-artifact-publisher import --environment-id with-tool --manifest with-tool.json \
+  --artifact-version "$VERSION" --objects /mnt/artifact-transfer/objects \
+  --local-store /srv/node-b/artifacts --destination-catalog /srv/node-b/environments.json
+```
+
+B 校验清单及对象内容、重新生成本地 OverlayBD 镜像描述，并原子写入部署目录。按原部署流程让 Edge 加载新目录，在 Node 配置中声明该环境及其最小资源需求。现有 Edge 采用启动时固定的目录，更新时应走已有维护流程。版本选择只使用已发布且健康的 Node。
+
+```python
+box = await client.run_microvm(
+    DSecMicroVMRunArgs(environment_id="with-tool"),
+    artifact_version=version,
+    resource_demand={"cpu": 1, "memory_mb": 512, "disk_mb": 256, "network_mbps": 0},
+)
+```
+
+`artifact_version` 跨部署路径可复用。本地 `environment_sha256` 仍绑定部署路径和执行声明，供 Node 和 Edge 在创建时复核。无匹配版本时返回 `NoPlacement`，已有实例的暂停、恢复和回收沿原沙盒 ID 路由。
+
+v1 支持本地 EROFS 层、ext4 根盘和发布器生成的 OverlayBD 根盘。带 3FS 惰性读取设置或未识别配置的目录会拒绝导出。对象交付方式由部署方选择。此流程可在不同主机预置环境，已暂停实例的内存和写盘仍归原 Node 管理。
+
 ## TASK-023 设计提案 · 单次发布内复用本地校验
 
 TASK-003 在两个共享 EROFS 层的环境上测到，发布器命中对象池后仍对源和目标各读两遍。

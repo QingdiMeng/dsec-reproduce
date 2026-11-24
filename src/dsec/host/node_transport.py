@@ -68,7 +68,7 @@ class RemoteNode:
         return NodeView(value['node_id'], value['boot_id'], tuple(value['backends']),
             tuple(value['environments']), tuple(value['capabilities']), value['load'],
             Quota(**value['available']), value['active'], tuple(EnvironmentView.from_dict(item)
-                for item in value.get('environment_contracts', ())))
+                for item in value.get('environment_contracts', ())), value.get('artifact_versions', {}))
 
     def health(self):
         """The controller's capability guard uses the same live Node view.
