@@ -101,11 +101,17 @@ async def setup(box, workbook):
     raise RuntimeError('Calc window did not become ready: '+diagnostics['output'])
 
 
-async def capture(box, out, seq, action, *, events=None, observe=None):
+def frame_metadata(shot, seq, phase, returned_ns):
+    return dict(id=f'{seq:03d}:{phase}', step=seq, phase=phase, returned_monotonic_ns=returned_ns,
+                sha256=hashlib.sha256(shot['data']).hexdigest())
+
+
+async def capture(box, out, seq, action, *, events=None, observe=None, expected_size=(1024, 768)):
     row = dict(step=seq, action=action, requests=[])
     screen = await box.screenshot()
-    if (screen['width'], screen['height']) != (1024, 768):
-        raise ValueError('This desktop replay requires a 1024×768 display')
+    before_ns = time.monotonic_ns()
+    if expected_size is not None and (screen['width'], screen['height']) != expected_size:
+        raise ValueError(f'This desktop replay requires a {expected_size[0]}×{expected_size[1]} display')
     t0 = time.monotonic_ns()
     scheduled = batches(action, (screen['width'], screen['height']))
     if events is not None:
@@ -120,14 +126,25 @@ async def capture(box, out, seq, action, *, events=None, observe=None):
             await asyncio.sleep(.075)
     await asyncio.sleep(min(2, max(0, action.get('settle', .25))))
     after = await box.screenshot()
-    if observe is not None:
-        after = observe(action, screen, after)
+    after_ns = time.monotonic_ns()
+    delivered = after if observe is None else observe(action, screen, after)
+    if delivered is not screen and delivered is not after:
+        raise ValueError('Observation hook must choose one of the captured frames')
+    before_frame = frame_metadata(screen, seq, 'before', before_ns)
+    after_frame = frame_metadata(after, seq, 'after', after_ns)
+    chosen = before_frame if delivered is screen else after_frame
+    path = f'{seq:03d}.png'
+    if delivered is screen:
+        after_frame['path'] = f'{seq:03d}-after.png'
+        (out/after_frame['path']).write_bytes(after['data'])
+    chosen['path'] = path
+    row['frames'] = dict(before=before_frame, after=after_frame, delivered=chosen['id'])
     window = await box.run_shell('DISPLAY=:0 xdotool getactivewindow getwindowname')
-    row['observation'] = dict(path=f'{seq:03d}.png', width=after['width'], height=after['height'],
-                              sha256=hashlib.sha256(after['data']).hexdigest(),
+    row['observation'] = dict(path=path, width=delivered['width'], height=delivered['height'],
+                              sha256=chosen['sha256'],
                               window=window['output'].strip() if window['exit_code'] == 0 else None)
     row['elapsed_ms'] = round((time.monotonic_ns()-t0)/1e6, 2)
-    (out/row['observation']['path']).write_bytes(after['data'])
+    (out/path).write_bytes(delivered['data'])
     with (out/'trace.jsonl').open('a', encoding='utf-8') as trace:
         trace.write(json.dumps(row, ensure_ascii=False)+'\n')
     return row
