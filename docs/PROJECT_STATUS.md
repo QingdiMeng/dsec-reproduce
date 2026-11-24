@@ -29,7 +29,7 @@
 | CAP-DAX：EROFS＋pmem/DAX 只读页共享 | 限定范围已验收 | EV-DAX-1026 | 受测 QEMU Container/FnCall 与单个 SWE-Gym 环境的本地只读共享和写隔离；边界：压缩层、3FS 直接 DAX、整机收益与 Docker 优势没有由此证明。 |
 | CAP-PUBLICATION：通用环境发布与完整性 | 部分实现/验收 | EV-VERITY-COST、EV-ENV-1030、EV-PUBLICATION-READ-1124、EV-PUBLICATION-REUSE-1124 | 固定制品、发布目录、部分 fs-verity 对象及声明路径重绑定；边界：本地已有共享层在同次发布中源和目标各全读一次。新 Edge 进程首次加载全读一次。通用 compaction 与跨进程免扫描仍未闭环。 |
 | CAP-SNAPSHOT-REUSE：MicroVM 快照、prepared-state fork 和 ready 池 | 限定范围已验收 | EV-R3-1008、EV-NATIVE-1010 | 真实 MicroVM pause/restore、原状态接管、prepared-state 分叉隔离及 ready 租约交接；边界：不是 Container offload，也不是完整磁盘 pack_diff 发布。 |
-| CAP-PACK-DIFF：磁盘增量环境 pack_diff | 未实现 | — | 独立构建→增量导出→去除构建残留→不可变发布→新实例恢复的完整工作流；边界：目前只有快照/COW/fork 基础，完整用户路径未实现。 |
+| CAP-PACK-DIFF：磁盘增量环境 pack_diff | 部分实现/验收 | EV-PACK-DIFF-FILES-1124 | 隔离 MicroVM 构建并捕获已批准的新增文件，绑定父版本，原子发布，独立子 VM 恢复；边界：本地原生 ext4 的 /opt 文件级增量，发布端物化完整子盘。任意磁盘块、覆盖/删除、OverlayBD 后端及在线目录更新仍待实现或验收。 |
 | CAP-RESOURCES：资源准入、调度与可观测性 | 限定范围已验收 | EV-R3-1008、EV-ENV-1030 | Edge 物理预算、episode/API 配额分离、等待原因与所有者证明回收；边界：模型/GPU 不归 core 管理；全面成本/规模另验。 |
 | CAP-FLEET：节点动态加入、维护、退出与升级 | 限定范围已验收 | EV-FLEET、EV-RELEASE-ENTRY-1124 | 有限两主机动态发现、drain/维护/恢复/退出、目标加载版本与明确回滚；边界：全新第二 Linux 主机安装、任意状态格式迁移仍未证明。 |
 | CAP-ROTATION：证书和访问凭据轮换 | 限定范围已验收 | EV-ROTATION | Node/API 和 etcd client 的有界轮换及原会话持续可用；边界：长存 route-signing key、etcd peer CA/JWT root 自动迁移另列。 |
@@ -375,6 +375,22 @@
 - 停止条件：固定样本完成并记录校验失效、实际读取和回收结果。
 - 完成证据：EV-PUBLICATION-REUSE-1124
 
+### TASK-024：从构建 MicroVM 发布经筛选的环境文件增量
+
+状态：完成；类型：`feature`；负责人：`maintainer`。
+
+- 关联能力：CAP-PACK-DIFF、CAP-PUBLICATION；依赖：TASK-023。
+- 新增价值：发布端从隔离 builder 捕获明确批准的新依赖，在固定的本地原生 ext4 父环境上物化并发布独立子环境。
+- 复用：沿用 SDK native 文件、父环境摘要、私有写盘及内容寻址发布。
+- 触发原因：RM-103 缺从隔离构建到新环境创建的可用路径。
+- 既有证据：EV-PUBLICATION-REUSE-1124、EV-NATIVE-1010
+- 资源：普通账户、Linux ext4/KVM、已有 microVM 与 e2fsprogs。
+- 验收：捕获前核对构建实例与父版本，按发布者固定的文件名、模式、摘要筛选；拒绝错误父版本、错误内容和不完整发布；在 Linux 由新 VM 执行依赖，确认基线和构建残留隔离并回收资源
+- 停止条件：记录支持的父盘形态、增量和实机结果；运行态内存、任意路径删除及其他后端独立验收。
+- 完成证据：EV-PACK-DIFF-FILES-1124
+
+变更边界：新增可移交的文件级增量和受信发布端入口。
+
 ## 实现、测试与决策索引
 
 ### CAP-API
@@ -501,8 +517,8 @@
 
 负责人：`maintainer`；路线图：RM-103。
 
-- 实现：—
-- 回归/验收入口：—
+- 实现：[src/dsec_image/pack_diff.py](../src/dsec_image/pack_diff.py)
+- 回归/验收入口：[tests/unit/test_pack_diff.py](../tests/unit/test_pack_diff.py)
 - 决策：[docs/architecture/AGENT_ENVIRONMENT_CONTRACT.md](../docs/architecture/AGENT_ENVIRONMENT_CONTRACT.md)
 
 ### CAP-RESOURCES
@@ -889,3 +905,12 @@ OSWorld FullVM acceptance runner and Docker cleanup；运行日期：2026-11-11�
 - 覆盖：Five hits each read the shared source and destination once. Two live VMs survived two Edge restarts. Both environments rejected replaced bytes. Private inputs and copies retired.
 - 限制：Single host with a warm shared layer on object hits. New objects still read three times. No cross-process receipt or remote performance claim.
 - 记录：[2026-11-24 TASK-023 本地发布校验复用](../docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md)
+
+### EV-PACK-DIFF-FILES-1124
+
+原生 ext4 父环境的文件级增量发布与独立恢复；运行日期：2026-11-24；层级：`linux`；结论：`passed`。
+
+- 版本身份：Wheel 3c749c46, Firecracker 1.17, public HTTPS SDK and four sequential MicroVM identities.
+- 覆盖：Pinned add-only capture, incompatible parent rejection, executable child, clean original and independent sibling, STOPPED and reclaimed.
+- 限制：One host and etcd member, co-located controller and NodeGateway. Direct ext4 /opt, small approved files. No arbitrary block diff or deletion.
+- 记录：[2026-11-24 TASK-024 构建依赖的文件级增量发布](../docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md)

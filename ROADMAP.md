@@ -194,7 +194,7 @@ path does not establish the same result for every storage or runtime backend.
 | microVM pause, terminate and snapshot resume | Validated | Small-scale real recovery, not exhaustive failure or scale validation. |
 | Container pause and memory offload | Missing from the public SDK | Container pause/resume, reclaim and prefetch require a supported implementation. |
 | Agent execution independent of GPU preemption | Partial | Worker persists sandbox/actions; the Miles-side agent loop and training trajectory still depend on the trainer session. |
-| `pack_diff` disk checkpoint to a new environment | Partial foundations | Disk COW and prepared-state forks do not provide the complete build, sanitize, publish and restore workflow. |
+| `pack_diff` disk checkpoint to a new environment | Partial | TASK-024 accepts a pinned file-level delta from an isolated builder on a direct ext4 root. New child VMs restore approved additions under /opt. Block-level export, replacement and deletion remain open. |
 | Scheduling and resource accounting | Local runtime validated; HA control development preview | Resource budgets, queue reasons and leases exist. IAM/placement/watcher have bounded acceptance; independent-host availability, scale and production failure behavior are not established. |
 | Production security and platform scale | Partial local isolation | Opt-in QEMU AppArmor/cgroup and netns/TC eBPF passed bounded installed-wheel Linux execution, public egress and denied host/metadata/private access, adoption and retirement. Broader tenant/adversarial coverage, configured-proxy acceptance, flood/scale and production distributed operations remain unfinished. |
 
