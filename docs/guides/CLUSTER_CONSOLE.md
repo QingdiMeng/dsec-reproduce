@@ -1,5 +1,7 @@
 # Cluster management console (development preview)
 
+**English** · [简体中文](CLUSTER_CONSOLE.zh-CN.md)
+
 The optional console uses the existing stateless cluster API and IAM. It does
 not connect directly to etcd, SSH or the Edge socket, manage models, or create a
 second sandbox registry. Grafana remains the resource monitoring interface.

@@ -1,5 +1,7 @@
 # MBPP + verl first-use acceptance
 
+**English** · [简体中文](MBPP_VERL_FIRST_USE.zh-CN.md)
+
 This report follows the published installation path for a new application user.
 It records verified execution, native GPU updates and first-use issues. Selected settings:
 Qwen3.5-2B, Non-Thinking, GRPO, eight responses per prompt, 4096 response tokens,

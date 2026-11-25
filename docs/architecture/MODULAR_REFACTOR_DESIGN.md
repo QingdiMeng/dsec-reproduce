@@ -1,5 +1,7 @@
 # DSec 模块化重构设计
 
+[English](MODULAR_REFACTOR_DESIGN.en.md) · **简体中文**
+
 状态：设计已确认，R0/R1 已实施；R2 本地职责收敛及 R3 计划内实机升级、存储、恢复、共享准入和短应用/GRPO 验收已完成。日期：2026-10-08。
 代码基线：`7f70524187e61e13f123c7999098858cf3411bd5`。
 
@@ -447,7 +449,7 @@ tests/             unit/  contracts/  integration/  acceptance/  packaging/
 
 ## 4. 底层机制的约束
 
-以下是本项目的实现约束；当前状态依据代码和[路线图](../../ROADMAP.md)，不是目标能力清单的完成声明。
+以下是本项目的实现约束；当前状态依据代码和[路线图](../../ROADMAP.zh-CN.md)，不是目标能力清单的完成声明。
 
 | 领域 | 目标实现与约束 | 当前需要处理的差距 |
 | --- | --- | --- |
@@ -536,7 +538,7 @@ TaskAdapter 负责 instruction、准备要求、动作解释和 verifier；Worke
 记录；TrainerAdapter 负责模型模板、采样、原生 token/logprob 与训练样本转换。GRPO 分组身份
 由训练框架保留，未知或失败 slot 不通过压缩数组替换成其他任务的样本。
 
-现有 reset/step/evaluate/stop 入口和[反馈协议](AGENT_ENVIRONMENT_CONTRACT.md)继续有效。
+现有 reset/step/evaluate/stop 入口和[反馈协议](AGENT_ENVIRONMENT_CONTRACT.zh-CN.md)继续有效。
 MBPP 的评分回执与 TB2 的 worker 评分路径逐步接到同一证据接口，但保留原奖励语义。
 任务未通过、预算耗尽、评分器故障、动作 UNKNOWN 分开记录；infra error 不伪装成模型零分。
 
@@ -638,7 +640,7 @@ worker 持有评分身份、参数、结果提交与 UNKNOWN 状态；插件只�
 
 评分取消或结果无效不会成为零分；新完成记录核对评分器身份和参数后返回缓存结果，
 旧 TB2 完成记录仍能读取且不重跑 verifier。命令转换后的实际提交值随动作保存，
-防止重启后按新配置重新解释旧动作。[评分契约](AGENT_ENVIRONMENT_CONTRACT.md#worker-评分插件)
+防止重启后按新配置重新解释旧动作。[评分契约](AGENT_ENVIRONMENT_CONTRACT.zh-CN.md#worker-评分插件)
 描述边界，[故障回归](../../tests/unit/test_worker_evaluators.py)覆盖中断、错误证据、
 结果与参数变更，以及禁止 RPC 动态加载代码。
 
@@ -665,7 +667,7 @@ libdsec 风格参数提取至 `contracts.sandbox`；正式客户端成为 `sdk.c
 结果提交失败和后端执行失败统一报告 UNKNOWN；原记录只能凭状态证明完成，不能重做副作用。
 SDK 对稳定 ID 请求取消隐式换号重试，以免 worker journal 与实际请求脱节。
 新客户端要求服务公布 `container-rpc-v1`，不向旧服务静默退回宿主 Docker。
-配置归属与升级边界见[安装配置](../guides/DSEC_HOST_CONFIGURATION.md#container-runtime-ownership)，
+配置归属与升级边界见[安装配置](../guides/DSEC_HOST_CONFIGURATION.zh-CN.md#container-runtime-ownership)，
 [本地 RPC 故障回归](../../tests/unit/test_container_edge.py)不启动真实 Docker。
 
 本节点完整本地回归 236 项：229 通过、7 项因 Linux 条件跳过。
@@ -732,7 +734,7 @@ registry 的已绑定租约也保守保留。Docker 查询失败不等于容器�
 
 既有 request/journal 摘要、字段与变更操作集合保留，物理资源 hint 使用额外 envelope；
 旧准入 socket 与新 Edge 预算禁止同时启用。升级保留原实例目录及 journal。
-[主机配置指南](../guides/DSEC_HOST_CONFIGURATION.md)说明作用域、参数与迁移顺序。
+[主机配置指南](../guides/DSEC_HOST_CONFIGURATION.zh-CN.md)说明作用域、参数与迁移顺序。
 
 本节点完整本地回归 260 项：253 通过、7 项因环境条件跳过，无失败或错误。
 核心 wheel 在源码目录外的独立 venv 通过 53 项节点/容器/调度恢复检查，

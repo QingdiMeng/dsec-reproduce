@@ -30,7 +30,7 @@ DOCS = (
 REGRESSION_DIRS = ('tests/unit', 'tests/contracts', 'tests/adapters', 'tests/packaging')
 
 TOOLS = (
-    'project/registry.json', 'tools/check_project.py',
+    'project/registry.json', 'project/status-translations.json', 'docs/languages.json', 'tools/check_project.py',
     '.github/ISSUE_TEMPLATE/work.md', '.github/pull_request_template.md',
     'deploy/cluster/prepare.py', 'deploy/cluster/planning.py', 'deploy/cluster/configuration.py', 'deploy/cluster/initialize.py',
     'deploy/cluster/pki.py','deploy/cluster/enroll_node.py',
@@ -137,6 +137,14 @@ def source_files(root):
     for directory in ('src/dsec_openhands','tests'):
         files.update(str(p.relative_to(root)) for p in (integration/directory).glob('*.py')
                      if p.stem.isidentifier())
+    published_docs = {name for name in files if name.endswith('.md')}
+    languages = json.loads((root / 'docs/languages.json').read_text())
+    registered = {name for names in languages.values() for name in names}
+    if registered != published_docs:
+        raise ValueError(f'Documentation catalog and release differ: {sorted(registered ^ published_docs)}')
+    for primary, names in languages.items():
+        suffix = '.zh-CN.md' if primary == 'en' else '.en.md'
+        files.update(str(Path(name).with_suffix(suffix)) for name in names)
     return config, sorted(files)
 
 

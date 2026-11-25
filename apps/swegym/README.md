@@ -1,5 +1,7 @@
 # SWE-Gym through the DSec API
 
+**English** · [简体中文](README.zh-CN.md)
+
 The current OpenHands command uses SDK **v1.58.2**. In a separate Python 3.12+
 controller environment, install the core wheel and resolve both optional
 packages in one invocation:

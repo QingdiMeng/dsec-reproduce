@@ -1,7 +1,9 @@
 # Working in this repository
 
-Before proposing or continuing work, read `docs/PROJECT_STATUS.md` and the
-`Work management` section of `CONTRIBUTING.md`. Current state is maintained only
+**English** · [简体中文](AGENTS.zh-CN.md)
+
+Before proposing or continuing work, read [the project status](docs/PROJECT_STATUS.en.md) and the
+[Work management section](CONTRIBUTING.md#work-management). Current state is maintained only
 in `project/registry.json`; generate the status view with
 `python tools/check_project.py --write`.
 

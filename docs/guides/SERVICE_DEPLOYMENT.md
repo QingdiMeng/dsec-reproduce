@@ -1,10 +1,12 @@
 # 常驻服务与小规模并发验证
 
-> Historical record: references marked “historical source not included”
-> refer to experiment files outside this repository. They are not runnable
-> instructions for the current release. Use the [documentation index](../README.md) for supported entry points.
+[English](SERVICE_DEPLOYMENT.en.md) · **简体中文**
 
-当前部署与 Edge 节点准入配置见[主机配置指南](DSEC_HOST_CONFIGURATION.md)；本文保留旧实验的服务验证记录。
+> 历史记录：标为“historical source not included”的引用指向仓库以外的实验文件。
+> 这些文件不能直接用作当前版本的运行说明。
+> 当前支持的入口见[文档目录](../README.zh-CN.md)。
+
+当前部署与 Edge 节点准入配置见[主机配置指南](DSEC_HOST_CONFIGURATION.zh-CN.md)；本文保留旧实验的服务验证记录。
 
 2026-09-29，已在 `xiaoxiaohu@192.168.0.110` 部署并启用用户级 `dsec-sandboxd.service`。用户原本已启用 Linger；没有修改其他用户服务。
 

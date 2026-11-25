@@ -1,3 +1,5 @@
+**English** · [简体中文](pull_request_template.zh-CN.md)
+
 ## Problem and resulting behavior
 
 <!-- Lead with the concrete user-visible change. -->

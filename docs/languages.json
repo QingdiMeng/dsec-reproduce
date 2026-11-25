@@ -1,0 +1,40 @@
+{
+  "en": [
+    ".github/ISSUE_TEMPLATE/work.md",
+    ".github/pull_request_template.md",
+    "AGENTS.md",
+    "CONTRIBUTING.md",
+    "README.md",
+    "ROADMAP.md",
+    "THIRD_PARTY_NOTICES.md",
+    "apps/mbpp/README.md",
+    "apps/osworld/README.md",
+    "apps/swegym/README.md",
+    "apps/tb21/README.md",
+    "docs/README.md",
+    "docs/architecture/AGENT_ENVIRONMENT_CONTRACT.md",
+    "docs/architecture/CLUSTER_CONTROL_DESIGN.md",
+    "docs/architecture/EXECUTION_ISOLATION.md",
+    "docs/guides/CLUSTER_CONSOLE.md",
+    "docs/guides/CLUSTER_DEPLOYMENT.md",
+    "docs/guides/DSEC_HOST_CONFIGURATION.md",
+    "docs/guides/QUICKSTART.md",
+    "docs/guides/USE_CASES.md",
+    "docs/reports/MBPP_VERL_FIRST_USE.md",
+    "docs/reports/SWEGYM_FIRST_USE.md",
+    "integrations/openhands/README.md"
+  ],
+  "zh-CN": [
+    "deploy/cluster/demos/kind-ha/README.md",
+    "docs/PROJECT_STATUS.md",
+    "docs/architecture/DOCKER_DSEC_BENCHMARK_PROTOCOL.md",
+    "docs/architecture/MODULAR_REFACTOR_DESIGN.md",
+    "docs/architecture/SANDBOX_DAEMON.md",
+    "docs/guides/ARTIFACT_PUBLICATION.md",
+    "docs/guides/RL_FRAMEWORK_ADAPTERS.md",
+    "docs/guides/SERVICE_DEPLOYMENT.md",
+    "docs/reports/DSEC_V01_GRPO_ACCEPTANCE.md",
+    "docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md",
+    "docs/reports/DSEC_VERITY_PILOT_REPORT.md"
+  ]
+}

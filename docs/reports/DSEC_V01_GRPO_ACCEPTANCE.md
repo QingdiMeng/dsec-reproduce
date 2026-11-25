@@ -1,5 +1,7 @@
 # 最新安装候选的短 GRPO 与分叉验收
 
+[English](DSEC_V01_GRPO_ACCEPTANCE.en.md) · **简体中文**
+
 2026-10-06，source-release-r5 的端到端回归通过。该运行使用冻结核心
 wheel `11b2df99f8e305c332da1dd8d2b7adce6a3a25a1d2866adea6875c296e7eef5b`，
 55 个安装文件全部匹配。独立 daemon/worker 和训练容器客户端从这一

@@ -954,7 +954,8 @@
         }
       ],
       "evidence": [
-        "EV-PROJECT-MANAGEMENT"
+        "EV-PROJECT-MANAGEMENT",
+        "EV-DOCS-BILINGUAL-1125"
       ],
       "roadmap": [
         "RM-001",
@@ -1734,6 +1735,28 @@
           "path": "deploy/cluster/demos/kind-ha/h4-20261125.json"
         }
       ]
+    },
+    {
+      "id": "EV-DOCS-BILINGUAL-1125",
+      "date": "2026-11-25",
+      "date_kind": "run",
+      "kind": "local",
+      "verdict": "passed",
+      "records": [
+        {
+          "path": "docs/languages.json"
+        },
+        {
+          "path": "tools/check_docs.py"
+        },
+        {
+          "path": "tests/packaging/test_release_source.py"
+        }
+      ],
+      "title": "Bilingual documentation and source archive checks",
+      "identity": "Local documentation working tree based on 89dcf60, with 34 registered document pairs.",
+      "scope": "Checked both editions, same-language navigation, local section links and code examples. Generated both status views from one register and verified them in the reproducible source archive.",
+      "limits": "Offline documentation checks. Historical sandbox runs and training scores keep their original scope. GitHub rendering and live execution were outside this check."
     }
   ],
   "work": [
@@ -2640,6 +2663,33 @@
       ],
       "evidence": [
         "EV-KIND-H4-LINUX-1125"
+      ],
+      "reopens": []
+    },
+    {
+      "id": "TASK-030",
+      "title": "Publish complete English and Simplified Chinese documentation",
+      "kind": "maintenance",
+      "state": "done",
+      "owner": "maintainer",
+      "capabilities": [
+        "CAP-PROJECT"
+      ],
+      "delta": "Readers can follow the same workload and deployment in either language.",
+      "trigger": "Public documentation currently switches languages between pages and within individual guides.",
+      "reuse": "Keep existing public paths, examples, evidence and the generated project register.",
+      "prior_evidence": [
+        "EV-PROJECT-MANAGEMENT"
+      ],
+      "acceptance": [
+        "Provide a counterpart and reciprocal navigation for each project document.",
+        "Verify code examples, evidence references, localized links and exported documentation."
+      ],
+      "resources": "Local checkout and source archive.",
+      "stop_condition": "Both editions pass document, register and release archive checks.",
+      "depends_on": [],
+      "evidence": [
+        "EV-DOCS-BILINGUAL-1125"
       ],
       "reopens": []
     }

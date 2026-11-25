@@ -1,5 +1,7 @@
 # API access and Linux Node setup
 
+**English** · [简体中文](QUICKSTART.zh-CN.md)
+
 The supported release scope is a trusted runtime user on Linux x86_64 with
 systemd user services, cgroup v2 and accessible KVM. The control plane is
 installed independently of benchmark datasets, model servers and optional
@@ -66,7 +68,7 @@ preserves existing behavior. Upgrade all API replicas before using this feature.
 
 The selected environment must have an operator-published, artifact-bound
 execution claim; a Node-wide protocol flag alone is insufficient. The default
-legacy smoke environment has no such claim. See [publishing execution claims](ARTIFACT_PUBLICATION.md).
+legacy smoke environment has no such claim. See [publishing execution claims](ARTIFACT_PUBLICATION.en.md).
 The resolved deployment revision is retained in IAM and checked again at Edge;
 it is included in the creation proof, not passed to the VMM.
 Claims do not prove tool dependencies, storage/network policy or snapshot
@@ -228,7 +230,7 @@ and the kernel checks pages as they are read. Receipt and artifact paths,
 including ancestors, must be root-owned and not writable by other users.
 The original full-hash mode remains available. Selecting fs-verity explicitly
 fails if a receipt or kernel protection is missing; it never silently skips
-verification. See [artifact publication](ARTIFACT_PUBLICATION.md) for the
+verification. See [artifact publication](ARTIFACT_PUBLICATION.en.md) for the
 configuration and current validation boundary.
 The installed r5 candidate passed real write rejection, unsealed-copy rejection,
 corrupt-page read rejection and 15 fixed-trajectory task scores. This integration
@@ -241,6 +243,6 @@ restart/reuse and resource-boundary evidence. A new smoke guest can be built
 from source and checked independently of those TB images. The experiment
 machine's existing KVM, VMM/kernel and optional storage deployments have been
 reused; this is not a claim that every optional dependency was installed from
-zero on a second physical host. See the [acceptance record](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md).
+zero on a second physical host. See the [acceptance record](../reports/DSEC_V01_INSTALL_ACCEPTANCE.en.md).
 The latest installed candidate's grouped training and prepared-state isolation
-are recorded separately in [r5 GRPO acceptance](../reports/DSEC_V01_GRPO_ACCEPTANCE.md).
+are recorded separately in [r5 GRPO acceptance](../reports/DSEC_V01_GRPO_ACCEPTANCE.en.md).

@@ -1,5 +1,7 @@
 # DSec Reproduce
 
+**English** · [简体中文](README.zh-CN.md)
+
 **A sandbox runtime for teams building tool-using agents and training them with reinforcement learning.**
 
 When a coding agent says “run the tests,” something has to give it a machine, execute its command, and return the output. DSec does that part. It keeps the workspace alive for the next tool call, lets the caller look up an operation after a lost reply, and releases the sandbox when the episode ends. Your agent chooses the actions, your task defines the reward, and your trainer updates the model.
@@ -22,7 +24,7 @@ flowchart LR
     class S sandbox
 ```
 
-An independent implementation inspired by the DSec paper. **v0.1 is a development preview** for trusted users on Linux KVM hosts. [Paper](https://arxiv.org/abs/2609.22978) · [Validated capabilities](docs/PROJECT_STATUS.md) · [Roadmap](ROADMAP.md)
+An independent implementation inspired by the DSec paper. **v0.1 is a development preview** for trusted users on Linux KVM hosts. [Paper](https://arxiv.org/abs/2609.22978) · [Validated capabilities](docs/PROJECT_STATUS.en.md) · [Roadmap](ROADMAP.md)
 
 ## Run your first episode
 
@@ -87,12 +89,12 @@ Look for `Ran 1 test` and `OK`. The test drops the reply to a create request. A 
 | Let a desktop agent see the screen and send keyboard or mouse input | [OSWorld on an Ubuntu FullVM](apps/osworld/README.md) |
 | Bring your own task, tools and verifier | [Task contract](docs/architecture/AGENT_ENVIRONMENT_CONTRACT.md) |
 
-Workloads install separately from the core. Operators choose among short function calls (FnCall), containers inside QEMU, Firecracker MicroVMs with snapshot and fork support, and QEMU FullVMs for desktops. [Execution modes](docs/architecture/EXECUTION_ISOLATION.md) · [Versioned environments and storage](docs/guides/ARTIFACT_PUBLICATION.md)
+Workloads install separately from the core. Operators choose among short function calls (FnCall), containers inside QEMU, Firecracker MicroVMs with snapshot and fork support, and QEMU FullVMs for desktops. [Execution modes](docs/architecture/EXECUTION_ISOLATION.md) · [Versioned environments and storage](docs/guides/ARTIFACT_PUBLICATION.en.md)
 
 ## Deployment and evidence
 
 - **Operating a cluster?** Deploy API replicas and Linux Nodes, then inspect sandboxes and requests through the console. [Cluster guide](docs/guides/CLUSTER_DEPLOYMENT.md) · [Management console](docs/guides/CLUSTER_CONSOLE.md)
-- **Evaluating recovery?** The kind demo stops two of three worker domains and checks that the original VM and its data survive. These domains share one physical host. [Demo and measured recovery times](deploy/cluster/demos/kind-ha/README.md)
-- **Evaluating RL or runtime cost?** The MBPP case records 187 GRPO updates and evaluates 500 held-out tasks before and after training. Runtime comparisons have their own protocol and measurements. [Training results](docs/reports/MBPP_VERL_FIRST_USE.md) · [Docker comparison](docs/reports/DSEC_VERITY_PILOT_REPORT.md)
+- **Evaluating recovery?** The kind demo stops two of three worker domains and checks that the original VM and its data survive. These domains share one physical host. [Demo and measured recovery times](deploy/cluster/demos/kind-ha/README.en.md)
+- **Evaluating RL or runtime cost?** The MBPP case records 187 GRPO updates and evaluates 500 held-out tasks before and after training. Runtime comparisons have their own protocol and measurements. [Training results](docs/reports/MBPP_VERL_FIRST_USE.md) · [Docker comparison](docs/reports/DSEC_VERITY_PILOT_REPORT.en.md)
 
 [Documentation](docs/README.md) · [Contributing](CONTRIBUTING.md) · [Development release](https://github.com/QingdiMeng/dsec-reproduce/releases/tag/v0.1.0-dev.0) · [MIT license](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md)

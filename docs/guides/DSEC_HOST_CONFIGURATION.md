@@ -1,5 +1,7 @@
 # Installed single-host configuration
 
+**English** · [简体中文](DSEC_HOST_CONFIGURATION.zh-CN.md)
+
 `dsec-host` is the wheel's configuration and acceptance entry point. The core
 installs independently; task plugins are optional and installed when used. Images,
 task definitions, kernel, Firecracker and storage services remain explicit artifacts.
@@ -85,7 +87,7 @@ release owned sandboxes through the SDK before removing their instance.
 R3 real-host acceptance preserved one old-client-created container through new
 Edge adoption and preserved another through service restart, including action
 deduplication, private writes and final lease release. See the
-[installation acceptance](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md).
+[installation acceptance](../reports/DSEC_V01_INSTALL_ACCEPTANCE.en.md).
 The host
 container backend retains its trusted single-host development/comparison scope;
 this change does not implement container containment inside a VM, container
@@ -388,7 +390,7 @@ Linux acceptance, including vsock, idle-session snapshots, layered containers
 and restart/crash recovery. Deployment remains an explicit opt-in for newly
 prepared artifacts. See the [native SDK contract](../architecture/AGENT_ENVIRONMENT_CONTRACT.md)
 for timeout, cancellation, binary files and reconnect semantics, and the
-[installation report](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md) for the tested scope.
+[installation report](../reports/DSEC_V01_INSTALL_ACCEPTANCE.en.md) for the tested scope.
 
 Upgrade guest artifacts explicitly; changing the Python wheel cannot add a
 native listener to an already running old guest. Build a new microVM template
@@ -630,7 +632,7 @@ not prove tenant security, cold-start performance, image sharing or whole-host H
 
 This opt-in path passed bounded networkless Linux AppArmor/VMM acceptance;
 broader production security and networking gates remain open. See the
-[acceptance report](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md).
+[acceptance report](../reports/DSEC_V01_INSTALL_ACCEPTANCE.en.md).
 Add this top-level field to the schema-2 QEMU catalog,
 using the actual runtime UID, instance name and service cgroup path:
 
@@ -782,7 +784,7 @@ profile, cgroup, CID, private writable disk and physical/IAM lease was retired;
 the original host Docker/Grafana containers were unchanged. This used the fixed
 DNS `192.168.0.1` and no proxy; it does not validate another Node's prerequisites,
 configured proxy egress, adversarial multi-tenant use or connection floods. See
-the [acceptance evidence](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md).
+the [acceptance evidence](../reports/DSEC_V01_INSTALL_ACCEPTANCE.en.md).
 
 
 ### QEMU shared EROFS through virtio-pmem/DAX
@@ -791,7 +793,7 @@ This opt-in environment capability is distinct from `disk_cache`. Private ext4
 I/O may use `direct` while immutable shared data uses pmem/DAX. No SDK changes
 or model dependencies are required. Bounded installed-wheel Linux acceptance
 passed for two Container VMs and a sequential FnCall slot on 2026-10-26; see the
-[acceptance report](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md). This does not
+[acceptance report](../reports/DSEC_V01_INSTALL_ACCEPTANCE.en.md). This does not
 establish whole-VM savings or production-scale capacity. A separate bounded
 [SWE-Gym mypy migration](../reports/SWEGYM_FIRST_USE.md#real-task-erofspmemdax-migration-2026-10-26)
 passed real-file DAX checks and official baseline/oracle scoring.

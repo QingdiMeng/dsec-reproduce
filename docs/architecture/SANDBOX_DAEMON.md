@@ -1,6 +1,8 @@
 # 独立守护进程与重启恢复
 
-后续更新：常驻 systemd 服务和有界并发已部署，见 `SERVICE_DEPLOYMENT.md`。下文记录此前串行服务阶段；当前使用 service-code 稳定路径，原测试路径仍保留作证据。
+[English](SANDBOX_DAEMON.en.md) · **简体中文**
+
+后续更新：常驻 systemd 服务和有界并发已部署，见 [服务部署指南](../guides/SERVICE_DEPLOYMENT.md)。下文记录此前串行服务阶段；当前使用 service-code 稳定路径，原测试路径仍保留作证据。
 
 2026-09-29 完成：`sandboxd.py`、`sandbox_client.py`、`durable_manager.py`。服务级 19 项真实 microVM 测试通过，既有 SDK 20 项回归测试通过。
 

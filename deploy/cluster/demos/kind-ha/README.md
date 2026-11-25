@@ -1,5 +1,7 @@
 # DSec 控制面 HA · kind 演示设计
 
+[English](README.en.md) · **简体中文**
+
 目标是在**一个 Linux 宿主**上重现一个逻辑节点的整体失联。用户在真实 MicroVM 上执行一次操作，失去最初的 API 回复后，经存活 API 查回同一个结果。验收关注 DSec 的请求身份、可写实例数、配额和恢复时间。这里的 Kubernetes 集群提供实验拓扑，宿主上的 DSec Edge 运行工作负载。
 
 TASK-027 提供配置与测试设计，TASK-028 完成单宿主 H0–H3 实机复核。TASK-029 完成 H4 的 inotify 定位与两种 leader 位置的恢复复测。TASK-004 的三物理故障域验收仍开放。
@@ -8,9 +10,9 @@ TASK-027 提供配置与测试设计，TASK-028 完成单宿主 H0–H3 实机�
 
 | kind 节点 | 工作负载 | 宿主 SDK 入口 | 宿主 Node 的 etcd 入口 |
 | --- | --- | --- | --- |
-| control-plane | Kubernetes 自身控制面和自己的 etcd | — | — |
-| worker a | api-a、etcd1、专用 PVC | 127.0.0.1:25443 | 127.0.0.1:25379 |
-| worker b | api-b、etcd2、专用 PVC | 127.0.0.1:25444 | 127.0.0.1:25380 |
+| 控制平面 | Kubernetes 自身控制面和自己的 etcd | — | — |
+| 工人 | api-a、etcd1、专用 PVC | 127.0.0.1:25443 | 127.0.0.1:25379 |
+| 工人b | api-b、etcd2、专用 PVC | 127.0.0.1:25444 | 127.0.0.1:25380 |
 | worker c | api-c、etcd3、专用 PVC | 127.0.0.1:25445 | 127.0.0.1:25381 |
 
 每个工作负载用 `dsec.demo/domain` 精确选择 worker。API 和 etcd 各有一个 `externalTrafficPolicy: Local` 的 NodePort，kind 给每个 worker 建立单独的回环端口映射。这样可明确指定最初受理请求的副本、故障副本和接续副本。三个 etcd 成员用固定的专属 headless Service 发现彼此；独立 PVC 跟随原 worker 恢复。实验停止和重新启动**同一个** worker 容器，保留其节点身份及本地卷。四个 kind 节点共享宿主内核和电源。
@@ -29,7 +31,7 @@ python3 "$DEMO/render.py" initialize --image "$API_IMAGE" > "$OUT/initialize-job
 python3 "$DEMO/render.py" api --image "$API_IMAGE" > "$OUT/apis.json"
 ```
 
-角色资产来自[部署准备工具](../../prepare.py)的一份新建、单 Node 的 demo 输出。使用独立的项目、IAM 前缀、CA、端口及 Node 根目录。宿主 etcd 地址用 `--host-address 127.0.0.1 --port-base 25379`；`--node-address` 选 **Pod 可达的宿主地址**，和 Node 服务证书 SAN 一致。生成的控制面 Pod 内部继续使用 `etcd1`、`etcd2`、`etcd3` 短名称。该生成器的客户端默认 API 端口属于 Compose 布局，demo 客户端应改用上表三个回环地址。完整的 Node 启动和准入流程见[集群部署指南](../../../../docs/guides/CLUSTER_DEPLOYMENT.md)。
+角色资产来自[部署准备工具](../../prepare.py)的一份新建、单 Node 的 demo 输出。使用独立的项目、IAM 前缀、CA、端口及 Node 根目录。宿主 etcd 地址用 `--host-address 127.0.0.1 --port-base 25379`；`--node-address` 选 **Pod 可达的宿主地址**，和 Node 服务证书 SAN 一致。生成的控制面 Pod 内部继续使用 `etcd1`、`etcd2`、`etcd3` 短名称。该生成器的客户端默认 API 端口属于 Compose 布局，demo 客户端应改用上表三个回环地址。完整的 Node 启动和准入流程见[集群部署指南](../../../../docs/guides/CLUSTER_DEPLOYMENT.zh-CN.md)。
 
 | demo 输入 | 来源与处理 |
 | --- | --- |

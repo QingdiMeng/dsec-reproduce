@@ -1,5 +1,7 @@
 # Native execution and production isolation
 
+**English** · [简体中文](EXECUTION_ISOLATION.zh-CN.md)
+
 Updated: 2026-10-25. Execution is a Linux development preview. Production
 containment is a separate, unfinished gate; splitting the agent does not
 establish a security boundary or a complete reproduction of aether/chronus.
@@ -345,7 +347,7 @@ creation rule, installed-wheel Linux acceptance passed all seven public
 FnCall/Container/MicroVM checks and 24 orchestration checks, including actual
 kernel confinement, denied host-file reads, authenticated channels, Edge
 adoption and complete resource retirement. See the
-[acceptance report](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md).
+[acceptance report](../reports/DSEC_V01_INSTALL_ACCEPTANCE.en.md).
 This validates the bounded networkless host path; it does not close broader
 tenant/adversarial, networking or flood-resilience production gates.
 

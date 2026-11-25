@@ -1,5 +1,7 @@
 # SWE-Gym first-use record
 
+**English** · [简体中文](SWEGYM_FIRST_USE.zh-CN.md)
+
 Date: 2026-10-25. Execution baseline: local commit `d1b4a40`.
 
 The immediate gate is one real repository task through the public HTTPS API,

@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 from tools.package_release_source import package, source_files, SECRET
-from tools.check_docs import check
+from tools.check_docs import check, editions
 from tools.check_project import load as load_project, render as render_project, validate as validate_project
 
 
@@ -122,17 +122,32 @@ class SourceReleaseTests(unittest.TestCase):
                 self.assertEqual(check(exported), [])
                 project = load_project(exported)
                 self.assertEqual(validate_project(exported, project), [])
-                self.assertEqual((exported/'docs/PROJECT_STATUS.md').read_text(), render_project(project))
-                # A fresh source user gets the same management gate as CI.
-                view = exported/'docs/PROJECT_STATUS.md'
-                view.write_text('stale manual status\n')
+                # Each edition must regenerate from the archive's own register and catalogs.
                 command = [sys.executable, str(exported/'tools/check_project.py')]
-                stale = subprocess.run(command, capture_output=True, text=True)
-                self.assertNotEqual(stale.returncode, 0)
-                self.assertIn('is stale', stale.stderr)
-                regenerated = subprocess.run(command+['--write'], capture_output=True, text=True)
-                self.assertEqual(regenerated.returncode, 0, regenerated.stderr)
-                self.assertEqual(view.read_text(), render_project(project))
+                for lang, name in editions(exported)[Path('docs/PROJECT_STATUS.md')].items():
+                    with self.subTest(language=lang):
+                        expected = render_project(project, lang, exported)
+                        view = exported / name
+                        self.assertEqual(view.read_text(), expected)
+                        view.write_text('stale manual status\n')
+                        stale = subprocess.run(command, capture_output=True, text=True)
+                        self.assertNotEqual(stale.returncode, 0)
+                        self.assertIn(f'{view.name} is stale', stale.stderr)
+                        regenerated = subprocess.run(command+['--write'], capture_output=True, text=True)
+                        self.assertEqual(regenerated.returncode, 0, regenerated.stderr)
+                        self.assertEqual(view.read_text(), expected)
+
+                chinese = exported/'docs/README.zh-CN.md'
+                page = chinese.read_text()
+                chinese.write_text(page+'\n[错链](guides/QUICKSTART.md) [缺少章节](#no-section)\n')
+                self.assertEqual(check(exported), [
+                    'docs/README.zh-CN.md: cross-language link guides/QUICKSTART.md',
+                    'docs/README.zh-CN.md: missing section #no-section',
+                ])
+                chinese.write_text(page+'\n```sh\nprintf example\n```\n')
+                self.assertEqual(check(exported), ['docs/README.md and docs/README.zh-CN.md: code examples differ'])
+                chinese.unlink()
+                self.assertIn('Missing zh-CN documentation: docs/README.zh-CN.md', check(exported))
             with self.assertRaises(FileExistsError):
                 package(root, a)
 

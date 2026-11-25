@@ -1,152 +1,93 @@
-# Agent 环境接口
+<a id="agent-环境接口"></a>
 
-## 通用性设计方法（2026-10-30）
+# Agent environment interface
 
-目标是 **DSec 沙盒系统的通用性**。TB2.1、MBPP、SWE-Gym、OpenHands、
-mini-swe-agent 和 MiMo 是需求来源及验证案例，不是核心模块的组织方式。
-本节不新增统一 agent 框架，也不要求外部应用采用下文的 rollout 接口。
+**English** · [简体中文](AGENT_ENVIRONMENT_CONTRACT.zh-CN.md)
 
-每次从应用中发现问题，按以下顺序处理：
+<a id="通用性设计方法2026-10-30"></a>
 
-1. 用执行事实描述需求，例如“同一实例的文件保留，但每条命令使用新 shell”，
-   不用某个 benchmark、agent 或 trainer 的名字描述系统能力。
-2. 明确需求属于执行、状态、制品、资源、网络、恢复还是部署，找出现有状态所有者。
-3. 区分应用规则和系统保证。应用决定 prompt、步数、上下文、评分与训练样本接收；
-   DSec 保证受理、隔离、执行结果、状态身份和回收事实。
-4. 优先补现有协议和模块；只有无法表达的系统语义才增加版本化能力。
-5. 写出与模型、agent 无关的验收，再用多个应用检查是否可复用。
-   接口测试、真实 Linux 执行、完整应用运行和性能结论分别记录。
+## Designing for generality (2026-10-30)
 
-### 关键决策
+The goal is **a general-purpose DSec sandbox system**. TB2.1, MBPP, SWE-Gym, OpenHands, mini-swe-agent and MiMo supply requirements and test cases. They do not define the structure of the core. This design neither introduces a universal agent framework nor requires external applications to use the rollout interface below.
 
-| 决策 | 系统约束 | 实践中的来源 |
+When an application exposes a problem, proceed in this order.
+
+1. Describe the required execution behavior independently of a benchmark, agent or trainer. For example, files persist in the same instance while each command starts a fresh shell.
+2. Identify the category (execution, state, artifacts, resources, networking, recovery or deployment) and the existing owner of the state.
+3. Distinguish application policy from system guarantees. The application determines prompts, steps, context, scoring and training sample admission. DSec establishes admission, isolation, execution results, state identity and resource release.
+4. Extend existing protocols and modules first. Introduce a versioned capability only for system semantics they cannot already express.
+5. Write acceptance criteria independent of any model or agent, then exercise more than one application to check reuse. Report interface tests, real Linux execution, complete application runs and performance findings separately.
+
+<a id="关键决策"></a>
+
+### Design decisions
+
+| Decision | System constraint | Source in practice |
 | --- | --- | --- |
-| GEN-001：调用方拥有交互循环 | 直接使用公开 SDK 即可；`AgentEnvironment` 是可选组合，不是所有应用的必经入口。核心不解析 bash 代码块、不管理 Thinking/摘要，也不生成训练 token/logprob | TB2.1 的反馈与 TITO、OpenHands 的上下文与工具协议 |
-| GEN-002：按能力匹配，不按应用分支匹配 | 创建时声明版本化执行能力，与环境 ID、执行模式和资源需求共同约束放置；API 支持该协议不等于每个 Node 都支持 | 多后端工具、文件和流式 SDK 的可移植性 |
-| GEN-003：状态语义不能被统一接口抹平 | 文件持久与 shell 状态持久是两件事；FnCall 每次独立调用，Container 保留工作区，MicroVM 有自己的恢复边界。后端不支持时明确拒绝，不能换执行模式或回落宿主机 | 多步代码修复、MBPP 独立评测、跨 episode 分叉 |
-| GEN-004：恢复按状态所有权分层 | Edge 负责实例与执行证明，控制面负责准入与原节点路由，应用负责自身状态；沙盒恢复不能证明外部 agent、模型轨迹或训练 checkpoint 同步恢复 | 断连对账、原生工具 epoch、SAO 训练 |
-| GEN-005：预算与结果保留原始含义 | 排队、创建、命令、调用方等待、应用总预算及评分预算分别处理；连接超时不合成命令超时。核心返回执行与截断证据，应用决定其评分含义 | TB2.1 verifier、长轨迹与缺失反馈 |
-| GEN-006：环境是可复用制品，写状态属于实例 | 核心接受发布的环境身份，保留 EROFS/OverlayBD/ublk、适用的 pmem/DAX 和本地/3FS 存储路径；不可变层共享，私有写入隔离。任务映射和依赖准备属于可选应用或发布流程 | 多任务镜像、安装依赖与重复 rollout |
-| GEN-007：完成必须有证据 | 命令完成、任务得分有效、实例停止和资源退还分别证明；UNKNOWN 保留原身份并禁止副作用重放，不能折算成训练零分或自动释放资源 | 失败轨迹、官方 verifier、停机与租约回收 |
+| GEN-001: The caller owns the interaction loop | Use the public SDK directly or opt into `AgentEnvironment`. The core neither parses bash code blocks nor manages thinking, summaries, training tokens or logprobs. | TB2.1 feedback and TITO, OpenHands context and tool protocols |
+| GEN-002: Match capabilities, not application names | Declare versioned execution capabilities on creation. They constrain placement alongside environment ID, execution mode and resource demand. API support does not imply support on every Node. | Portability of tools, files and streaming SDK operations across backends |
+| GEN-003: Preserve state semantics across interfaces | File persistence and shell persistence are distinct. FnCall invocations are independent, Container retains a workspace and MicroVM has its own recovery boundary. Reject unsupported semantics explicitly without switching mode or falling back to the host. | Multi-step code repair, independent MBPP evaluation and cross-episode forks |
+| GEN-004: Recover state at its owner | Edge proves instance state and execution. The control plane handles admission and routing to the original node. The application recovers its own state. Sandbox recovery does not establish recovery of the external agent, model trajectory or trainer checkpoint. | Reconciliation after disconnects, native tool epochs and SAO training |
+| GEN-005: Preserve budget and result semantics | Treat queue, creation, command, caller wait, total application and scoring budgets separately. A connection timeout cannot become a command timeout. The core reports execution and truncation evidence. The application interprets its scoring implications. | TB2.1 verifier, long trajectories and incomplete feedback |
+| GEN-006: Environments are reusable artifacts and mutable state belongs to an instance | The core accepts published environment identities. EROFS/OverlayBD/ublk, applicable pmem/DAX and local/3FS storage paths are preserved. Immutable layers are shared and private writes isolated. Task mapping and dependency preparation belong to optional applications or publication. | Multi-task images, dependency installation and repeated rollouts |
+| GEN-007: Completion requires evidence | Prove command completion, valid task scoring, instance stop and resource release separately. UNKNOWN retains its identity and forbids side-effect replay. It neither creates a zero training reward nor releases resources. | Failed trajectories, official verification, shutdown and lease release |
 
-GEN-006 在环境派生时也适用。构建实例持有自己的私有写入，发布者独立指定
-父环境版本及允许进入新版本的内容。发布失败时仍可使用原目录。子版本有独立环境身份，
-发布者需要重新核验其执行能力。TASK-024 的直接 ext4 文件增量实现和适用范围见
-[制品发布指南](../guides/ARTIFACT_PUBLICATION.md#从隔离构建沙盒发布文件增量)。
+GEN-006 also applies when deriving environments. The build instance owns private writes. The publisher separately specifies the parent revision and the content allowed into the new version. The original catalog remains usable on publication failure. The child has a distinct environment identity and requires fresh verification of its execution capabilities. See the [artifact publication guide](../guides/ARTIFACT_PUBLICATION.en.md#从隔离构建沙盒发布文件增量) for the direct ext4 file-delta implementation and limits of TASK-024.
 
-TASK-026 对 MicroVM 区分两个版本。发布者和调用方使用可移交清单的 SHA-256 标识制品；Node 和 Edge 使用包含本地路径的部署 revision 核对具体执行对象。控制面同时固定所选 Node 和部署绑定。重复请求、暂停与恢复沿原所有者路由。制品交付步骤见[发布指南](../guides/ARTIFACT_PUBLICATION.md#跨-node-交付同一-microvm-环境)。
+TASK-026 distinguishes two revisions for MicroVMs. Publisher and caller identify the artifact by its portable manifest SHA-256. Node and Edge verify the concrete target with a deployment revision incorporating local paths. The control plane pins both Node and deployment binding. Duplicates, pause and resume route to the original owner. See the [publication guide](../guides/ARTIFACT_PUBLICATION.en.md#跨-node-交付同一-microvm-环境) for artifact delivery.
 
-### 能力声明与环境绑定
+<a id="能力声明与环境绑定"></a>
 
-公开 `DSecClient.run_microvm/run_container` 增加可选的
-`required_capabilities`。复用现有 [native 协议能力](../../src/dsec/contracts/native.py)、
-Node 能力视图、PlacementEngine 和 IAM 准入，不增加独立的环境调度器。
+### Capability requirements and environment binding
 
-- 目前接受 `native-sessions-files-v1`、`native-stream-v1`、
-  `native-aether-chronus-v1`、`native-http-v1`；扩展自动要求基础 native 协议。
-- `sandbox-requirements-v1` 和 `environment-requirements-v1` 表示 API/Node 理解
-  创建需求和环境绑定，**不是执行能力本身**。SDK 在旧 API 上拒绝带需求的创建；
-  放置排除不理解该契约的旧 Node。
-- 需求按集合规范化，存入 IAM 请求身份。相同 ID 修改需求必须冲突；空需求保持
-  旧请求摘要和 Edge wire。应用不能在创建请求中伪造 `environment_contract`；
-  控制面从 watcher 选定环境契约后将其固定在 IAM receipt。
-- Node 的执行协议能力取自实时 Edge health，而非只相信部署配置；派发前复核。
-  如果 watcher 过期且当前 Node 不满足需求，仅在确认未派发、Edge 无 intent 时
-  释放准入并拒绝。已派发或 UNKNOWN 的请求继续查询原所有者，不另选节点。
-- 具体环境由 `EnvironmentView` 描述：环境 ID、后端、执行模式、部署 revision
-  和明确声明的协议能力。同节点的其他环境具备某能力不能代替当前环境。
-  环境目录未声明能力时按未知处理，不能从运行时名称或 Node 协议自动推断。
-- 能力声明绑定到环境描述中的制品 pins；内核、启动盘、层、模式或配置改变，旧声明
-  即失效。发布器只在验证源声明和字节后，为改写后的部署路径重新绑定。
-  revision 是部署身份，包含路径和配置，**不是跨主机内容去重或 OCI 镜像摘要**。
-- Node 派发前核对选定 revision。Edge 在新建意图进入日志前再次核对，避免 Node
-  复核之后服务被替换而运行不同环境。绑定进入 Edge 创建摘要；已受理/完成请求
-  仍按旧日志对账，不因新目录撤回环境而重放。绑定不会传给 guest 或 VMM。
-- 这是**受信发布者的声明与制品绑定**，不是自动 guest 探测、形式化 guest ABI
-  验证或程序依赖证明。pmem/DAX、网络策略、生产隔离及快照兼容性仍需相应证据，
-  不能通过任意字符串或一份声明获得支持。运行时原有制品完整性检查保持不变。
-- 这是直接 SDK 创建的能力声明；不改变可选 rollout API、FnCall 调用或旧任务插件。
-  不提供自动选择执行模式，也不把 FnCall 转成持久会话。
+Public `DSecClient.run_microvm/run_container` accepts optional `required_capabilities`. It reuses [native protocol capabilities](../../src/dsec/contracts/native.py), Node capability views, PlacementEngine and IAM admission without introducing another environment scheduler.
 
-`tests/unit/test_api_sdk.py` 与 `tests/unit/test_cluster_control.py` 覆盖旧端拒绝、
-需求筛选、规范化与冲突、能力撤回、未知结果不重放以及旧摘要兼容。
-这些控制面/传输夹具测试不等同于真实混合节点、旧 guest 或训练验收。
-滚动部署时应先升级全部 API 副本；健康探测不是跨旧副本的协议保证。
+- The supported requirements are `native-sessions-files-v1`, `native-stream-v1`, `native-aether-chronus-v1` and `native-http-v1`. Extensions implicitly require the base native protocol.
+- `sandbox-requirements-v1` and `environment-requirements-v1` signal that API and Node understand creation requirements and environment binding. **They do not advertise execution capabilities.** The SDK rejects a requirements-bearing creation on an old API. Placement excludes Nodes that cannot understand the contract.
+- Normalize requirements as a set and include them in the IAM request identity. Changing requirements under the same ID must conflict. An empty set preserves the old digest and Edge wire format. Applications cannot supply a forged `environment_contract` in a creation request. The control plane selects the environment contract from Watcher observations and pins it in the IAM receipt.
+- The Node obtains its execution capabilities from live Edge health and rechecks before dispatch. If Watcher data is stale and the Node no longer meets the request, reject and release admission only after confirming no dispatch and no Edge intent. For dispatched or UNKNOWN requests query the original owner without selecting another Node.
+- `EnvironmentView` describes one environment's ID, backend, execution mode, deployment revision and explicitly declared protocol capabilities. A capability available in another environment on the same Node does not satisfy a requirement. An undeclared capability is unknown. Never infer it from the runtime name or Node protocol.
+- Bind capability claims to the artifact pins in the environment descriptor. Changes to the kernel, boot disk, layers, mode or configuration invalidate the old claim. The publisher rebinds rewritten deployment paths only after verifying the source claim and bytes. The deployment revision includes paths and configuration. **It is neither a cross-host content-deduplication key nor an OCI image digest.**
+- The Node checks the selected revision before dispatch. Edge checks again before journaling a new create intent, preventing a service replacement after the Node check from running another environment. The binding enters the Edge creation digest. Reconcile accepted or completed requests against the original journal even if a newer catalog withdraws the environment. Do not replay them or forward the binding to the guest or VMM.
+- These are **trusted publisher claims bound to artifacts**. They do not automatically probe a guest, formally verify a guest ABI or prove application dependencies. pmem/DAX, networking policy, production isolation and snapshot compatibility require their own evidence. A string or claim alone cannot establish support. Existing runtime artifact integrity checks still apply.
+- These requirements apply to direct SDK creation. They preserve the optional rollout API, FnCall invocations and existing task plug-ins. They neither select execution modes automatically nor turn FnCall into a persistent session.
 
-2026-10-30 本地相关回归运行 205 项，203 项通过；2 项 Linux mountinfo/`/proc`
-专属检查在 macOS 跳过。现有集群守卫工具的 14 个代码变异对照均按预期失败，
-包括 MicroVM 与 Container 的最终环境守卫。文档链接与 diff 格式检查通过。
-这些结果不是实机验收。
+`tests/unit/test_api_sdk.py` and `tests/unit/test_cluster_control.py` cover old-endpoint rejection, requirement filtering, normalization and conflicts, capability withdrawal, unknown outcomes without replay, and compatibility with old digests. These control-plane and transport fixtures do not validate a mixed physical fleet, old guests or training. Upgrade all API replicas first in a rolling deployment. A health check does not establish protocol compatibility across old replicas.
 
-环境绑定进一步使用 [EnvironmentBinding](../../verification/EnvironmentBinding.tla)
-建模两次请求、两个 revision、过期 watcher、Node 检查后发生环境变化和 Edge 拒绝。
-`selected` 对应 IAM receipt 的环境绑定；`NodeCheck` 对应 Node 派发前复核；
-`EdgeAccept` 对应 Edge 在日志受理前对固定目录的版本校验。
-该模型假定目录和其制品 pins 在单个 Edge 生命周期中不可被重新解释；实际内容完整性
-由原有目录和后端验证负责。模型不证明构建声明真实、二进制语义或无限规模活性。
-`tools/check_concurrency_model.py` 要求安全模型通过，移除 Edge 守卫的负对照产生
-`AcceptedRevisionPinned` 反例。`tools/check_cluster_refinement.py` 将该守卫分别映射到
-MicroVM 和 Container 的本地 RPC 回归，移除检查时必须出现行为断言失败。
-本地安全模型遍历 484 个不同状态通过；移除守卫的模型找到所需反例。
-这是有界安全检查与指定代码守卫的对应证据，不是任意实现的完整形式化等价证明。
+On 2026-10-30, 203 of 205 local regressions passed. Two Linux mountinfo/`/proc` checks were skipped on macOS. All 14 cluster guard-removal mutations failed as required, including final MicroVM and Container environment guards. Documentation links and diff formatting passed. These were local checks.
 
-2026-10-30 的[独立 Linux 验收](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md#generality-linux-20261030)
-进一步通过 27 项实际执行检查和 77 项安装版定向回归。真实 Firecracker MicroVM 和
-QEMU Container 经公开 HTTPS API、mTLS Node 完成按能力创建、二进制文件、持久会话、
-流式输出与重连，FnCall 保持调用间独立语义。分别在 API 已准入但尚未派发、Node
-已检查但尚未发送 Edge 创建 RPC 时，受控替换测试 Edge 的环境 revision；两次都
-返回 AdmissionDenied、Edge 无创建 intent、IAM 配额释放。原 DONE 证明仍可查询。
-这是所测两种 guest 的基础 native/stream conformance，不包括 HTTP/session 文件扩展、
-全部故障窗口、跨节点或训练验收，也不把发布声明变成自动 guest 认证。
+The [EnvironmentBinding model](../../verification/EnvironmentBinding.tla) covers two requests, two revisions, a stale Watcher, an environment change after the Node check and rejection by Edge. `selected` maps to the IAM receipt binding, `NodeCheck` to the Node pre-dispatch check, and `EdgeAccept` to Edge validating the pinned catalog version before journaling admission. The model assumes the catalog and artifact pins cannot be reinterpreted within one Edge lifetime. Existing catalog and backend checks establish content integrity. The model does not prove that build claims are true, binary semantics or unbounded liveness. `tools/check_concurrency_model.py` requires the safe model to pass and removing the Edge guard to produce a `AcceptedRevisionPinned` counterexample. `tools/check_cluster_refinement.py` maps the guard to local MicroVM and Container RPC regressions, both of which must fail their behavioral assertions when it is removed. The safe model passed after exploring 484 distinct states. The unsafe model found the required counterexample. This relates bounded safety checks to specific guards without proving equivalence of arbitrary implementations.
 
-### 后续按共性缺口推进
+[Independent Linux acceptance on 2026-10-30](../reports/DSEC_V01_INSTALL_ACCEPTANCE.en.md#generality-linux-20261030) passed 27 live execution checks and 77 installed-package regressions. Real Firecracker MicroVM and QEMU Container workloads used the public HTTPS API and an mTLS Node for capability-based creation, binary files, persistent sessions, streaming and reconnection. FnCall invocations remained independent. The test replaced the Edge environment revision in two controlled windows: after API admission but before dispatch, and after the Node check but before the Edge create RPC. Both returned AdmissionDenied, left no Edge create intent and released IAM quota. The previous DONE proof remained queryable. This covers base native/stream conformance on two guest types. HTTP/session-file extensions, other fault windows, cross-node execution and training were outside scope. Publisher claims remain distinct from guest attestation.
 
-既有能力不因本轮未重测而重新列为未开发。会话文件扩展已有 2026-10-12 的真实
-MicroVM 验收；Edge 重启、执行中断、UNKNOWN 不重放已有 2026-10-10 和
-2026-10-25 的真实运行记录；API 副本失效后的原请求查询和流重连也已有验收。
-HTTP 已实现并有本地 C agent/SDK、超时和 POST 去重测试，当前记录未证明完整
-HTTPS API → QEMU guest HTTP 的端到端验收。具体证据见
-[执行与隔离契约](EXECUTION_ISOLATION.md)及[历史安装验收](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md)。
-后续只补明确缺失的组合证据；代码、协议、guest 或部署边界变化时重跑对应既有
-测试，不重新实现同一能力。新故障必须写明触发条件、缺失保证和验收终点后才立项。
+<a id="后续按共性缺口推进"></a>
 
-能力完成状态、证据和候选工作只维护在[项目台账视图](../PROJECT_STATUS.md)，
-本契约不再维护一张平行的优先级/待办表。新语义先明确系统不变量，再在所选任务的
-有限验收中选择有状态代码修复、独立代码执行等不同应用语义复核；已有能力按实际
-变更定向回归，不要求每次迭代重新跑全部应用。外部模型是否得分与沙盒是否正确
-是两组证据，不能互相替代。
-本轮不新增 MiMo/mini-swe-agent 专用适配器，也不启动新训练或扩大模型管理职责。
+### Address shared gaps in later iterations
 
-## 可选 rollout 组合
+Keep accepted capabilities closed when a later test omits them. Session files passed real MicroVM acceptance on 2026-10-12. Edge restart, execution interruption and UNKNOWN without replay have real run records from 2026-10-10 and 2026-10-25. Original-request lookup after API failover and stream reconnection were also accepted. HTTP has local C agent/SDK, timeout and POST deduplication tests. The records here do not establish end-to-end HTTPS API → QEMU guest HTTP verification. See the [execution and isolation contract](EXECUTION_ISOLATION.md) and [historical installation acceptance](../reports/DSEC_V01_INSTALL_ACCEPTANCE.en.md). Add only the missing combinations. Rerun relevant tests when code, protocol, guest or deployment boundaries change. To open a new defect, identify its trigger, missing guarantee and finite acceptance criterion.
 
-`AgentEnvironment` 是任务与训练框架之间的边界，定义在
-[dsec.rollout.environment](../../src/dsec/rollout/environment.py)，旧
-[agent_environment.py](../../src/dsec/rollout/environment.py) 保留兼容入口。它不替代沙箱 SDK，也不依赖
-OpenEnv 服务。
+Maintain capability status, evidence and candidate work in the [project register view](../PROJECT_STATUS.en.md). For new semantics, first state the invariant, then test distinct application patterns such as stateful code repair and independent code execution within the selected task's scope. Target regressions to actual changes. There is no need to rerun every application on each iteration. Model score and sandbox correctness require separate evidence. This iteration adds no MiMo/mini-swe-agent-specific adapter, training run or model-management responsibility.
 
-## 职责
+<a id="可选-rollout-组合"></a>
 
-| 层 | 负责的内容 |
+## Optional rollout integration
+
+`AgentEnvironment` connects a task to a training framework. Its implementation lives in [dsec.rollout.environment](../../src/dsec/rollout/environment.py), with [agent_environment.py](../../src/dsec/rollout/environment.py) retained for compatibility. The sandbox SDK can also be used directly. No OpenEnv service is required.
+
+<a id="职责"></a>
+
+## Responsibilities
+
+| Layer | Responsibility |
 | --- | --- |
-| 训练框架的 agent loop | 模型采样、回复解析、多轮消息、token/logprob、RL 算法 |
-| `TaskEnvironmentAdapter` | instruction、环境与资源选择、动作执行、可信评分 |
-| `DSecAgentEnvironment` | 把任务生命周期接到持久 rollout worker |
-| worker / sandboxd | 调度、沙箱、动作日志、暂停恢复、资源回收 |
+| Trainer's agent loop | Model sampling, reply parsing, multi-turn messages, tokens/logprobs and the RL algorithm |
+| `TaskEnvironmentAdapter` | Instructions, environment and resource selection, action execution and trusted scoring |
+| `DSecAgentEnvironment` | Connect the task lifecycle to the durable rollout worker |
+| worker / sandboxd | Scheduling, sandboxes, action journals, pause/resume and cleanup |
 
-DSec 管理沙箱资源。模型权重、KV cache、优化器、训练/推理显存和模型 offload
-由外部训练框架与推理服务管理。沙箱准入可以依据节点的剩余资源和外部负载等待，
-不会为取得资源而修改模型服务配置或卸载模型。
+DSec manages sandbox resources. External training and inference services own model weights, KV cache, optimizer state, training/inference GPU memory and model offload. Sandbox admission can wait for node headroom and external load to ease. It will not change model service settings or unload a model to get resources.
 
-`DSecClient` 的正式实现位于 [sdk.client](../../src/dsec/sdk/client.py)，
-它只接受 HTTPS API Server、IAM 凭据和项目，不从 `DSEC_SOCKET` 自动直连 Edge。
-本地开发客户端为 [DevEdgeClient](../../src/dsec/sdk/development.py)；
-`libdsec_compat` 与 `dsec.compat.libdsec` 保留这个开发实现的模块别名。
-容器后端、制品校验和生命周期 journal 由
-[容器 Edge](../../src/dsec/runtime/container_edge.py)管理；客户端不读取宿主制品或启动 Docker。
-原 `run_container`、`attach_container`、执行/查询/停止调用经同一沙箱服务传输。
-评分与动作请求仍由 worker 记账，不因 RPC 路径迁移而改变已有请求摘要。
-明确的 `ServiceBusy` 表示未受理；SDK 不为带稳定 ID 的请求悄悄换号重试。
-调用方可在确认未受理后重新提交，UNKNOWN 仍必须先对账。
+The public `DSecClient` is implemented in [sdk.client](../../src/dsec/sdk/client.py). It accepts an HTTPS API Server, IAM credential and project only. `DSEC_SOCKET` does not connect it directly to Edge. The development client is [DevEdgeClient](../../src/dsec/sdk/development.py); `libdsec_compat` and `dsec.compat.libdsec` remain module aliases for that implementation. The [Container Edge](../../src/dsec/runtime/container_edge.py) owns the backend, artifact verification and lifecycle journal. Clients neither read host artifacts nor start Docker. Existing `run_container`, `attach_container` and execute/query/stop operations share the sandbox service transport. The worker still accounts for actions and scores. RPC migration preserves existing request digests. An explicit `ServiceBusy` signals non-admission. The SDK does not silently generate a new ID for a request with a stable ID. The caller may resubmit after definitive non-admission. Reconcile UNKNOWN first.
 
 ```text
 Trainer agent loop
@@ -156,142 +97,98 @@ Trainer agent loop
     → private rollout worker → Edge → microVM or container
 ```
 
-## 生命周期
+<a id="生命周期"></a>
 
-调用方为每个 episode 保存稳定的 `rollout_id`。
+## Lifecycle
 
-- `reset(policy_prefix)`：任务插件返回 `EnvironmentSpec`；创建或附着 rollout，
-  等待调度，把任务 instruction 作为 user 消息接到消息前缀之后，返回持久对话。
-- `step(action, policy_message=...)`：提交稳定的 `step_id`、`action_id`、动作类型
-  与载荷，以及原始 assistant 消息，返回 `EnvironmentObservation`。
-- `dialogue()`：查询持久对话并等待已提交动作完成；未知状态需要对账。
-- `evaluate()`：返回含有限分数、评分器身份及证据的 `EnvironmentVerdict`。
-- `stop()`：释放本 episode 的沙箱与租约。
+The caller saves a stable `rollout_id` for each episode.
 
-`EnvironmentAction.shell(...)` 是 shell 动作的便捷构造函数；协议本身允许其他
-`kind/payload`。是否接受动作由任务插件决定。接口不规定 bash 代码块格式、步数
-或采样参数。
+- `reset(policy_prefix)`: the task plug-in returns `EnvironmentSpec`. Create or attach to the rollout, wait for scheduling, append the task instruction as a user message after the prefix and return the persistent dialogue.
+- `step(action, policy_message=...)`: submit stable `step_id`, `action_id`, action type, payload and the original assistant message. Return `EnvironmentObservation`.
+- `dialogue()`: query the persistent dialogue and wait for committed actions to complete. Reconcile unknown state.
+- `evaluate()`: return `EnvironmentVerdict` with a finite score, evaluator identity and evidence.
+- `stop()`: release this episode's sandbox and lease.
 
-## 上下文与评分
+`EnvironmentAction.shell(...)` is a convenience constructor for shell actions. The protocol supports other `kind/payload`. The task plug-in decides whether an action is accepted. The interface prescribes no bash fence format, step limit or sampling parameters.
 
-每次动作应携带完整的原始 assistant 消息，包括未执行的文本；命令输出通过任务
-插件成为下一轮观察。训练框架从返回的 `dialogue["messages"]` 获取消息，不能用
-文本重建丢失的 token/logprob。
+<a id="上下文与评分"></a>
 
-Miles 的 Qwen3.5 Thinking 适配器按[官方模板](https://huggingface.co/Qwen/Qwen3.5-4B/blob/main/chat_template.jinja)
-从最后一个 `</think>` 之后提取正文，兼容代码块前重复的结束标记。若结束标记之间
-存在代码块、工具调用或完成信号，或正文重新打开思考段，则拒绝解析，不能静默丢弃
-候选动作。每轮仍只执行正文中的第一个 bash 动作；原始 assistant 回复和 TITO 不改写。
-`model_outputs` 记录 `thinking_end_tag_count` 和 `thinking_boundary_normalized`，
-episode 的 `agent_metrics.normalized_thinking_steps` 记录发生兼容处理的步骤。
+## Context and scoring
 
-### Shell 反馈
+Each action should carry the complete original assistant message, including text that was not executed. The task plug-in turns command output into the next observation. Trainers obtain messages from the returned `dialogue["messages"]`. Text cannot reconstruct missing tokens or logprobs.
 
-新 shell episode 的 worker 对话使用 `dialogue_feedback_version=2`。每条执行结果
-作为一条 user 消息返回，内容是 `dsec.shell_observation.v1` JSON；训练框架应直接
-使用 worker 返回的消息，不能再次只提取 `output`。非 shell 动作的观察仍由任务插件定义。
+The Miles Qwen3.5 Thinking adapter follows the [official template](https://huggingface.co/Qwen/Qwen3.5-4B/blob/main/chat_template.jinja), extracting the body after the last `</think>` and tolerating a repeated closing marker before the code block. It rejects a code block, tool call or finish signal between end markers, or a reopened thinking segment in the body, so no candidate action is silently discarded. Each turn executes only the first bash action in the body. The raw assistant reply and TITO remain unchanged. `model_outputs` records `thinking_end_tag_count` and `thinking_boundary_normalized`. The episode's `agent_metrics.normalized_thinking_steps` identifies the affected steps.
 
-| 字段 | 含义 |
+<a id="shell-反馈"></a>
+
+### Shell feedback
+
+The worker dialogue for a new shell episode uses `dialogue_feedback_version=2`. It returns each execution result in one user message containing `dsec.shell_observation.v1` JSON. The trainer should consume that message directly, without extracting only `output`. The task plug-in still defines observations for other actions.
+
+| Field | Meaning |
 | --- | --- |
-| `step_id`、`action_id` | 对应持久动作的身份 |
-| `status` | `succeeded`、`failed`、`timed_out` 或 `unknown` |
-| `exit_code` | 实际进程退出码；缺失为 `null`，不能补成 0 |
-| `timed_out` | 执行层报告的命令超时；未提供为 `null` |
-| `capture_truncated` | 执行层采集输出时是否截断；未提供为 `null` |
-| `feedback_truncated` | 已采集输出是否因模型上下文预算再次截断 |
-| `captured_output_chars`、`feedback_omitted_chars` | 已采集字符数、向模型省略的字符数 |
-| `output` | 已采集的合并 stdout/stderr，最多保留 4000 字符 |
+| `step_id`, `action_id` | Identity of the durable action |
+| `status` | `succeeded`, `failed`, `timed_out` or `unknown` |
+| `exit_code` | Actual process exit code. Missing is `null` and must not be replaced with zero. |
+| `timed_out` | Command timeout as reported by the execution layer. Missing is `null`. |
+| `capture_truncated` | Whether output was truncated during capture. Missing is `null`. |
+| `feedback_truncated` | Whether already captured output was further truncated to fit the model context. |
+| `captured_output_chars`, `feedback_omitted_chars` | Number of characters captured and omitted from the model's observation. |
+| `output` | Combined captured stdout/stderr, retaining at most 4000 characters. |
 
-状态和截断标记始终保留。空输出也有完整结果，不再用 `(no output)` 代替执行状态。
-长输出保留开头和结尾，并插入省略标记；完整已采集输出仍在动作日志中。
-若执行层已经截断，反馈无法恢复没有采集的尾部，必须通过 `capture_truncated` 告知调用方。
+Always preserve status and truncation flags. Even empty output has a complete result. `(no output)` is no longer a substitute for execution state. Long observations retain the beginning and end with an omission marker. The action journal retains the entire captured output. If capture itself was truncated, feedback cannot recover the missing tail and must report that fact through `capture_truncated`.
 
-只有明确的 `timed_out=true` 才判为命令超时；退出码 124 本身不足以证明超时。
-命令超时与 RPC/连接超时不同：连接中断仍走 UNKNOWN、附着和对账流程，不能合成
-一条“命令失败”反馈后自动重试。当前 shell 执行接口等待命令结束，不提供后台进程
-句柄；不会把返回慢或没有输出解释成后台仍在运行。
+Only explicit `timed_out=true` establishes a command timeout. Exit code 124 alone is insufficient. An RPC timeout or disconnect instead triggers UNKNOWN, attach and reconciliation. Never synthesize a command failure and automatically retry. The shell API waits for completion and provides no background process handle. A slow or silent command cannot be inferred to be running in the background.
 
-反馈版本随 episode 持久保存。升级前已开始、没有版本字段的 episode 按旧版本 1
-重建对话，后续动作也保持旧格式，以保护已有 session/TITO 前缀。新建或尚未开始
-对话的 episode 使用版本 2。重连、动作去重和 worker 重启不会改变既有消息。
+Persist the feedback version with the episode. For a dialogue started before the upgrade without a version field, reconstruct version 1 and keep the old format for later actions to preserve the existing session/TITO prefix. New episodes and episodes with no dialogue yet use version 2. Reconnect, deduplication and worker restart leave existing messages intact.
 
-任务 instruction 来自任务插件，不由通用框架硬编码。TB2.1 插件调用任务原始
-`tests/test.sh`，核对 CTRF 结果与完整性，再解释成二元奖励。缺失、无效或无法验证
-的结果应报错并拒收样本，不能记作模型零分。
+The task plug-in supplies the instruction. The TB2.1 plug-in runs the original `tests/test.sh`, checks CTRF results and integrity, then interprets the result as a binary reward. Reject the sample on missing, invalid or unverifiable results. None of these is a valid model zero.
 
-### Worker 评分插件
+<a id="worker-评分插件"></a>
 
-[评分契约](../../src/dsec/contracts/evaluation.py)只包含上下文、结果和插件接口，
-不启动沙箱或加载任务代码。部署方给 `RolloutWorker(..., evaluators={id: plugin})`
-注册可信实现；RPC 只能选择已注册的 ID，不能指定 Python 模块或加载代码。
-插件的版本化 ID 在评分语义改变时必须更新。`validate` 在执行前检查任务、环境和参数；
-`evaluate` 使用同一 episode 的沙箱，返回含有限数值 `value` 的 `EvaluationOutcome`。
-`EvaluationFailure` 表示没有有效 verdict，其诊断证据保存在 worker journal。
+### Worker scoring plug-ins
 
-调用方使用 `ScheduledSandbox.evaluate(evaluator_id, parameters, timeout_s=...)`。
-worker 在执行前持久保存评分器 ID、JSON 参数及摘要；同一已完成评分返回原奖励，
-换评分器或参数则拒绝。缺少评分器身份的旧完成记录由插件核对原奖励格式。
-取消、错误或重启时未完成的多命令 verifier 保持 UNKNOWN，不能自动重跑或合成零分。
-传输 timeout 只控制客户端等待时间，不改变任务规定的 verifier 上限。
+The [scoring contract](../../src/dsec/contracts/evaluation.py) contains only the context, result and plug-in interface. It neither starts a sandbox nor loads task code. Operators register trusted implementations with `RolloutWorker(..., evaluators={id: plugin})`. RPC callers select a registered ID and cannot provide a Python module or load code. Change the versioned ID when scoring semantics change. `validate` validates the task, environment and arguments before execution. `evaluate` uses the same episode sandbox and returns `EvaluationOutcome` with finite `value`. `EvaluationFailure` means there is no valid verdict and its diagnostics are saved in the worker journal.
 
-TB2.1 的[官方评分插件](../../apps/tb21/src/dsec_tb21_case/worker_evaluator.py)随可选应用安装。
-旧 `tb2_evaluate` 请求与 `--tb2-tasks-dir` 配置通过兼容桥注册该插件；不配置 TB2.1
-时，导入和构造通用 worker 不加载该应用。旧计数任务保留单次 RPC 的证明对账语义。
-TB2 adapter、manifest 验证和命令 PATH 的兼容桥仍有待后续迁移，当前不是完整任务代码拆分。
+Call `ScheduledSandbox.evaluate(evaluator_id, parameters, timeout_s=...)`. Before execution the worker persists the evaluator ID, JSON arguments and digest. A completed evaluation with the same identity returns the original reward. Different evaluators or arguments are rejected. For old completed records without evaluator identity, the plug-in checks the original reward format. A multi-command verifier interrupted by cancellation, error or restart remains UNKNOWN. Never automatically rerun it or invent a zero. The transport timeout controls only the client's wait time, independently of the task's verifier limit.
 
-动作日志同时保存用户命令 `command` 和实际提交命令 `execution_command`。
-重启对账使用后者，避免命令转换策略改变后重新解释已经执行的动作；旧动作没有该字段时，
-按兼容转换规则核对原请求。动作去重继续基于原 step/action ID 与用户载荷。
+The [official TB2.1 scoring plug-in](../../apps/tb21/src/dsec_tb21_case/worker_evaluator.py) is distributed with the optional application. A compatibility bridge registers it for the old `tb2_evaluate` request and `--tb2-tasks-dir` setting. Without TB2.1 configuration, importing or constructing the generic worker does not load the application. The old counter task retains single-RPC proof reconciliation. TB2 adapter, manifest validation and command PATH compatibility bridges still awaited migration at this stage.
 
-### Episode 预算结束
+The action journal saves both the user's `command` and the actual `execution_command`. Restart reconciliation uses the latter so a changed command transformation cannot reinterpret past effects. For old records lacking this field, the worker checks the original request under the compatibility rules. Deduplication still uses the original step/action ID and user payload.
 
-Miles 的 DSec 适配器在沙箱就绪后开始 agent 预算，调度排队和 verifier 不消耗该预算。
-Agent shell 的 `command_timeout_ms` 与官方 verifier 的 `verifier_timeout_ms` 独立。
-TB2.1 verifier 上限从固定版本任务的 `task.toml` 读取；只有宿主 evaluator 的
-`run_verifier_shell` 选择该上限，普通 agent 动作仍按命令上限校验。
-请求超出范围会在执行前拒绝，并报告 scope、请求值和允许范围；这不表示测试已经超时。
-到期后不再发起模型请求或执行新动作；在途 shell 命令的 timeout 受剩余预算限制。
-已发出的模型请求允许返回完整响应，以保留真实 token/logprob，因此收尾可能超过预算；
-`budget_overrun_seconds` 单独记录这部分时间，不承诺严格的墙钟终止。
+<a id="episode-预算结束"></a>
 
-到期轨迹以 `exit_status=timeout`、`end_reason=episode_timeout`、reward 0 正常返回，
-`reward_source=episode_budget`、`dsec_budget_verdict=true` 标明评分来源。
-不再运行任务 verifier，其诊断 `raw_reward/harness` 为 `null`，不能把预算零分表示为
-官方测试成绩。接收该样本要求同一 episode 的完整 TITO 已保存、至少一条完整模型响应、
-预算时间确实耗尽、无跨训练进程恢复；仍检查 Miles 原生 token/logprob 对齐。
-零奖励样本保留在原 GRPO 分组中，不替换任务、不因预算到期停止其他 episode。
-训练结果回写 ownership 记录，供进度与收尾审计区分预算结束、官方评分及未决错误。
+### Episode budget exhaustion
 
-传输超时、执行结果 UNKNOWN、丢失 TITO 和外部取消不属于预算零分。它们继续报错、
-附着或对账，不能通过伪造 token、退出码或 verifier 结果来满足分组完整性。
+The Miles DSec adapter starts its agent budget after sandbox readiness. Queueing and verification have separate budgets. Agent shell `command_timeout_ms` and official verifier `verifier_timeout_ms` are independent. TB2.1 reads the verifier ceiling from the pinned task's `task.toml`. Only the host evaluator's `run_verifier_shell` selects this ceiling. Normal agent actions use the command limit. Out-of-range requests fail before execution and report the scope, requested value and allowed range. That rejection is not a test timeout. At budget expiry no further model requests or actions begin. In-flight shell timeouts are capped by remaining time. An already submitted model request can return its full response to preserve actual tokens/logprobs. Cleanup may therefore exceed the budget. `budget_overrun_seconds` records that interval separately. The budget is not a hard wall-clock termination guarantee.
 
-## 恢复与隔离
+A genuinely expired trajectory returns normally with `exit_status=timeout`, `end_reason=episode_timeout` and reward 0. `reward_source=episode_budget` and `dsec_budget_verdict=true` identify the score source. No task verifier is run. Its diagnostic `raw_reward/harness` is `null`. Never label a budget zero as an official test score. Admission of this sample requires complete saved TITO for that episode, at least one complete model response, evidence that its time budget expired and no recovery across training processes. Miles still verifies native token/logprob alignment. Keep the zero in its original GRPO group without replacing the task or stopping other episodes. Write training outcomes to the ownership record so progress and final audits distinguish budget expiry, official grading and unresolved errors.
 
-遇到 `ScheduledOutcomeUnknown` 或 `UnresolvedAction` 时，保持原 rollout/action
-ID，附着并对账；不得新建 ID 重放可能已经生效的副作用。明确的初始化失败会尝试
-停止已创建的沙箱。
+Transport timeouts, UNKNOWN execution, missing TITO and external cancellation do not qualify as budget zeros. Report errors, attach or reconcile instead of inventing tokens, exit codes or verifier results to complete a group.
 
-训练进程重启后，环境和对话可以恢复；若旧 TITO 已丢失，episode 不能用于策略
-更新。模型轨迹的持久保存仍由训练框架负责。
+<a id="恢复与隔离"></a>
 
-`baseline_rollout_id` 允许从封存的准备态创建独立 episode。子实例使用私有可写
-状态与独立历史；同一 episode 的暂停恢复保持原有身份。这两种复用语义不能混用。
+## Recovery and isolation
 
-## 实现与验证
+On `ScheduledOutcomeUnknown` or `UnresolvedAction` retain the original rollout/action ID, attach and reconcile. Do not use a new ID to replay a potentially effective action. On definitive initialization failure, try to stop any sandbox already created.
 
-- [通用计数任务](../../src/dsec_adapters/counter_dsec_environment.py)
-- [TB2.1 任务插件](../../src/dsec_adapters/tb2_dsec_environment.py)
-- [任务注册表](../../src/dsec_adapters/dsec_task_registry.py)
-- [Miles agent 适配器](../../src/dsec_adapters/miles_dsec_agent_function.py)
-- [接口回归](../../tests/unit/test_agent_environment.py)
+Environment and dialogue may recover after trainer restart. An episode whose TITO was lost cannot update the policy. The trainer owns durable model trajectories.
 
-正式入口经 API Server 与认证 Node gateway；单机 Unix socket 仅用于显式开发与
-内部服务通信。生命周期与论文的 libdsec 思路相近，但本 agent 协议是工程扩展，
-不声称与原始 DSec 实现的 apiserver/IAM 线协议兼容。
+`baseline_rollout_id` creates independent episodes from a sealed prepared state. Children have private writable state and independent histories. Pause/resume retains the original episode identity. These are distinct forms of reuse.
 
-最新真实训练、恢复与分叉验证见
-[GRPO 验收](../reports/DSEC_V01_GRPO_ACCEPTANCE.md)。短验收不代表全部 89 个任务、
-长训练或多机环境已通过。
+<a id="实现与验证"></a>
+
+## Implementation and validation
+
+- [General counter task](../../src/dsec_adapters/counter_dsec_environment.py)
+- [TB2.1 task plug-in](../../src/dsec_adapters/tb2_dsec_environment.py)
+- [Task registry](../../src/dsec_adapters/dsec_task_registry.py)
+- [Miles agent adapter](../../src/dsec_adapters/miles_dsec_agent_function.py)
+- [Interface regressions](../../tests/unit/test_agent_environment.py)
+
+The supported entry goes through the API Server and authenticated Node gateway. Local Unix sockets are reserved for explicit development and internal services. Lifecycle semantics resemble the paper's libdsec design. This agent protocol is an engineering extension without a claim of wire compatibility with the original DSec apiserver/IAM.
+
+See [GRPO acceptance](../reports/DSEC_V01_GRPO_ACCEPTANCE.en.md) for the latest real training, recovery and fork checks. This short acceptance does not establish success on all 89 tasks, long training or multiple hosts.
 
 
 ### Runtime execution boundary
@@ -403,7 +300,7 @@ UNKNOWN, the old VM was retired and resubmission was rejected. A pinned TB2.1
 task passed its official verifier and 32 fixed-code MBPP episodes passed their
 expected scoring/cleanup checks. These application regressions retain the
 existing one-shot adapter path; they do not migrate training to native sessions.
-The [installation report](../reports/DSEC_V01_INSTALL_ACCEPTANCE.md) records the
+The [installation report](../reports/DSEC_V01_INSTALL_ACCEPTANCE.en.md) records the
 conditions and scope. These checks do not establish production containment,
 all-task correctness, high-concurrency performance or every storage combination.
 

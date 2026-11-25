@@ -1,8 +1,10 @@
 # Contributing
 
+**English** · [简体中文](CONTRIBUTING.zh-CN.md)
+
 This project independently reproduces DSec mechanisms. Start with the
 [roadmap](ROADMAP.md), [quickstart](docs/guides/QUICKSTART.md) and
-[comparison protocol](docs/architecture/DOCKER_DSEC_BENCHMARK_PROTOCOL.md). Runtime execution requires Linux and explicitly provisioned VM/storage
+[comparison protocol](docs/architecture/DOCKER_DSEC_BENCHMARK_PROTOCOL.en.md). Runtime execution requires Linux and explicitly provisioned VM/storage
 components. The distributed API deployment remains a development preview;
 see the roadmap for the exact isolation and failure-acceptance boundaries.
 
@@ -15,12 +17,14 @@ credentials and private task data from any attached logs.
 
 ## Work management
 
-Read [current capability/task status](docs/PROJECT_STATUS.md) before proposing or
+Read [current capability/task status](docs/PROJECT_STATUS.en.md) before proposing or
 continuing work. [project/registry.json](project/registry.json) is the only
 manually maintained current-status register. The Markdown view is generated;
 ROADMAP defines direction and milestone gates, architecture documents own design
 decisions, and reports retain versioned historical evidence. GitHub issues and
 PRs reference register IDs; their conversation is not a second status authority.
+
+Maintain both language editions together. Register the primary Markdown path under its original language in [the documentation catalog](docs/languages.json) and include that path in the [source release allowlist](tools/package_release_source.py). For changes to the register, add the translated wording to [the status translation catalog](project/status-translations.json) and regenerate both status pages with `python tools/check_project.py --write`.
 
 Before execution, create or select one `TASK-NNN` and record:
 
@@ -124,7 +128,7 @@ Keep RPC framing and process startup in `rollout.server`, task rules in optional
 applications, and model/token/training state outside the episode service.
 
 Control-plane and Host CLI refactors follow the accepted
-[CPH-001 through CPH-011 decisions](docs/architecture/MODULAR_REFACTOR_DESIGN.md#control-host-decisions).
+[CPH-001 through CPH-011 decisions](docs/architecture/MODULAR_REFACTOR_DESIGN.en.md#control-host-decisions).
 Reference applicable decision IDs in the review, with compatibility evidence.
 Changing a decision requires its rationale and migration impact to be recorded
 there, together with updates to affected dependency gates and protocol/model

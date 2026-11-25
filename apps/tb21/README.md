@@ -1,5 +1,7 @@
 # Terminal-Bench-2.1 application for DSec
 
+**English** · [简体中文](README.zh-CN.md)
+
 This optional application is installed separately from the DSec control plane.
 It contains task adapters, manifest validation, preparation code and a worker
 verifier plugin, not tasks, images, model weights or an OpenEnv server. No command downloads anything implicitly. Supply a trusted checkout

@@ -1,5 +1,7 @@
 # Third-party code and external runtime artifacts
 
+**English** · [简体中文](THIRD_PARTY_NOTICES.zh-CN.md)
+
 This is an independent reproduction, not the original DSec source release.
 The project's own code and documentation use the MIT License in `LICENSE`,
 selected by the project owner on 2026-10-06. The Miles-derived module below

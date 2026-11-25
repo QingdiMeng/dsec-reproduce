@@ -1,5 +1,7 @@
 # Use cases and runnable entry points
 
+**English** · [简体中文](USE_CASES.zh-CN.md)
+
 DSec provides sandbox execution, scheduling, storage and recovery. Applications
 provide tasks, agents and verifiers. Installing the core does not install a
 benchmark, start a model or select an RL algorithm.
@@ -152,8 +154,8 @@ rollouts, 32768 response and 65536 context limits. Rewards were `[1,0]` and
 evidence, not a claim of learning gains. The historical single-16-GiB-GPU run
 used separate training-side patches; they are not installed by DSec and the
 unmodified trainer is not guaranteed to fit that hardware. See
-[RL adapter boundaries](RL_FRAMEWORK_ADAPTERS.md) and
-[the latest training acceptance](../reports/DSEC_V01_GRPO_ACCEPTANCE.md).
+[RL adapter boundaries](RL_FRAMEWORK_ADAPTERS.en.md) and
+[the latest training acceptance](../reports/DSEC_V01_GRPO_ACCEPTANCE.en.md).
 
 Model downloading and hardware provisioning remain explicit external steps.
 The optional MBPP application includes a pinned SGLang/FSDP2 native verl
@@ -188,7 +190,7 @@ Prepared memory forking is our extension; it is not the paper's disk-only
 `pack_diff` workflow. Account for baseline creation, retained memory/disk and
 reuse count when assessing whether preparation amortizes. See the
 [environment contract](../architecture/AGENT_ENVIRONMENT_CONTRACT.md)
-and [cost report](../reports/DSEC_VERITY_PILOT_REPORT.md).
+and [cost report](../reports/DSEC_VERITY_PILOT_REPORT.en.md).
 
 ## UC-05 — custom tasks without TB2.1
 
@@ -262,7 +264,7 @@ The older `dsec-swegym-rollout` scaffold remains a separate token-boundary
 diagnostic. Neither entry point implements or manages a trainer.
 
 The [first-use record](../reports/SWEGYM_FIRST_USE.md) separates real harness
-acceptance and valid model failures from pending SAO training. Installing the core does not
+acceptance and valid model failures from the separate single-task SAO training pilot. Installing the core does not
 install this dataset, application, evaluation fork or training framework.
 FnCall's reset semantics do not substitute for a persistent repository, and
 this acceptance does not claim the same repository task was run on all three
@@ -270,9 +272,9 @@ execution paths.
 
 ## Comparing applications on Docker and DSec
 
-The [comparison protocol](../architecture/DOCKER_DSEC_BENCHMARK_PROTOCOL.md) defines matched
+The [comparison protocol](../architecture/DOCKER_DSEC_BENCHMARK_PROTOCOL.en.md) defines matched
 tasks, trajectories, cache/storage conditions and full backend costs. The
-[r5 cost report](../reports/DSEC_VERITY_PILOT_REPORT.md) is historical pilot evidence,
+[r5 cost report](../reports/DSEC_VERITY_PILOT_REPORT.en.md) is historical pilot evidence,
 not a shipped general benchmark command. Unified application sweep and cost
 drivers remain roadmap `RM-104`. Preserve failures and distinguish functional
 acceptance, model quality, RL integration and system performance.

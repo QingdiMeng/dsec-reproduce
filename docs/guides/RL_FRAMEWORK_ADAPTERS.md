@@ -1,7 +1,9 @@
 # RL 框架接入
 
+[English](RL_FRAMEWORK_ADAPTERS.en.md) · **简体中文**
+
 DSec 提供持久任务执行环境。训练框架负责推理服务、token/logprob、轨迹与优化器。
-统一边界见 [Agent 环境接口](../architecture/AGENT_ENVIRONMENT_CONTRACT.md)。
+统一边界见 [Agent 环境接口](../architecture/AGENT_ENVIRONMENT_CONTRACT.zh-CN.md)。
 
 ## 已有 Miles 接入
 
@@ -22,7 +24,7 @@ python -m pip install '.[miles]'
 环境 reset 时加入；不把解答或 verifier 内容放进策略 prompt。
 
 设置 `DSEC_API_CONFIG` 指向 API 客户端配置文件；训练进程不访问 worker socket。TB2.1 还需显式准备任务、
-注册环境目录并配置 verifier 制品，参见 [可选应用](../../apps/tb21/README.md)。
+注册环境目录并配置 verifier 制品，参见 [可选应用](../../apps/tb21/README.zh-CN.md)。
 安装核心不会下载任务或模型。
 
 ## 轨迹和奖励约束
@@ -56,7 +58,7 @@ DSec 系统功能，也不进入核心 wheel 或默认源码发行包。
 ## 当前 API 训练接入
 
 在 Node 上准备任务、环境和 verifier，部署
-[API/Node/worker bridge](CLUSTER_DEPLOYMENT.md#remote-native-sdk)，再将 API 配置文件
+[API、节点与 worker 桥接服务](CLUSTER_DEPLOYMENT.zh-CN.md#remote-native-sdk)，再将 API 配置文件
 提供给 trainer 和 reward 进程。Miles 的三个适配器入口与 `DSEC_API_CONFIG` 见本文开头；
 任务通过 metadata 的 `task_id` 和 `dsec_environment: "tb2"` 选择。
 配置文件使用 endpoint、project 和私有 token/CA 文件引用，不将密钥写进训练参数。
@@ -75,7 +77,7 @@ python -I /data/dsec-source/tools/verify_rollout_api.py \
 并正确配置 verifier 网络或完整缓存。固定回复只验证接入，不是训练数据或模型效果。
 Miles 的完整模型、采样和 GPU 配置由独立训练环境提供；当前没有新的全量 API 训练
 launcher。MBPP/verl 的现行 launcher 已接受 `--api-config`，步骤见
-[应用指南](../../apps/mbpp/README.md)。
+[应用指南](../../apps/mbpp/README.zh-CN.md)。
 
 ## 历史 Qwen3.5-4B × 全量 TB2.1 × GRPO recipe
 
@@ -95,7 +97,7 @@ Miles 显存需求保证。本流程从原始模型和全新 episode 开始，�
 
 ### 1. 安装和准备任务
 
-按 [Quickstart](QUICKSTART.md) 在新 venv 安装核心与构建工具，再安装可选应用：
+按 [快速开始](QUICKSTART.zh-CN.md) 在新 venv 安装核心与构建工具，再安装可选应用：
 
 ```sh
 .venv/bin/python -m pip install --no-build-isolation . ./apps/tb21
@@ -119,7 +121,7 @@ EROFS 内容哈希不变。只复制 catalog 文件不足以完成迁移。3FS �
 
 ### 2. 部署独立的联网实例
 
-按 [Host configuration](DSEC_HOST_CONFIGURATION.md) 配置一个新实例和全新 state
+按 [宿主配置](DSEC_HOST_CONFIGURATION.zh-CN.md) 配置一个新实例和全新 state
 目录，设置已注册 catalog、全量 task suite、对应 verifier 和代理。任务专用
 verifier/DAX 配置也应保留。调度预算要覆盖选中任务的最大单题资源需求，不能沿用
 单个小任务的预算；`capacity` 和实际并发可以小于每题采样数量。
@@ -265,7 +267,7 @@ IO 为训练容器 cgroup 的累计字节，网络为宿主默认网卡所有作
 
 ## 接入其他训练框架
 
-verl 的首个可选接入是 [MBPP 应用](../../apps/mbpp/README.md)：使用原生
+verl 的首个可选接入是 [MBPP 应用](../../apps/mbpp/README.zh-CN.md)：使用原生
 `reward.custom_reward_function`，由 `RolloutAPIClient` 经 API Server 和 Node worker
 在独立 microVM 内执行 Python
 及官方三个测试。数据转换固定原始 MBPP 的 train/validation/test 划分，不包含
@@ -279,8 +281,8 @@ MBPP 数据或模型。该完整训练结果来自旧本地 transport；当前 A
 提升到 42.275%，8 次至少成功一次的题目比例从 64.8% 提升到 68.4%。使用
 Non-Thinking、8192 回复长度、LoRA rank 8/alpha 16、SGLang 推理和原生 FSDP2
 训练。运行步骤、logprob 临时显存分块及仅评测恢复见
-[应用指南](../../apps/mbpp/README.md)，完整证据及限制见
-[案例报告](../reports/MBPP_VERL_FIRST_USE.md)。
+[应用指南](../../apps/mbpp/README.zh-CN.md)，完整证据及限制见
+[案例报告](../reports/MBPP_VERL_FIRST_USE.zh-CN.md)。
 
 验收先检查正确/错误/超时代码与评分证据，再跑模型 rollout，随后用同题八条
 独立样本完成 GRPO 更新。模型和训练配置需要独立验证；不承诺未经验证的 verl

@@ -1,8 +1,10 @@
 # Docker 与 DSec 对照：发布版验收口径
 
-> Historical record: references marked “historical source not included”
-> refer to experiment files outside this repository. They are not runnable
-> instructions for the current release. Use the [documentation index](../README.md) for supported entry points.
+[English](DOCKER_DSEC_BENCHMARK_PROTOCOL.en.md) · **简体中文**
+
+> 历史记录：标注“historical source not included”的引用
+> 指向仓库之外的实验文件。部署当前版本时，
+> 请从[文档目录](../README.zh-CN.md)选择受支持的入口。
 
 目标是验证可复现系统的能力与成本，而非预设 DSec 在所有指标上优于
 Docker。使用同一任务集合、任务修订、镜像身份、agent/model 参数、

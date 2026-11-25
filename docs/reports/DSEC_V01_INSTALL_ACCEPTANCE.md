@@ -1,5 +1,7 @@
 # 单机 v0.1 安装与部署验收
 
+[English](DSEC_V01_INSTALL_ACCEPTANCE.en.md) · **简体中文**
+
 ## 2026-10-08：模块化 R3 实机回归
 
 本节对应重构基线 `775b5be` 加本轮持久化/忙碌拒绝修复，不覆盖下面历史 r5
@@ -50,7 +52,7 @@ UNKNOWN 仍禁止重放。服务就绪工具允许 120 秒，覆盖启动时的�
 首次失败均保留：错误 smoke guest、测试编排的准入等待、旧代理地址导致联网
 失败、服务就绪上限不足、分叉时操作锁竞争，以及测试目录继承 0775 被权限
 预检拒绝。后者只修正本轮创建的专用目录，不放宽宿主权限检查；升级现有部署
-仍需操作员核对目录模式，见 [主机配置](../guides/DSEC_HOST_CONFIGURATION.md)。
+仍需操作员核对目录模式，见 [主机配置](../guides/DSEC_HOST_CONFIGURATION.zh-CN.md)。
 
 证据保存在实验机的 `dsec-r3-20261008/evidence/`，本地镜像归档在外层工作区
 `.runtime/r3-20261008/remote-evidence/evidence/`，完整短训练 TITO/回执保存在
@@ -88,7 +90,7 @@ DSec 的底层存储机制。临时存储服务在验收后正常停止；管理
 [最新训练验收](DSEC_V01_GRPO_ACCEPTANCE.md)。
 
 日期：2026-10-06。发行入口阶段完成；完整开源交付仍按
-[两天计划](../../ROADMAP.md)继续。此处是功能验收，不是吞吐或
+[两天计划](../../ROADMAP.zh-CN.md)继续。此处是功能验收，不是吞吐或
 Docker 成本优势报告。
 
 冻结开发 wheel：`dsec_reproduce-0.1.0.dev0-py3-none-any.whl`，183697 字节，
@@ -1066,7 +1068,7 @@ guest 状态正确时继续执行。两者均被独立检查点拒绝。该验�
 首个固定矩阵遇到 Calc 未及时就绪，补充 Xfce 与 Calc 窗口就绪判断
 后重新运行。通过轮十台 FullVM 的私有盘、CID、物理和 IAM 租约
 全部回收，宿主原有容器未变。原始报告在 `~/dvd04/cmat2/`。
-复用入口见 [OSWorld 桌面回归](../../apps/osworld/README.md)。
+复用入口见 [OSWorld 桌面回归](../../apps/osworld/README.zh-CN.md)。
 
 ### 2026-11-10：TASK-015 长轨迹修复对照
 

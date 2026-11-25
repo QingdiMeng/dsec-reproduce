@@ -4,6 +4,8 @@ about: Record a concrete increment and review existing work before execution
 title: ""
 ---
 
+**English** · [简体中文](work.zh-CN.md)
+
 <!-- Do not paste credentials or private task data. Read CONTRIBUTING#work-management.
      Issue discussion references the register; it is not a second status database.
      Unknown defects can be reported before a task is assigned; classify before execution. -->

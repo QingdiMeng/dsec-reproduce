@@ -1,5 +1,7 @@
 # OpenHands on the DSec API
 
+**English** · [简体中文](README.zh-CN.md)
+
 ## Current integration: SDK v1.58.2
 
 The current controller uses **`openhands-sdk==1.58.2` and

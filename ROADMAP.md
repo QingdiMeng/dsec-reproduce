@@ -1,9 +1,11 @@
 # Roadmap: reproducing DSec as a usable elastic sandbox system
 
+**English** · [简体中文](ROADMAP.zh-CN.md)
+
 Updated: 2026-10-30. Baseline: `0.1.0.dev0`, with modular R3 functional acceptance complete.
 
 For current capability completion, scoped evidence and selected work, use the
-[generated project status](docs/PROJECT_STATUS.md). Its single source is
+[generated project status](docs/PROJECT_STATUS.en.md). Its single source is
 [project/registry.json](project/registry.json). This roadmap owns direction,
 paper alignment and release gates; the dated implementation narratives below
 are historical context, not another current task queue. Work must be selected
@@ -46,7 +48,7 @@ claim is validated by generic MicroVM and QEMU catalogs, and verified MicroVM
 publication rebinds it after path rewrites without granting new capabilities.
 Missing claims mean unknown support. This is a trusted publisher declaration,
 not automatic guest conformance or production isolation. A separate
-[Linux acceptance](docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md#generality-linux-20261030)
+[Linux acceptance](docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.en.md#generality-linux-20261030)
 passed 27 real-runtime checks, including both controlled revision-change windows,
 and 77 installed-wheel regressions without skips. It exercises networkless
 Firecracker MicroVM and QEMU Container/FnCall through the HTTPS API/mTLS Node;
@@ -64,7 +66,7 @@ denied-file access, restart/adoption and retirement checks. Connection-flood
 resilience, broader tenant/adversarial network coverage and shared
 image storage remain production gates; the production flag stays false.
 See [execution boundaries](docs/architecture/EXECUTION_ISOLATION.md) and
-[acceptance evidence](docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md).
+[acceptance evidence](docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.en.md).
 
 Opt-in isolated QEMU IPv4 egress now has bounded installed-wheel Linux acceptance
 with a scoped one-shot TAP-FD broker and a pinned TC eBPF policy. Seven public SDK
@@ -74,7 +76,7 @@ adoption and complete retirement. Existing host Docker/Grafana were preserved.
 This closes the prepared single-Node networking acceptance, not broader tenant
 adversarial coverage, configured-proxy acceptance, flood resilience or scale.
 
-The [modular refactor design](docs/architecture/MODULAR_REFACTOR_DESIGN.md)
+The [modular refactor design](docs/architecture/MODULAR_REFACTOR_DESIGN.en.md)
 was approved on 2026-10-08 against revision `7f70524`. R0 compatibility gates
 and R1 general-module migration are implemented. R2 has separated worker scoring
 into registered evaluators and the optional TB2.1 application, and moved
@@ -91,7 +93,7 @@ now share an explicit execution contract while retaining existing journals and
 wire protocols.
 
 The 2026-10-21 refactor also treats deployment as an acceptance boundary
-([CPH-008](docs/architecture/MODULAR_REFACTOR_DESIGN.md#control-host-decisions)).
+([CPH-008](docs/architecture/MODULAR_REFACTOR_DESIGN.en.md#control-host-decisions)).
 The generator now separates read-only planning from private artifact generation
 and accepts batch Node inventories through shared role configuration. It creates
 per-Node credentials and host-scoped exports; this does not constitute automatic
@@ -154,7 +156,7 @@ isolated private writes and released their leases. The publication hash check
 warmed this object; this is functional evidence, not a cold-read or distributed
 performance result. Planned R3 functional gates are complete. Second-host
 installation and broader performance/fault campaigns remain separate gates. See the
-[installation acceptance](docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md).
+[installation acceptance](docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.en.md).
 Native shell sessions, binary files and bounded streaming now have an
 SDK/Edge/shared-C-agent implementation with single-host Linux acceptance:
 real vsock, idle-session pause/restore, layered containers, idle/paused Edge
@@ -206,13 +208,13 @@ The historical v0.1 GRPO candidate passed 49 core regressions, short GRPO with r
 `[1,0]` / `[0,0]`, four actual VMM terminate/resume events and prepared-state
 isolation. This establishes integration and a valid learning update, not
 long-term learning gains or all-task correctness. See the
-[latest GRPO acceptance](docs/reports/DSEC_V01_GRPO_ACCEPTANCE.md).
+[latest GRPO acceptance](docs/reports/DSEC_V01_GRPO_ACCEPTANCE.en.md).
 
 The latest two-task paired pilot still has slower complete warm episodes than
 Docker. It excludes DAX, remote 3FS and the ready pool. No general speed or
 memory advantage is claimed. See the
-[cost report](docs/reports/DSEC_VERITY_PILOT_REPORT.md) and
-[comparison protocol](docs/architecture/DOCKER_DSEC_BENCHMARK_PROTOCOL.md).
+[cost report](docs/reports/DSEC_VERITY_PILOT_REPORT.en.md) and
+[comparison protocol](docs/architecture/DOCKER_DSEC_BENCHMARK_PROTOCOL.en.md).
 
 ## M0 — publish a reproducible v0.1
 
@@ -323,7 +325,7 @@ not a prerequisite for describing a smaller working deployment accurately.
   created GitHub issues or current execution statuses. TASK/CAP/EV records and
   their state vocabulary are maintained only in the
   [project register](project/registry.json), with a
-  [generated view](docs/PROJECT_STATUS.md). Follow the
+  [generated view](docs/PROJECT_STATUS.en.md). Follow the
   [opening, revalidation and closure rules](CONTRIBUTING.md#work-management).
 - A historical E experiment is supporting evidence. It does not replace an
   installed-system regression after integration, and an enabled feature is
@@ -344,7 +346,7 @@ Milestone dependencies prioritize reproducible installation before storage,
 reuse and broader training/production claims. They do not reopen accepted
 increments or automatically select the next experiment. Active work, uncommitted
 delivery state, candidate increments and missing resources are visible in
-[project status](docs/PROJECT_STATUS.md). Dated implementation records remain
+[project status](docs/PROJECT_STATUS.en.md). Dated implementation records remain
 in the reports linked by its evidence index.
 
 ## HA cluster preview — implementation on 2026-10-11

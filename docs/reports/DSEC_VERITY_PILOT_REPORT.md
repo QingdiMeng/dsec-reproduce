@@ -1,5 +1,7 @@
 # 本地工具盘按需完整性与 Docker/DSec 配对验收
 
+[English](DSEC_VERITY_PILOT_REPORT.en.md) · **简体中文**
+
 2026-10-06，r5 安装候选实机验收通过。启动解析不再全文读取 22 GiB
 verifier 工具盘，完整性约束仍生效；完整 episode 的 Docker/DSec 时长
 差距仍存在。未公开发布或替换已有服务。

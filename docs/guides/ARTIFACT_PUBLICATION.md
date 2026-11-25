@@ -1,8 +1,10 @@
 # 通用 microVM 环境制品发布
 
-> Historical record: references marked “historical source not included”
-> refer to experiment files outside this repository. They are not runnable
-> instructions for the current release. Use the [documentation index](../README.md) for supported entry points.
+[English](ARTIFACT_PUBLICATION.en.md) · **简体中文**
+
+> 历史记录：标有“historical source not included”的引用指向
+> 仓库外的实验文件。部署当前版本时，
+> 请使用[文档目录](../README.zh-CN.md)中的受支持入口。
 
 ## 从隔离构建沙盒发布文件增量
 
@@ -171,7 +173,7 @@ MicroVM 发布器先验证源条目和声明，再复制并核对制品字节，
 
 应用的 `required_capabilities` 不会被直接传入 guest。控制面选择绑定，Node 复核，
 Edge 在写创建 intent 前核对版本；已缓存的结果仍保留原证明。独立于此的存储、
-网络、生产隔离与快照兼容性验收见[执行与隔离边界](../architecture/EXECUTION_ISOLATION.md)。
+网络、生产隔离与快照兼容性验收见[执行与隔离边界](../architecture/EXECUTION_ISOLATION.zh-CN.md)。
 
 ## 可选 fs-verity 完整性路径（2026-10-06，实机验收通过）
 

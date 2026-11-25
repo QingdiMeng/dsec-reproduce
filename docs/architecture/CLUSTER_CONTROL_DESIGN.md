@@ -1,16 +1,18 @@
 # HA cluster control plane
 
+**English** · [简体中文](CLUSTER_CONTROL_DESIGN.zh-CN.md)
+
 Status: development preview with bounded acceptance on 2026-10-11. High availability
 is required in the first cluster release. Development runs on macOS; the Linux
 experiment machine is a real Edge node. This is not a production release or a
 claim of independent-host availability.
 
-The accepted [control-plane and Host CLI refactoring decisions](MODULAR_REFACTOR_DESIGN.md#control-host-decisions)
+The accepted [control-plane and Host CLI refactoring decisions](MODULAR_REFACTOR_DESIGN.en.md#control-host-decisions)
 (CPH-001 through CPH-008) govern the next structural changes. They preserve
 ownership, durable admission/failure semantics and HA requirements; acceptance
 of the decisions does not mean that their implementation is complete.
 
-The current [module ownership map](MODULAR_REFACTOR_DESIGN.md#控制面决策与传输边界)
+The current [module ownership map](MODULAR_REFACTOR_DESIGN.en.md#控制面决策与传输边界)
 separates Node admission/recovery decisions (`control.node_gateway` and
 `control.rollout_gateway`) from Node RPC adapters (`host.node_transport`) and
 HTTP/TLS (`host.cluster_http`). `host.cluster` composes these with etcd and private

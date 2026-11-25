@@ -1,6 +1,8 @@
 # HA cluster deployment (development preview)
 
-The [kind HA demo](../../deploy/cluster/demos/kind-ha/README.md) contains a renderable four-node topology and the acceptance protocol for losing one DSec API replica and its colocated etcd member together.
+**English** · [简体中文](CLUSTER_DEPLOYMENT.zh-CN.md)
+
+The [kind HA demo](../../deploy/cluster/demos/kind-ha/README.en.md) contains a renderable four-node topology and the acceptance protocol for losing one DSec API replica and its colocated etcd member together.
 
 This deployment adds IAM, remote API, placement and watchers to existing Edges.
 It does not provision guest images, Firecracker, KVM, network privileges, storage,

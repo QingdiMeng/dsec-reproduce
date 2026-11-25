@@ -1,5 +1,7 @@
 # OSWorld FullVM desktop regression
 
+**English** · [简体中文](README.zh-CN.md)
+
 This optional replay suite uses an installed DSec SDK and a reachable HTTPS
 API Server. The installed SDK must expose `DSecFullVMRunArgs`, native file
 transfer, `screenshot()` and `desktop_input()`. It drives two Calc tasks through
