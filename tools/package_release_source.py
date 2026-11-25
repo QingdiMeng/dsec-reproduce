@@ -38,6 +38,8 @@ TOOLS = (
     'deploy/cluster/rotate.py',
     'deploy/cluster/nodes.example.json',
     'deploy/cluster/compose.yaml', 'deploy/cluster/Dockerfile',
+    'deploy/cluster/demos/kind-ha/README.md', 'deploy/cluster/demos/kind-ha/render.py',
+    'deploy/cluster/demos/kind-ha/acceptance-20261124.json', 'deploy/cluster/demos/kind-ha/h4-20261125.json',
     'deploy/cluster/export_hosts.py',
     '.github/workflows/ci.yml',
     'tools/check_wheel.py', 'tools/package_release_source.py',

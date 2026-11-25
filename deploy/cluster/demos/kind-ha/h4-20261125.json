@@ -1,0 +1,288 @@
+{
+  "date": "2026-11-25",
+  "scope": "One Linux host with an external KVM Edge, one kind control plane and three kind workers. Both stopped domains were b and c in every trial. Each case used one existing Firecracker MicroVM.",
+  "versions": {
+    "kind": "v0.30.0",
+    "kubernetes": "v1.34.0",
+    "etcd": "3.6.5",
+    "core_wheel_sha256": "990d6638cad17782bdbba9dcd48cdcb472a3f93375976ec4e7e5cf1dce6d4076"
+  },
+  "deadline_seconds": 120,
+  "time_origin": "Host monotonic clock relative to trial start. Recovery intervals below start at restart-issued, before the first docker start.",
+  "max_user_watches": 65536,
+  "control": {
+    "max_user_instances": 128,
+    "traced_kube_proxy": true,
+    "worker_b_trace": [
+      "uid=0 fd_count=3 nofile_soft=1048576 nofile_hard=1048576 open_null=3 open_errno=0 inotify_fd=-1 inotify_errno=24",
+      "[pid    16] inotify_init1(IN_NONBLOCK|IN_CLOEXEC) = -1 EMFILE (Too many open files)",
+      "E1124 16:13:09.066009      16 run.go:72] \"command failed\" err=\"failed complete: too many open files\""
+    ],
+    "run": {
+      "phase": "H4",
+      "status": "failed",
+      "events": [
+        {
+          "name": "healthy",
+          "seconds": 0.514,
+          "ids": {
+            "a": "15541471440773651229",
+            "b": "16832209762471736468",
+            "c": "8095431367888346638"
+          },
+          "cluster": "2377618914250813892",
+          "leader": "c"
+        },
+        {
+          "name": "original",
+          "seconds": 2.071,
+          "request": "178479cd537a44619d6ebaa6d172b416",
+          "local": "e5891c650fc6"
+        },
+        {
+          "name": "domains-off",
+          "seconds": 3.07,
+          "domains": [
+            "b",
+            "c"
+          ]
+        },
+        {
+          "name": "new-request-refused",
+          "seconds": 6.096,
+          "kind": "CoordinationUnavailable",
+          "request": "0bffa01fdcea4c47a28296a3e2fb39e5"
+        },
+        {
+          "name": "restart-issued",
+          "seconds": 6.097
+        },
+        {
+          "name": "released",
+          "seconds": 131.462,
+          "creates": 1,
+          "leases": 0,
+          "held": 0,
+          "usage": 0
+        }
+      ],
+      "last_wait_errors": [
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError"
+      ],
+      "error": "Three-member status timed out at etcd2 after both worker start commands."
+    }
+  },
+  "retests": [
+    {
+      "max_user_instances": 512,
+      "original_kube_proxy": true,
+      "recovery_seconds": {
+        "same_members": 19.155,
+        "healthy_endpoints_sdk_history_and_guest": 21.102
+      },
+      "run": {
+        "phase": "H4",
+        "status": "passed",
+        "events": [
+          {
+            "name": "healthy",
+            "seconds": 0.357,
+            "ids": {
+              "a": "15541471440773651229",
+              "b": "16832209762471736468",
+              "c": "8095431367888346638"
+            },
+            "cluster": "2377618914250813892",
+            "leader": "a"
+          },
+          {
+            "name": "original",
+            "seconds": 1.732,
+            "request": "f94fd34bf1b5412faba286acc90d4be6",
+            "local": "2c5d55c44bd6"
+          },
+          {
+            "name": "domains-off",
+            "seconds": 2.88,
+            "domains": [
+              "b",
+              "c"
+            ]
+          },
+          {
+            "name": "new-request-refused",
+            "seconds": 5.909,
+            "kind": "CoordinationUnavailable",
+            "request": "1ec15399762c4592a2d0b8296555a315"
+          },
+          {
+            "name": "restart-issued",
+            "seconds": 5.91
+          },
+          {
+            "name": "three-original-members",
+            "seconds": 25.065,
+            "ids": {
+              "a": "15541471440773651229",
+              "b": "16832209762471736468",
+              "c": "8095431367888346638"
+            },
+            "cluster": "2377618914250813892",
+            "leader": "a"
+          },
+          {
+            "name": "three-api-history-and-guest-marker",
+            "seconds": 27.012,
+            "healthy_endpoints": [
+              "https://etcd3:2379",
+              "https://etcd1:2379",
+              "https://etcd2:2379"
+            ]
+          },
+          {
+            "name": "no-new-admission-or-physical-create",
+            "seconds": 27.166,
+            "creates": 1,
+            "leases": 1,
+            "held": 1,
+            "usage": 1
+          },
+          {
+            "name": "released",
+            "seconds": 27.525,
+            "creates": 1,
+            "leases": 0,
+            "held": 0,
+            "usage": 0
+          }
+        ],
+        "last_wait_errors": [
+          "RuntimeError",
+          "RuntimeError"
+        ]
+      },
+      "cleanup": {
+        "cluster_retired": true,
+        "owned_volumes_retired": 4,
+        "host_containers_verified": 5,
+        "leases": 0,
+        "admissions": 0
+      }
+    },
+    {
+      "max_user_instances": 512,
+      "original_kube_proxy": true,
+      "recovery_seconds": {
+        "same_members": 18.927,
+        "healthy_endpoints_sdk_history_and_guest": 22.062
+      },
+      "run": {
+        "phase": "H4",
+        "status": "passed",
+        "events": [
+          {
+            "name": "healthy",
+            "seconds": 0.465,
+            "ids": {
+              "a": "15541471440773651229",
+              "b": "16832209762471736468",
+              "c": "8095431367888346638"
+            },
+            "cluster": "2377618914250813892",
+            "leader": "c"
+          },
+          {
+            "name": "original",
+            "seconds": 1.889,
+            "request": "f7c1b1a1edd74c22a9249325b8bdadf4",
+            "local": "33719260306d"
+          },
+          {
+            "name": "domains-off",
+            "seconds": 3.09,
+            "domains": [
+              "b",
+              "c"
+            ]
+          },
+          {
+            "name": "new-request-refused",
+            "seconds": 6.108,
+            "kind": "CoordinationUnavailable",
+            "request": "a194653d22f941ba8b38be0bee74f036"
+          },
+          {
+            "name": "restart-issued",
+            "seconds": 6.108
+          },
+          {
+            "name": "three-original-members",
+            "seconds": 25.035,
+            "ids": {
+              "a": "15541471440773651229",
+              "b": "16832209762471736468",
+              "c": "8095431367888346638"
+            },
+            "cluster": "2377618914250813892",
+            "leader": "a"
+          },
+          {
+            "name": "three-api-history-and-guest-marker",
+            "seconds": 28.17,
+            "healthy_endpoints": [
+              "https://etcd1:2379",
+              "https://etcd3:2379",
+              "https://etcd2:2379"
+            ]
+          },
+          {
+            "name": "no-new-admission-or-physical-create",
+            "seconds": 28.292,
+            "creates": 1,
+            "leases": 1,
+            "held": 1,
+            "usage": 1
+          },
+          {
+            "name": "released",
+            "seconds": 28.833,
+            "creates": 1,
+            "leases": 0,
+            "held": 0,
+            "usage": 0
+          }
+        ],
+        "last_wait_errors": [
+          "RuntimeError",
+          "RuntimeError"
+        ]
+      },
+      "cleanup": {
+        "cluster_retired": true,
+        "owned_volumes_retired": 4,
+        "host_containers_verified": 5,
+        "leases": 0,
+        "admissions": 0
+      }
+    }
+  ]
+}

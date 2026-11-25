@@ -4,7 +4,7 @@
 
 唯一状态源：[project/registry.json](../project/registry.json)。流程见 [CONTRIBUTING](../CONTRIBUTING.md#work-management)。
 
-审阅日期：2026-11-24；交付状态：`working_tree`。历史验收不等于当前工作树已发布。
+审阅日期：2026-11-25；交付状态：`committed`。历史验收不等于当前工作树已发布。
 
 本表按能力组织；“限定范围已验收”只表示证据中的配置和版本通过。历史记录不因本轮未重测而失效，也不自动证明改动后的版本。
 
@@ -33,7 +33,7 @@
 | CAP-RESOURCES：资源准入、调度与可观测性 | 限定范围已验收 | EV-R3-1008、EV-ENV-1030 | Edge 物理预算、episode/API 配额分离、等待原因与所有者证明回收；边界：模型/GPU 不归 core 管理；全面成本/规模另验。 |
 | CAP-FLEET：节点动态加入、维护、退出与升级 | 限定范围已验收 | EV-FLEET、EV-RELEASE-ENTRY-1124 | 有限两主机动态发现、drain/维护/恢复/退出、目标加载版本与明确回滚；边界：全新第二 Linux 主机安装、任意状态格式迁移仍未证明。 |
 | CAP-ROTATION：证书和访问凭据轮换 | 限定范围已验收 | EV-ROTATION | Node/API 和 etcd client 的有界轮换及原会话持续可用；边界：长存 route-signing key、etcd peer CA/JWT root 自动迁移另列。 |
-| CAP-HA：独立故障域高可用 | 部分实现/验收 | EV-CLUSTER-1011、EV-FLEET | 多 API、真实 etcd quorum 和有限两主机服务故障已验证；边界：目前仅两台机器；三个独立故障域及真实宿主失效没有验收。 |
+| CAP-HA：独立故障域高可用 | 部分实现/验收 | EV-CLUSTER-1011、EV-FLEET、EV-KIND-HA-LINUX-1124、EV-KIND-H4-LINUX-1125 | 多 API、真实 etcd quorum 和有限两主机服务故障已验证；边界：目前仅两台机器；三个独立故障域及真实宿主失效没有验收。 |
 | CAP-APPLICATIONS：可选 benchmark/agent/RL 应用 | 限定范围已验收 | EV-MBPP-VERL、EV-SWEGYM、EV-OSWORLD-PARITY-1104、EV-RELEASE-ENTRY-1124 | MBPP/verl 历史完整 GRPO+评测、TB2.1 和 SWE-Gym/OpenHands 接入；OSWorld 固定单题与官方 provider 同分；边界：不同 agent/trainer 的历史成绩不互换；不等于通用 worker-owned 模型会话恢复。 |
 | CAP-PROJECT：项目状态与工作流 | 限定范围已验收 | EV-PROJECT-MANAGEMENT | 一个结构化台账、生成视图、开工/重开/关闭约束和 CI；边界：结构检查不能代替 reviewer 判断或重新认证历史证据。 |
 
@@ -422,6 +422,48 @@
 - 完成证据：EV-PORTABLE-MICROVM-1124
 
 变更边界：新增可移交的制品身份和按该身份创建的约束。既有部署 revision 继续承担 Node/Edge 复核，暂停实例的 resume 仍回到原所有者。
+
+### TASK-027：单宿主 kind 控制面故障域 demo 设计
+
+状态：完成；类型：`maintenance`；负责人：`maintainer`。
+
+- 关联能力：CAP-HA、CAP-API；依赖：无。
+- 新增价值：交付可渲染的单宿主三逻辑域 Kubernetes 配置和可复用的故障验收协议。
+- 复用：沿用现有集群角色配置、IAM、TLS、SDK、受理回执与回复前测试检查点。
+- 触发原因：需要在独立宿主齐备前保留同一逻辑域内 API 与 etcd 同时失联的演示入口。
+- 既有证据：EV-CLUSTER-1011、EV-FLEET、EV-RELEASE-ENTRY-1124
+- 资源：本地生成与静态校验；实机演练另行执行。
+- 验收：离线核对三个独立 worker 的 API/etcd 配对、持久卷、入口路由及角色输入；写明受控失联、请求去重、法定多数、恢复和清理的观察证据与判定
+- 停止条件：配置和测试协议入库并通过静态校验。本项不关闭 TASK-004。
+- 完成证据：EV-KIND-HA-DESIGN-1124
+
+### TASK-028：kind 三逻辑故障域 Linux 实机复核
+
+状态：完成；类型：`integration_acceptance`；负责人：`maintainer`。
+
+- 关联能力：CAP-HA、CAP-API；依赖：TASK-027。
+- 新增价值：在同一实验机部署三个配对的 API/etcd 域，通过正式 SDK 检查单域丢失、恢复、执行去重及退役。
+- 复用：复用 kind 清单、prepare.py、真实 Edge 和回复前检查点。
+- 触发原因：TASK-027 已有离线配置；首次实机将检查镜像、本地端口、认证及故障窗口。
+- 既有证据：EV-KIND-HA-DESIGN-1124、EV-CLUSTER-1011、EV-RELEASE-ENTRY-1124
+- 资源：单台 Linux KVM、Docker、kind 节点镜像、可信角色镜像。
+- 验收：H0 健康基线使用真实 VM；停止 follower/leader 各一个域，恢复原请求并核对唯一实例；恢复原成员并核对回收
+- 停止条件：记录每个真实达到的故障边界、清理结果及剩余限制；前置条件不满足时保留失败证据。
+- 完成证据：EV-KIND-HA-LINUX-1124
+
+### TASK-029：定位 kind H4 资源限额并复测双域恢复
+
+状态：完成；类型：`integration_acceptance`；负责人：`maintainer`。
+
+- 关联能力：CAP-HA；依赖：TASK-028。
+- 新增价值：验证多数派丢失后能在原 120 秒窗口内恢复三个成员及业务请求。
+- 复用：沿用 H4 原拓扑、TLS、KVM Edge、正式 SDK 与回收检查。
+- 触发原因：TASK-028 的 H4 出现 kube-proxy EMFILE 与第三成员恢复超时。
+- 既有证据：EV-KIND-HA-LINUX-1124
+- 资源：单宿主 Linux kind、真实 MicroVM 和一次临时宿主参数调整。
+- 验收：区分进程文件描述符、inotify 实例及 watch 限额；复测原成员身份、三端点健康、同一请求与实例回收
+- 停止条件：记录故障对照和原版 kube-proxy 的恢复结果，清理测试资源。
+- 完成证据：EV-KIND-H4-LINUX-1125
 
 ## 实现、测试与决策索引
 
@@ -964,3 +1006,30 @@ HTTPS SDK 版本放置与独立目录的 MicroVM 恢复；运行日期：2026-11
 - 覆盖：Export and import into distinct object pools. With publisher objects offline, exact-version create and retry selected B. Guest file and executable survived pause/resume. Both Node leases empty and IAM released.
 - 限制：Local file-ext4 physical run, co-located gateways/controller and one etcd member. OverlayBD handoff covered by local tests. No remote 3FS or live relocation.
 - 记录：[2026-11-24 TASK-026 两个 Node 的制品交付与实例恢复](../docs/reports/DSEC_V01_INSTALL_ACCEPTANCE.md)
+
+### EV-KIND-HA-DESIGN-1124
+
+单宿主 kind HA 演示配置和故障验收协议；运行日期：2026-11-24；层级：`local`；结论：`passed`。
+
+- 版本身份：Local manifest renderer, kubectl 1.36.1 / Kustomize 5.8.1; example image references used for offline validation.
+- 覆盖：One kind control-plane and three logical workers; cross-checked API/etcd placement, local ingress mapping, role secrets, quorum configuration and PVC ownership. All 15 Kubernetes resources rendered offline.
+- 限制：Design and local configuration regression only. No Kubernetes API admission, image pulls, Node/KVM runtime or simulated or physical fault measurements.
+- 记录：[故障测试协议](../deploy/cluster/demos/kind-ha/README.md)
+
+### EV-KIND-HA-LINUX-1124
+
+kind 三逻辑域单域失效与真实 MicroVM 恢复；运行日期：2026-11-25；层级：`linux`；结论：`passed`。
+
+- 版本身份：kind v0.30.0, Kubernetes v1.34.0, etcd 3.6.5, core wheel 990d6638, Firecracker on one Linux host.
+- 覆盖：H0–H3 and command replay. Follower/leader domain stopped at result-before-reply, original request recovered via survivor, counts reconciled, fresh create served while down, original member IDs and API history restored.
+- 限制：Single host. H4 majority loss refused writes and existing VM was reclaimed, but third member missed the 120 s recovery deadline. TASK-004 remains open.
+- 记录：[Linux 实机结果（2026-11-24 至 25 日）](../deploy/cluster/demos/kind-ha/README.md)、[deploy/cluster/demos/kind-ha/acceptance-20261124.json](../deploy/cluster/demos/kind-ha/acceptance-20261124.json)
+
+### EV-KIND-H4-LINUX-1125
+
+kind 双域失联后的三成员恢复与 inotify 对照；运行日期：2026-11-25；层级：`linux`；结论：`passed`。
+
+- 版本身份：kind v0.30.0, Kubernetes v1.34.0, etcd 3.6.5, Linux KVM, wheel 990d6638. Two uninstrumented H4 runs with max_user_instances=512.
+- 覆盖：Compared with a traced failure at 128. Restored the same three members and verified healthy endpoints, request history on all APIs, guest continuity, rejected new writes, quota and host cleanup. Leader survived in one run and was stopped in the other.
+- 限制：One Linux host, one run per leader position. The sysctl change applies to this boot. Independent physical failure domains remain TASK-004.
+- 记录：[H4 宿主 inotify 诊断与复测](../deploy/cluster/demos/kind-ha/README.md)、[deploy/cluster/demos/kind-ha/h4-20261125.json](../deploy/cluster/demos/kind-ha/h4-20261125.json)
