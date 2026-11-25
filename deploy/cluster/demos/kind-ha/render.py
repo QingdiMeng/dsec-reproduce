@@ -98,8 +98,9 @@ def api_pod(domain, image, initializing=False):
     roles = {"secrets": "api-secrets"}
     if initializing:
         roles["initialize"] = "init-secrets"
-    volumes = [volume("config","configMap",{"name":"role-config"})]
-    stage_mounts, mounts = [], [mount("config","/config",True)]
+    volumes = [volume("config","configMap",{"name":"role-config"}),
+               volume("tmp","emptyDir",{"medium":"Memory","sizeLimit":"8Mi"})]
+    stage_mounts, mounts = [], [mount("config","/config",True), mount("tmp","/tmp")]
     for target, secret in roles.items():
         volumes += [volume(target,"emptyDir",{"medium":"Memory"}),
                     volume(target+"-input","secret",{"secretName":secret,"defaultMode":0o440})]

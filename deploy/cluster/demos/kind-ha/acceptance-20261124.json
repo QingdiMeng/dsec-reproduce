@@ -1,0 +1,544 @@
+{
+  "scope": "single Linux host, kind v0.30.0, Kubernetes v1.34.0, etcd 3.6.5",
+  "started": "2026-11-24",
+  "completed": "2026-11-25",
+  "timezone": "Asia/Shanghai",
+  "wheel_sha256": "990d6638cad17782bdbba9dcd48cdcb472a3f93375976ec4e7e5cf1dce6d4076",
+  "node_amd64_manifest": "sha256:ede5bb6984830375d264e41b7169d03643f586d3e35316bf5229eaeb12bb18e0",
+  "api_manifest": "sha256:c15177357bc464d10af56b0d2bc9278c828ad75e297526533e505ad873fc222d",
+  "etcd_image": "quay.io/coreos/etcd@sha256:3397341272b9e0a6f44d7e3fc7c321c6efe6cbe82ce866b9b01d0c704bfc5bf3",
+  "attempts": [
+    {
+      "phase": "H0",
+      "status": "failed",
+      "events": [
+        {
+          "name": "healthy",
+          "seconds": 0.402,
+          "ids": {
+            "a": "15541471440773651229",
+            "b": "16832209762471736468",
+            "c": "8095431367888346638"
+          },
+          "cluster": "2377618914250813892",
+          "leader": "a"
+        },
+        {
+          "name": "create-submit",
+          "seconds": 0.482,
+          "request": "656c2e62fc8142d3a534d10283d1615d"
+        },
+        {
+          "name": "released",
+          "seconds": 1.876,
+          "creates": 1,
+          "leases": 0,
+          "held": 0,
+          "usage": 0
+        }
+      ],
+      "error": "AssertionError BOUND"
+    },
+    {
+      "phase": "H0",
+      "status": "passed",
+      "events": [
+        {
+          "name": "healthy",
+          "seconds": 0.4,
+          "ids": {
+            "a": "15541471440773651229",
+            "b": "16832209762471736468",
+            "c": "8095431367888346638"
+          },
+          "cluster": "2377618914250813892",
+          "leader": "a"
+        },
+        {
+          "name": "create-submit",
+          "seconds": 0.479,
+          "request": "f814e41a1e5546b399b05beb016ee28b"
+        },
+        {
+          "name": "guest-marker",
+          "seconds": 1.694,
+          "node": "kindnode",
+          "sandbox": "4a03076acadb",
+          "creates": 2,
+          "leases": 1,
+          "held": 1,
+          "usage": 1
+        },
+        {
+          "name": "released",
+          "seconds": 2.023,
+          "creates": 2,
+          "leases": 0,
+          "held": 0,
+          "usage": 0
+        }
+      ]
+    },
+    {
+      "phase": "H1",
+      "status": "failed",
+      "events": [
+        {
+          "name": "healthy",
+          "seconds": 0.444,
+          "ids": {
+            "a": "15541471440773651229",
+            "b": "16832209762471736468",
+            "c": "8095431367888346638"
+          },
+          "cluster": "2377618914250813892",
+          "leader": "a"
+        },
+        {
+          "name": "submit-target",
+          "seconds": 0.625,
+          "domain": "b",
+          "worker": "dsec-ha-demo-worker2",
+          "uid": "408dd5bf-ab61-4ea4-9c53-791a4ffc0e2b",
+          "request": "3536976400f940158c03236e4a950be5"
+        },
+        {
+          "name": "reply-boundary",
+          "seconds": 1.935,
+          "stage": "result_before_reply",
+          "request_id": "3536976400f940158c03236e4a950be5",
+          "pid": 1
+        },
+        {
+          "name": "stop-issued",
+          "seconds": 1.935
+        },
+        {
+          "name": "worker-off",
+          "seconds": 2.382
+        },
+        {
+          "name": "quorum-observed",
+          "seconds": 2.501,
+          "ids": {
+            "a": "15541471440773651229",
+            "c": "8095431367888346638"
+          },
+          "cluster": "2377618914250813892",
+          "leader": "a"
+        },
+        {
+          "name": "original-reply-unknown",
+          "seconds": 2.501
+        },
+        {
+          "name": "request-recovered",
+          "seconds": 2.626
+        },
+        {
+          "name": "guest-marker",
+          "seconds": 3.079,
+          "node": "kindnode",
+          "sandbox": "dd88fceca63e",
+          "creates": 3,
+          "leases": 1,
+          "held": 1,
+          "usage": 1
+        },
+        {
+          "name": "released",
+          "seconds": 3.36,
+          "creates": 3,
+          "leases": 0,
+          "held": 0,
+          "usage": 0
+        },
+        {
+          "name": "create-submit",
+          "seconds": 3.386,
+          "request": "46028720f5e04c7b9aca3a8ab363c19f"
+        },
+        {
+          "name": "restart-issued",
+          "seconds": 3.779
+        }
+      ],
+      "error": "ServiceError No fresh healthy node meets backend/environment/resources/capabilities"
+    },
+    {
+      "phase": "H1",
+      "status": "passed",
+      "events": [
+        {
+          "name": "healthy",
+          "seconds": 0.385,
+          "ids": {
+            "a": "15541471440773651229",
+            "b": "16832209762471736468",
+            "c": "8095431367888346638"
+          },
+          "cluster": "2377618914250813892",
+          "leader": "a"
+        },
+        {
+          "name": "submit-target",
+          "seconds": 0.56,
+          "domain": "b",
+          "worker": "dsec-ha-demo-worker2",
+          "uid": "408dd5bf-ab61-4ea4-9c53-791a4ffc0e2b",
+          "request": "8b96cb34a4964f06b8c09086e1ebb814"
+        },
+        {
+          "name": "reply-boundary",
+          "seconds": 1.963,
+          "stage": "result_before_reply",
+          "request_id": "8b96cb34a4964f06b8c09086e1ebb814",
+          "pid": 1
+        },
+        {
+          "name": "stop-issued",
+          "seconds": 1.963
+        },
+        {
+          "name": "worker-off",
+          "seconds": 2.45
+        },
+        {
+          "name": "quorum-observed",
+          "seconds": 2.614,
+          "ids": {
+            "a": "15541471440773651229",
+            "c": "8095431367888346638"
+          },
+          "cluster": "2377618914250813892",
+          "leader": "a"
+        },
+        {
+          "name": "original-reply-unknown",
+          "seconds": 2.615
+        },
+        {
+          "name": "request-recovered",
+          "seconds": 2.749
+        },
+        {
+          "name": "guest-marker",
+          "seconds": 3.218,
+          "node": "kindnode",
+          "sandbox": "0454085a0ac6",
+          "creates": 4,
+          "leases": 1,
+          "held": 1,
+          "usage": 1
+        },
+        {
+          "name": "released",
+          "seconds": 3.467,
+          "creates": 4,
+          "leases": 0,
+          "held": 0,
+          "usage": 0
+        },
+        {
+          "name": "create-submit",
+          "seconds": 3.497,
+          "request": "99264a5d59e546ec988957ab8f2aa9f7"
+        },
+        {
+          "name": "fresh-create-not-yet-placeable",
+          "seconds": 3.592,
+          "attempt": 1
+        },
+        {
+          "name": "fresh-create-returned",
+          "seconds": 5.685
+        },
+        {
+          "name": "guest-marker",
+          "seconds": 5.855,
+          "node": "kindnode",
+          "sandbox": "18e24990f972",
+          "creates": 5,
+          "leases": 1,
+          "held": 1,
+          "usage": 1
+        },
+        {
+          "name": "released",
+          "seconds": 6.157,
+          "creates": 5,
+          "leases": 0,
+          "held": 0,
+          "usage": 0
+        },
+        {
+          "name": "restart-issued",
+          "seconds": 6.507
+        },
+        {
+          "name": "H3-original-members-and-api-history",
+          "seconds": 27.501,
+          "ids": {
+            "a": "15541471440773651229",
+            "b": "16832209762471736468",
+            "c": "8095431367888346638"
+          },
+          "cluster": "2377618914250813892",
+          "leader": "a"
+        }
+      ],
+      "last_wait_errors": [
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RequestOutcomeUnknown"
+      ]
+    },
+    {
+      "phase": "H2",
+      "status": "passed",
+      "events": [
+        {
+          "name": "healthy",
+          "seconds": 0.365,
+          "ids": {
+            "a": "15541471440773651229",
+            "b": "16832209762471736468",
+            "c": "8095431367888346638"
+          },
+          "cluster": "2377618914250813892",
+          "leader": "a"
+        },
+        {
+          "name": "submit-target",
+          "seconds": 0.502,
+          "domain": "a",
+          "worker": "dsec-ha-demo-worker",
+          "uid": "dc6a3d14-a340-403b-af7b-c96093d86a7c",
+          "request": "3f717d2cfc2d40ad8d380d89e5dde6e4"
+        },
+        {
+          "name": "reply-boundary",
+          "seconds": 1.841,
+          "stage": "result_before_reply",
+          "request_id": "3f717d2cfc2d40ad8d380d89e5dde6e4",
+          "pid": 1
+        },
+        {
+          "name": "stop-issued",
+          "seconds": 1.841
+        },
+        {
+          "name": "worker-off",
+          "seconds": 2.273
+        },
+        {
+          "name": "quorum-observed",
+          "seconds": 2.382,
+          "ids": {
+            "b": "16832209762471736468",
+            "c": "8095431367888346638"
+          },
+          "cluster": "2377618914250813892",
+          "leader": "c"
+        },
+        {
+          "name": "original-reply-unknown",
+          "seconds": 2.383
+        },
+        {
+          "name": "request-recovered",
+          "seconds": 3.513
+        },
+        {
+          "name": "guest-marker",
+          "seconds": 3.953,
+          "node": "kindnode",
+          "sandbox": "cc6cf9aa954c",
+          "creates": 6,
+          "leases": 1,
+          "held": 1,
+          "usage": 1
+        },
+        {
+          "name": "released",
+          "seconds": 4.245,
+          "creates": 6,
+          "leases": 0,
+          "held": 0,
+          "usage": 0
+        },
+        {
+          "name": "create-submit",
+          "seconds": 4.282,
+          "request": "6f83eb4493464634a3e84e2715adfbb3"
+        },
+        {
+          "name": "fresh-create-not-yet-placeable",
+          "seconds": 4.373,
+          "attempt": 1
+        },
+        {
+          "name": "fresh-create-returned",
+          "seconds": 6.43
+        },
+        {
+          "name": "guest-marker",
+          "seconds": 6.626,
+          "node": "kindnode",
+          "sandbox": "b01b71f823dd",
+          "creates": 7,
+          "leases": 1,
+          "held": 1,
+          "usage": 1
+        },
+        {
+          "name": "released",
+          "seconds": 6.993,
+          "creates": 7,
+          "leases": 0,
+          "held": 0,
+          "usage": 0
+        },
+        {
+          "name": "restart-issued",
+          "seconds": 7.308
+        },
+        {
+          "name": "H3-original-members-and-api-history",
+          "seconds": 30.539,
+          "ids": {
+            "a": "15541471440773651229",
+            "b": "16832209762471736468",
+            "c": "8095431367888346638"
+          },
+          "cluster": "2377618914250813892",
+          "leader": "c"
+        }
+      ],
+      "last_wait_errors": [
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError"
+      ]
+    },
+    {
+      "phase": "command",
+      "status": "passed",
+      "events": [
+        {
+          "name": "healthy",
+          "seconds": 0.477,
+          "ids": {
+            "a": "15541471440773651229",
+            "b": "16832209762471736468",
+            "c": "8095431367888346638"
+          },
+          "cluster": "2377618914250813892",
+          "leader": "c"
+        },
+        {
+          "name": "command-result-before-reply",
+          "seconds": 2.738,
+          "request": "ea9011e7f9f34727a80c144d5a136c8c"
+        },
+        {
+          "name": "domains-off",
+          "seconds": 3.198,
+          "domains": [
+            "b"
+          ]
+        },
+        {
+          "name": "command-replay-single-line",
+          "seconds": 4.555
+        },
+        {
+          "name": "released",
+          "seconds": 23.579,
+          "creates": 8,
+          "leases": 0,
+          "held": 0,
+          "usage": 0
+        }
+      ],
+      "last_wait_errors": [
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError"
+      ]
+    },
+    {
+      "phase": "H4",
+      "status": "failed",
+      "events": [
+        {
+          "name": "healthy",
+          "seconds": 1.432,
+          "ids": {
+            "a": "15541471440773651229",
+            "b": "16832209762471736468",
+            "c": "8095431367888346638"
+          },
+          "cluster": "2377618914250813892",
+          "leader": "c"
+        },
+        {
+          "name": "domains-off",
+          "seconds": 3.778,
+          "domains": [
+            "b",
+            "c"
+          ]
+        },
+        {
+          "name": "new-request-refused",
+          "seconds": 6.816,
+          "kind": "CoordinationUnavailable",
+          "request": "50f4962680a34326b9cb89234e6911e7"
+        }
+      ],
+      "last_wait_errors": [
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError"
+      ],
+      "error": "Timed out waiting for three-member endpoint status after restoring the two workers."
+    }
+  ],
+  "H4_reconciliation": {
+    "denied_request": "50f4962680a34326b9cb89234e6911e7",
+    "original_request": "fb5aa35124e5426394de70b029760d92",
+    "local_id": "026b500a6edb",
+    "original_still_running": true,
+    "guest_command": true,
+    "no_new_admission": true,
+    "no_new_edge_create": true,
+    "physical_leases": 0,
+    "active_admissions": 0,
+    "quota_concurrency": 0
+  },
+  "kube_proxy_previous_log": "E1124 15:59:28.142079       1 run.go:72] \"command failed\" err=\"failed complete: too many open files\"",
+  "cleanup": "cleanup passed: five host containers identical; owned nodes, volumes and network removed"
+}

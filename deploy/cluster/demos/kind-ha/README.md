@@ -2,7 +2,7 @@
 
 目标是在**一个 Linux 宿主**上重现一个逻辑节点的整体失联。用户在真实 MicroVM 上执行一次操作，失去最初的 API 回复后，经存活 API 查回同一个结果。验收关注 DSec 的请求身份、可写实例数、配额和恢复时间。这里的 Kubernetes 集群提供实验拓扑，宿主上的 DSec Edge 运行工作负载。
 
-交付阶段为 TASK-027 配置与测试设计。仓库包含清单渲染器与离线拓扑回归。下述实机流程是待执行的验收协议；运行后保存独立报告。TASK-004 的三物理故障域验收仍开放。
+TASK-027 提供配置与测试设计，TASK-028 完成单宿主 H0–H3 实机复核。TASK-029 完成 H4 的 inotify 定位与两种 leader 位置的恢复复测。TASK-004 的三物理故障域验收仍开放。
 
 ## 拓扑和入口
 
@@ -63,6 +63,51 @@ SDK 的未知结果通过 `lookup_request(original_id)` 查询，再用查回的
 
 **清理与产物。** 驱动在 finally 中先恢复本轮停止的 worker，再用原 owner 完成沙盒停止与回收；核对 IAM、Edge 物理租约和宿主服务基线，最后删除本轮的 kind 集群。结果目录至少保留 topology、版本与镜像摘要、每轮 timeline、请求和资源计数、cleanup、整体 verdict。发生 UNKNOWN 时保留原 ID 核查，仍有未解租约时保留控制面与私有诊断信息，报告失败。发布示例报告时排除 token、私钥与带授权头的日志。
 
-此设计可作为后续 demo 驱动的接口。首次实机实施还要验证实验机镜像可用性、Pod→宿主 NodeGateway 的 TLS 路由、local-path PVC 的重新挂载，并自动化上述编排与证据收集。三台独立宿主上的真实断机属于 TASK-004 的最终验收。
+## Linux 实机结果（2026-11-24 至 25 日）
+
+四个 kind 节点共用一台 Linux 宿主，业务使用一个独立 Edge、正式 SDK 和 Firecracker MicroVM。测试停掉目标 worker 容器，使该域的 API 和 etcd 一起失联。按宿主单调时钟，从发出停止命令起算，每种角色各有一轮完整计时。
+
+| 停止的域 | 首次观察到剩余两票达成一致 | 查回原创建 | 新创建返回 | 原 worker 启动命令返回后，三副本均能查询原记录 |
+| --- | ---: | ---: | ---: | ---: |
+| follower b | 0.65 s | 0.79 s | 3.72 s | 20.99 s |
+| leader a | 0.54 s（新 leader c） | 1.67 s | 4.59 s | 23.23 s |
+
+H0 的三个入口均能发现同一 Node。H1 和 H2 均在回复前检查点停机，原 SDK 收到未知结果。用原 ID 查回、接续并重试时，Edge 创建日志只增一条，物理租约与 IAM 并发占用均为一。guest 写入并读回标记，停止后两者归零。故障域离线期间仍可创建第二个实例。首次新创建都收到一次 `NoPlacement`，确认没有准入后，同 ID 延迟一秒重试成功。三成员恢复后身份和 cluster ID 均匹配。独立的命令测试在回复丢失后重放相同追加命令，文件里只有一行。
+
+H4 同时停止 b 和 c。新请求返回 `CoordinationUnavailable`。恢复两票后核对，同一请求没有 IAM 准入或 Edge 创建记录，原实例可执行命令并通过 SDK 释放。额外要求三个成员在 120 秒内全部恢复的检查失败。worker c 上 kube-proxy 启动报 `too many open files`，该域通过集群 DNS 查询 etcd peer 超时。宿主的 inotify 实例上限为 128，该轮缺少区分 FD 与 inotify 实例限额的系统调用证据。保留原有宿主参数。独立物理宿主故障仍由 TASK-004 验收；当时 H4 的三成员恢复未通过。后续诊断与复测见下文。
+
+首次部署还发现初始化容器只读根目录缺少临时目录。清单现为初始化和 API 配置有界内存卷 `/tmp`，并保留只读根目录。API 镜像构建也已在缺少 BuildKit 的 Docker 上验证。首次 H0 的验收断言把 SDK 的签名路由与 Edge 的本地 ID 直接比较，修正为解码、核对 owner 和 admission 后重跑。结束时删除了本轮的四个 kind 节点、节点卷和专用网络，原五个宿主容器的 ID、启动时间和重启次数均与基线相同。
+
+各次尝试、镜像摘要、单调时间线以及回收证据见[实机记录](acceptance-20261124.json)。
 
 参考 [kind 配置](https://kind.sigs.k8s.io/docs/user/configuration/)、[Kubernetes 节点选择](https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/) 和 [etcd 故障模型](https://etcd.io/docs/v3.5/op-guide/failures/)。
+
+## H4 宿主 inotify 诊断与复测
+
+2026-11-25 在相同 kind 版本与四节点布局重现双域重启故障。实验机设置为 `fs.inotify.max_user_instances=128`、`fs.inotify.max_user_watches=65536`。本轮在 worker b 捕获 kube-proxy 的启动系统调用。下列前两项由 kube-proxy 的启动包装器测量，第三项来自该 kube-proxy 自身的 strace。
+
+| 观察 | 结果 |
+| --- | --- |
+| UID、启动时已打开 FD、进程 FD 软/硬上限 | UID 0，3 个 FD，上限均为 1,048,576 |
+| 同一启动环境打开普通文件与创建 inotify 实例 | `open("/dev/null") = 3`；关闭后，`inotify_init1()` 返回 errno 24 |
+| kube-proxy 创建监听器 | `inotify_init1(IN_NONBLOCK\|IN_CLOEXEC) = -1 EMFILE`，随后记录 `failed complete: too many open files` |
+
+在上限 128 的对照中，两个 worker 重启后 etcd2 超过 120 秒仍不可达；从已恢复的多数派释放了原实例，物理租约和项目并发均归零。失败发生在创建 inotify 实例时，早于添加 watch。kind 的四个节点共用宿主，节点内的 UID 0 映射到宿主 UID 0。实验机在多个节点同时启动时耗尽了该用户的实例配额。Linux 对进程 FD 上限与用户 inotify 实例上限都能返回 `EMFILE`，诊断时应同时记录失败的系统调用、普通文件打开结果和进程 FD 上限。[Linux inotify_init(2)](https://man7.org/linux/man-pages/man2/inotify_init.2.html)
+
+针对此故障，可在 Linux 宿主读取并临时调整实例上限，再用原版 kube-proxy 重跑 H4。512 是本机的复测设置。管理员可按所在主机的基线和使用规模选值。以下命令仅在旧值低于 512 时写入，设置在本次启动期间有效。[kind 已知问题](https://kind.sigs.k8s.io/docs/user/known-issues/#pod-errors-due-to-too-many-open-files)
+
+```sh
+sysctl fs.inotify.max_user_instances fs.inotify.max_user_watches
+if [ "$(sysctl -n fs.inotify.max_user_instances)" -lt 512 ]; then
+    sudo sysctl -w fs.inotify.max_user_instances=512
+fi
+```
+
+在宿主上把实例上限由 128 调到 512 后，每轮重建专用集群，核对原版 kube-proxy 的镜像与启动命令，再用同一个 H4 协议停掉 b、c 两个 worker。恢复计时从发出第一个 worker 重启命令开始。
+
+| 故障前 leader | 返回原三个 member ID 和 cluster ID | 三端点健康、三个 API 查回同一请求并读回 guest 标记 |
+| --- | ---: | ---: |
+| a | 19.16 s | 21.10 s |
+| c | 18.93 s | 22.06 s |
+
+两轮的失多数派写入都返回 `CoordinationUnavailable`。恢复后，拒绝的请求无准入记录或 Edge 创建日志，原 VM 的进程 ID 与故障前相同。停止原 VM 后，物理租约、IAM 准入和并发用量均为零。每轮都回收了专用集群和四个节点卷，并核对了原有五个宿主容器的身份、启动时间和重启计数。每种 leader 位置各测一轮。原始对照、恢复时间线和清理回执见[H4 复测记录](h4-20261125.json)。

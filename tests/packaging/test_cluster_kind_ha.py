@@ -67,6 +67,9 @@ class KindHADesignTests(unittest.TestCase):
                 self.assertFalse(pod["automountServiceAccountToken"])
                 self.assertEqual({v["secret"]["secretName"] for v in pod["volumes"] if "secret" in v}, secrets)
                 mounts = pod["containers"][0]["volumeMounts"]
+                self.assertTrue(pod["containers"][0]["securityContext"]["readOnlyRootFilesystem"])
+                self.assertIn(demo.mount("tmp","/tmp"), mounts)
+                self.assertTrue(any(v["name"] == "tmp" and v["emptyDir"].get("sizeLimit") for v in pod["volumes"]))
                 self.assertFalse(any(m["name"].endswith("-input") for m in mounts))
                 self.assertEqual(any(m["mountPath"] == "/gate" for m in mounts), phase == "api")
                 self.assertEqual(pod["containers"][0]["image"], IMAGE)

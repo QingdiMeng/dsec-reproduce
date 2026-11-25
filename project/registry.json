@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "updated": "2026-11-24",
-  "delivery": "working_tree",
+  "updated": "2026-11-25",
+  "delivery": "committed",
   "wip_limit": 1,
   "capabilities": [
     {
@@ -871,7 +871,9 @@
       ],
       "evidence": [
         "EV-CLUSTER-1011",
-        "EV-FLEET"
+        "EV-FLEET",
+        "EV-KIND-HA-LINUX-1124",
+        "EV-KIND-H4-LINUX-1125"
       ],
       "roadmap": [
         "RM-401"
@@ -1690,6 +1692,46 @@
         {
           "path": "deploy/cluster/demos/kind-ha/README.md",
           "section": "故障测试协议"
+        }
+      ]
+    },
+    {
+      "id": "EV-KIND-HA-LINUX-1124",
+      "title": "kind 三逻辑域单域失效与真实 MicroVM 恢复",
+      "date": "2026-11-25",
+      "date_kind": "run",
+      "kind": "linux",
+      "verdict": "passed",
+      "identity": "kind v0.30.0, Kubernetes v1.34.0, etcd 3.6.5, core wheel 990d6638, Firecracker on one Linux host.",
+      "scope": "H0–H3 and command replay. Follower/leader domain stopped at result-before-reply, original request recovered via survivor, counts reconciled, fresh create served while down, original member IDs and API history restored.",
+      "limits": "Single host. H4 majority loss refused writes and existing VM was reclaimed, but third member missed the 120 s recovery deadline. TASK-004 remains open.",
+      "records": [
+        {
+          "path": "deploy/cluster/demos/kind-ha/README.md",
+          "section": "Linux 实机结果（2026-11-24 至 25 日）"
+        },
+        {
+          "path": "deploy/cluster/demos/kind-ha/acceptance-20261124.json"
+        }
+      ]
+    },
+    {
+      "id": "EV-KIND-H4-LINUX-1125",
+      "title": "kind 双域失联后的三成员恢复与 inotify 对照",
+      "date": "2026-11-25",
+      "date_kind": "run",
+      "kind": "linux",
+      "verdict": "passed",
+      "identity": "kind v0.30.0, Kubernetes v1.34.0, etcd 3.6.5, Linux KVM, wheel 990d6638. Two uninstrumented H4 runs with max_user_instances=512.",
+      "scope": "Compared with a traced failure at 128. Restored the same three members and verified healthy endpoints, request history on all APIs, guest continuity, rejected new writes, quota and host cleanup. Leader survived in one run and was stopped in the other.",
+      "limits": "One Linux host, one run per leader position. The sysctl change applies to this boot. Independent physical failure domains remain TASK-004.",
+      "records": [
+        {
+          "path": "deploy/cluster/demos/kind-ha/README.md",
+          "section": "H4 宿主 inotify 诊断与复测"
+        },
+        {
+          "path": "deploy/cluster/demos/kind-ha/h4-20261125.json"
         }
       ]
     }
@@ -2536,6 +2578,68 @@
       "depends_on": [],
       "evidence": [
         "EV-KIND-HA-DESIGN-1124"
+      ],
+      "reopens": []
+    },
+    {
+      "id": "TASK-028",
+      "title": "kind 三逻辑故障域 Linux 实机复核",
+      "kind": "integration_acceptance",
+      "state": "done",
+      "owner": "maintainer",
+      "capabilities": [
+        "CAP-HA",
+        "CAP-API"
+      ],
+      "delta": "在同一实验机部署三个配对的 API/etcd 域，通过正式 SDK 检查单域丢失、恢复、执行去重及退役。",
+      "trigger": "TASK-027 已有离线配置；首次实机将检查镜像、本地端口、认证及故障窗口。",
+      "reuse": "复用 kind 清单、prepare.py、真实 Edge 和回复前检查点。",
+      "prior_evidence": [
+        "EV-KIND-HA-DESIGN-1124",
+        "EV-CLUSTER-1011",
+        "EV-RELEASE-ENTRY-1124"
+      ],
+      "acceptance": [
+        "H0 健康基线使用真实 VM",
+        "停止 follower/leader 各一个域，恢复原请求并核对唯一实例",
+        "恢复原成员并核对回收"
+      ],
+      "resources": "单台 Linux KVM、Docker、kind 节点镜像、可信角色镜像。",
+      "stop_condition": "记录每个真实达到的故障边界、清理结果及剩余限制；前置条件不满足时保留失败证据。",
+      "depends_on": [
+        "TASK-027"
+      ],
+      "evidence": [
+        "EV-KIND-HA-LINUX-1124"
+      ],
+      "reopens": []
+    },
+    {
+      "id": "TASK-029",
+      "title": "定位 kind H4 资源限额并复测双域恢复",
+      "kind": "integration_acceptance",
+      "state": "done",
+      "owner": "maintainer",
+      "capabilities": [
+        "CAP-HA"
+      ],
+      "delta": "验证多数派丢失后能在原 120 秒窗口内恢复三个成员及业务请求。",
+      "trigger": "TASK-028 的 H4 出现 kube-proxy EMFILE 与第三成员恢复超时。",
+      "reuse": "沿用 H4 原拓扑、TLS、KVM Edge、正式 SDK 与回收检查。",
+      "prior_evidence": [
+        "EV-KIND-HA-LINUX-1124"
+      ],
+      "acceptance": [
+        "区分进程文件描述符、inotify 实例及 watch 限额",
+        "复测原成员身份、三端点健康、同一请求与实例回收"
+      ],
+      "resources": "单宿主 Linux kind、真实 MicroVM 和一次临时宿主参数调整。",
+      "stop_condition": "记录故障对照和原版 kube-proxy 的恢复结果，清理测试资源。",
+      "depends_on": [
+        "TASK-028"
+      ],
+      "evidence": [
+        "EV-KIND-H4-LINUX-1125"
       ],
       "reopens": []
     }
